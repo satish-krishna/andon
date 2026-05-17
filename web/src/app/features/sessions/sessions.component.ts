@@ -1,81 +1,98 @@
-import { CommonModule, DatePipe, DecimalPipe, PercentPipe } from '@angular/common';
-import { Component, OnInit, computed, signal } from '@angular/core';
+import { CommonModule, DatePipe, DecimalPipe } from '@angular/common';
+import { Component, effect, inject, signal } from '@angular/core';
+import { FormsModule } from '@angular/forms';
 import { RouterLink } from '@angular/router';
 
-import { ApiService } from '../../core/api.service';
-import { SessionSummary } from '../../core/models';
-import { PanelComponent } from '../../shared/panel.component';
-import { EmptyComponent } from '../../shared/empty.component';
+import { ApiService, V2Session, V2FileRow } from '../../core/api.service';
+import { FilterService } from '../../core/filter.service';
+import { FilterBarComponent } from '../../shared/filter-bar.component';
+import { SessionDetail } from '../../core/models';
+
+type SortKey = 'time' | 'cost' | 'duration' | 'decisions';
 
 @Component({
-    selector: 'app-sessions',
-    imports: [
-        CommonModule,
-        DatePipe,
-        DecimalPipe,
-        PercentPipe,
-        RouterLink,
-        PanelComponent,
-        EmptyComponent,
-    ],
-    template: `
-    <div class="p-6 flex flex-col gap-4">
-      <h1 class="text-xl font-semibold">Sessions</h1>
-
-      <app-panel>
-        @if (loaded() && rows().length === 0) {
-          <app-empty />
-        } @else {
-          <table class="w-full text-sm">
-            <thead>
-              <tr class="text-left text-xs uppercase text-muted">
-                <th class="px-2 py-2">Started</th>
-                <th class="px-2 py-2">Session</th>
-                <th class="px-2 py-2 text-right">Cost</th>
-                <th class="px-2 py-2 text-right">In</th>
-                <th class="px-2 py-2 text-right">Out</th>
-                <th class="px-2 py-2 text-right">Accept</th>
-                <th class="px-2 py-2">Version</th>
-              </tr>
-            </thead>
-            <tbody>
-              @for (r of rows(); track r.session_id) {
-                <tr class="border-t border-border hover:bg-border/30 cursor-pointer">
-                  <td class="px-2 py-2 font-mono text-xs">{{ r.started_at | date : 'MMM d, HH:mm' }}</td>
-                  <td class="px-2 py-2 font-mono text-xs">
-                    <a [routerLink]="['/sessions', r.session_id]" class="text-accent hover:underline">
-                      {{ r.session_id.slice(0, 8) }}…
-                    </a>
-                  </td>
-                  <td class="px-2 py-2 text-right font-mono">$ {{ r.cost_usd | number : '1.4-4' }}</td>
-                  <td class="px-2 py-2 text-right font-mono">{{ r.tokens_input | number }}</td>
-                  <td class="px-2 py-2 text-right font-mono">{{ r.tokens_output | number }}</td>
-                  <td class="px-2 py-2 text-right font-mono">{{ acceptRate(r) | percent : '1.0-1' }}</td>
-                  <td class="px-2 py-2 text-xs text-muted">{{ r.service_version || '—' }}</td>
-                </tr>
-              }
-            </tbody>
-          </table>
-        }
-      </app-panel>
-    </div>
-  `
+  selector: 'app-sessions',
+  imports: [CommonModule, DatePipe, DecimalPipe, FormsModule, RouterLink, FilterBarComponent],
+  templateUrl: './sessions.component.html',
+  standalone: true,
 })
-export class SessionsComponent implements OnInit {
-  rows = signal<SessionSummary[]>([]);
+export class SessionsComponent {
+  filter = inject(FilterService);
+  private api = inject(ApiService);
+
+  rows = signal<V2Session[]>([]);
   loaded = signal(false);
+  sort = signal<SortKey>('time');
+  expanded = signal<string | null>(null);
+  detailById = signal<Record<string, SessionDetail | null>>({});
 
-  constructor(private api: ApiService) {}
+  searchInput = '';
 
-  ngOnInit() {
-    this.api.sessions(200).subscribe((s) => {
-      this.rows.set(s);
-      this.loaded.set(true);
+  constructor() {
+    effect(() => {
+      const w = this.filter.window();
+      const models = this.filter.modelsCsv();
+      const args = { fromMs: w.fromMs, toMs: w.toMs, models, sort: this.sort(), limit: 200 };
+      this.api.sessionsV2({ ...args, search: this.searchInput || undefined }).subscribe((v) => {
+        this.rows.set(v);
+        this.loaded.set(true);
+      });
     });
   }
 
-  acceptRate(r: SessionSummary): number {
-    const denom = r.accepts + r.rejects;
-    return denom === 0 ? 0 : r.accepts / denom;
+  onSearch(v: string) {
+    this.searchInput = v;
+    const w = this.filter.window();
+    const models = this.filter.modelsCsv();
+    this.api
+      .sessionsV2({ fromMs: w.fromMs, toMs: w.toMs, models, sort: this.sort(), limit: 200, search: v || undefined })
+      .subscribe((r) => this.rows.set(r));
   }
+
+  setSort(k: SortKey) {
+    this.sort.set(k);
+  }
+
+  toggleExpand(id: string) {
+    const cur = this.expanded();
+    this.expanded.set(cur === id ? null : id);
+    if (cur !== id && !this.detailById()[id]) {
+      this.api.session(id).subscribe((d) => {
+        this.detailById.update((m) => ({ ...m, [id]: d }));
+      });
+    }
+  }
+
+  acceptRate(r: V2Session): number {
+    const d = r.accepts + r.rejects;
+    return d === 0 ? 0 : r.accepts / d;
+  }
+
+  fmtDuration(s: number): string {
+    if (!s) return '—';
+    if (s < 60) return `${Math.round(s)}s`;
+    const m = Math.floor(s / 60);
+    const r = Math.round(s % 60);
+    return `${m}m ${r}s`;
+  }
+
+  // group by day for date headers
+  groupedRows(): { label: string; rows: V2Session[] }[] {
+    const groups: Record<string, V2Session[]> = {};
+    const today = new Date();
+    today.setHours(0, 0, 0, 0);
+    const yesterday = today.getTime() - 86_400_000;
+    for (const r of this.rows()) {
+      const d = new Date(r.started_at);
+      d.setHours(0, 0, 0, 0);
+      const key =
+        d.getTime() === today.getTime() ? 'today' :
+        d.getTime() === yesterday ? 'yesterday' :
+        d.toLocaleDateString(undefined, { weekday: 'long', month: 'short', day: 'numeric' });
+      (groups[key] ||= []).push(r);
+    }
+    return Object.entries(groups).map(([label, rows]) => ({ label, rows }));
+  }
+
+  Math = Math;
 }

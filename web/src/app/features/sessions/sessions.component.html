@@ -1,0 +1,166 @@
+<div class="crumb">
+  <span>◢ sessions</span>
+  <span class="ml-auto">{{ rows().length }} shown</span>
+</div>
+
+<app-filter-bar />
+
+<div class="sticky top-[100px] z-[5] bg-bg/95 backdrop-blur-sm border-b border-border px-6 py-2 flex items-center gap-3">
+  <span class="filter-label">▸ sort</span>
+  <div class="flex items-center gap-1.5">
+    <button class="filter-chip" [attr.data-active]="sort() === 'time' ? 'true' : null" (click)="setSort('time')">time ↓</button>
+    <button class="filter-chip" [attr.data-active]="sort() === 'cost' ? 'true' : null" (click)="setSort('cost')">cost</button>
+    <button class="filter-chip" [attr.data-active]="sort() === 'duration' ? 'true' : null" (click)="setSort('duration')">duration</button>
+    <button class="filter-chip" [attr.data-active]="sort() === 'decisions' ? 'true' : null" (click)="setSort('decisions')">decisions</button>
+  </div>
+  <input class="search-input ml-auto w-72" placeholder="search session id, file…"
+         [ngModel]="searchInput" (ngModelChange)="onSearch($event)" />
+</div>
+
+<div class="px-6 py-5 flex flex-col gap-4">
+
+  <section class="panel">
+    <div class="panel-title">
+      <span>sessions · {{ rows().length }}</span>
+      <span class="text-[10px]">click a row to expand</span>
+    </div>
+    <div class="panel-body p-0">
+      @if (loaded() && rows().length === 0) {
+        <div class="px-4 py-10 text-center font-mono text-sm text-muted">no sessions match your filters.</div>
+      } @else {
+        <table class="w-full font-mono text-xs">
+          <thead>
+            <tr class="text-left text-[10px] uppercase text-muted bg-bg/40">
+              <th class="px-4 py-2 font-normal w-8"></th>
+              <th class="px-2 py-2 font-normal">time</th>
+              <th class="px-2 py-2 font-normal">session</th>
+              <th class="px-2 py-2 font-normal">model</th>
+              <th class="px-2 py-2 font-normal text-right">cost</th>
+              <th class="px-2 py-2 font-normal text-right">tokens</th>
+              <th class="px-2 py-2 font-normal text-right">decisions</th>
+              <th class="px-2 py-2 font-normal text-right">duration</th>
+              <th class="px-2 py-2 font-normal text-right pr-4">accept</th>
+            </tr>
+          </thead>
+          <tbody>
+            @for (g of groupedRows(); track g.label) {
+              <tr><td colspan="9" class="px-4 pt-3 pb-1 text-[10px] uppercase tracking-wider text-muted">{{ g.label }}</td></tr>
+              @for (s of g.rows; track s.session_id) {
+                <tr class="border-t border-border row-hover cursor-pointer"
+                    [class.bg-border]="expanded() === s.session_id"
+                    (click)="toggleExpand(s.session_id)">
+                  <td class="px-4 py-2">
+                    <span class="inline-block w-3 transition-transform text-muted"
+                          [class.rotate-90]="expanded() === s.session_id"
+                          [class.text-accent]="expanded() === s.session_id">▶</span>
+                  </td>
+                  <td class="px-2 py-2 text-muted">{{ s.started_at | date : 'HH:mm' }}</td>
+                  <td class="px-2 py-2"><span class="text-accent">{{ s.session_id.slice(0, 8) }}</span><span class="text-muted">…</span></td>
+                  <td class="px-2 py-2">{{ s.top_model || '—' }}</td>
+                  <td class="px-2 py-2 text-right tabular-nums">${{ s.cost_usd | number : '1.2-2' }}</td>
+                  <td class="px-2 py-2 text-right tabular-nums">{{ s.tokens_input | number }}<span class="text-muted">/</span>{{ s.tokens_output | number }}</td>
+                  <td class="px-2 py-2 text-right">
+                    @if (s.accepts + s.rejects + s.aborts === 0) {
+                      <span class="text-muted">—</span>
+                    } @else {
+                      @for (_ of [].constructor(Math.min(s.accepts, 12)); track $index) {
+                        <span class="inline-block w-1.5 h-1.5 rounded-full bg-ok mx-0.5"></span>
+                      }
+                      @for (_ of [].constructor(Math.min(s.rejects, 6)); track $index) {
+                        <span class="inline-block w-1.5 h-1.5 rounded-full bg-err mx-0.5"></span>
+                      }
+                      @for (_ of [].constructor(Math.min(s.aborts, 4)); track $index) {
+                        <span class="inline-block w-1.5 h-1.5 rounded-full bg-warn mx-0.5"></span>
+                      }
+                    }
+                  </td>
+                  <td class="px-2 py-2 text-right tabular-nums text-muted">{{ fmtDuration(s.duration_seconds) }}</td>
+                  <td class="px-2 py-2 text-right pr-4 tabular-nums">{{ acceptRate(s) * 100 | number : '1.0-0' }}%</td>
+                </tr>
+
+                @if (expanded() === s.session_id) {
+                  <tr class="bg-bg/60">
+                    <td colspan="9" class="px-6 py-5">
+                      <div class="flex items-center gap-4 mb-3 text-[11px] font-mono">
+                        <span class="text-muted uppercase tracking-wider">session</span>
+                        <span class="text-accent">{{ s.session_id }}</span>
+                        <span class="ml-auto text-muted">
+                          v {{ s.service_version || '?' }} · {{ s.os_type || '?' }} · {{ s.host_arch || '?' }} ·
+                          {{ s.started_at | date : 'medium' }}
+                        </span>
+                      </div>
+                      @if (detailById()[s.session_id]; as d) {
+                        <div class="grid grid-cols-4 gap-3 mb-4">
+                          <div class="bg-bg/40 rounded p-3 border border-border">
+                            <div class="text-[10px] uppercase tracking-wider text-muted">cost</div>
+                            <div class="text-xl font-mono tabular-nums mt-1">${{ s.cost_usd | number : '1.2-2' }}</div>
+                            <div class="text-[10px] text-muted mt-1">{{ s.api_calls }} api calls</div>
+                          </div>
+                          <div class="bg-bg/40 rounded p-3 border border-border">
+                            <div class="text-[10px] uppercase tracking-wider text-muted">tokens</div>
+                            <div class="text-xl font-mono tabular-nums mt-1">{{ s.tokens_input | number }} / {{ s.tokens_output | number }}</div>
+                            <div class="text-[10px] text-muted mt-1">in / out</div>
+                          </div>
+                          <div class="bg-bg/40 rounded p-3 border border-border">
+                            <div class="text-[10px] uppercase tracking-wider text-muted">decisions</div>
+                            <div class="text-xl font-mono tabular-nums mt-1">{{ s.accepts }}/{{ s.rejects }}/{{ s.aborts }}</div>
+                            <div class="text-[10px] text-muted mt-1">accept / reject / abort</div>
+                          </div>
+                          <div class="bg-bg/40 rounded p-3 border border-border">
+                            <div class="text-[10px] uppercase tracking-wider text-muted">duration</div>
+                            <div class="text-xl font-mono tabular-nums mt-1">{{ fmtDuration(s.duration_seconds) }}</div>
+                            <div class="text-[10px] text-muted mt-1">cli time</div>
+                          </div>
+                        </div>
+                        <div class="grid grid-cols-2 gap-4">
+                          <div>
+                            <div class="text-[10px] uppercase tracking-wider text-muted mb-2">files touched</div>
+                            @if (d.files.length === 0) {
+                              <div class="text-muted text-xs font-mono">no files</div>
+                            } @else {
+                              @for (f of d.files; track f.file_path) {
+                                <div class="flex items-center gap-3 py-1 border-b border-border/30 font-mono text-xs">
+                                  <span class="flex-1 truncate" [title]="f.file_path">{{ f.file_path }}</span>
+                                  <span class="text-ok">+{{ f.lines_added }}</span>
+                                  <span class="text-err">−{{ f.lines_removed }}</span>
+                                </div>
+                              }
+                            }
+                          </div>
+                          <div>
+                            <div class="text-[10px] uppercase tracking-wider text-muted mb-2">timeline · {{ d.tool_decisions.length }} events</div>
+                            @if (d.tool_decisions.length === 0) {
+                              <div class="text-muted text-xs font-mono">no decisions</div>
+                            } @else {
+                              <div class="max-h-[280px] overflow-auto">
+                                @for (t of d.tool_decisions; track $index) {
+                                  <div class="grid grid-cols-[90px_100px_60px_1fr] gap-3 py-1 border-b border-border/30 font-mono text-[11px]">
+                                    <span class="text-muted">{{ t.timestamp | date : 'HH:mm:ss' }}</span>
+                                    <span>{{ t.tool_name }}</span>
+                                    <span [class.text-ok]="t.decision==='accept'"
+                                          [class.text-err]="t.decision==='reject'"
+                                          [class.text-warn]="t.decision==='abort'">{{ t.decision }}</span>
+                                    <span class="text-muted truncate" [title]="t.file_path || ''">{{ t.file_path || '' }}</span>
+                                  </div>
+                                }
+                              </div>
+                            }
+                          </div>
+                        </div>
+                        <div class="mt-4 text-right">
+                          <a [routerLink]="['/sessions', s.session_id]" class="filter-chip">open full detail ↗</a>
+                        </div>
+                      } @else {
+                        <div class="text-muted font-mono text-xs">loading…</div>
+                      }
+                    </td>
+                  </tr>
+                }
+              }
+            }
+          </tbody>
+        </table>
+      }
+    </div>
+  </section>
+</div>
