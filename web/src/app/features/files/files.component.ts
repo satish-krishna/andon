@@ -1,6 +1,7 @@
 import { CommonModule, DatePipe, DecimalPipe } from '@angular/common';
 import { Component, computed, effect, inject, signal } from '@angular/core';
 import { FormsModule } from '@angular/forms';
+import { LucideAngularModule } from 'lucide-angular';
 
 import { ApiService, V2FileRow, V2FilesResponse } from '../../core/api.service';
 import { FilterService } from '../../core/filter.service';
@@ -11,7 +12,7 @@ type SortKey = 'edits' | 'accept' | 'recent' | 'churn';
 @Component({
   selector: 'app-files',
   standalone: true,
-  imports: [CommonModule, DatePipe, DecimalPipe, FormsModule, FilterBarComponent],
+  imports: [CommonModule, DatePipe, DecimalPipe, FormsModule, FilterBarComponent, LucideAngularModule],
   templateUrl: './files.component.html',
 })
 export class FilesComponent {

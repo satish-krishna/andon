@@ -1,5 +1,6 @@
 import { CommonModule, DecimalPipe } from '@angular/common';
 import { Component, OnInit, inject, signal } from '@angular/core';
+import { LucideAngularModule } from 'lucide-angular';
 
 import { ApiService, IntegrationStatus } from '../../core/api.service';
 import { DbStats } from '../../core/models';
@@ -7,7 +8,7 @@ import { DbStats } from '../../core/models';
 @Component({
   selector: 'app-settings',
   standalone: true,
-  imports: [CommonModule, DecimalPipe],
+  imports: [CommonModule, DecimalPipe, LucideAngularModule],
   templateUrl: './settings.component.html',
 })
 export class SettingsComponent implements OnInit {

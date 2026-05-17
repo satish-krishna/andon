@@ -34,12 +34,14 @@ pub async fn serve(state: ApiState) -> Result<()> {
         .allow_methods(Any)
         .allow_headers(Any);
 
+    let diag = state.diagnostics.clone();
     let app: Router = routes::router(state).layer(cors);
 
     let listener = TcpListener::bind(addr).await.with_context(|| {
         format!("failed to bind api server to {addr} — is another andon instance running?")
     })?;
     tracing::info!(%addr, "api server listening");
+    diag.record_bind("api", true, None);
 
     axum::serve(listener, app)
         .await

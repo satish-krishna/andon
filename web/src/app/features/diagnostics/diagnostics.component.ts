@@ -1,13 +1,14 @@
 import { CommonModule, DatePipe } from '@angular/common';
 import { Component, OnDestroy, OnInit, computed, inject, signal } from '@angular/core';
 import { FormsModule } from '@angular/forms';
+import { LucideAngularModule } from 'lucide-angular';
 
 import { ApiService } from '../../core/api.service';
 
 @Component({
   selector: 'app-diagnostics',
   standalone: true,
-  imports: [CommonModule, DatePipe, FormsModule],
+  imports: [CommonModule, DatePipe, FormsModule, LucideAngularModule],
   templateUrl: './diagnostics.component.html',
 })
 export class DiagnosticsComponent implements OnInit, OnDestroy {

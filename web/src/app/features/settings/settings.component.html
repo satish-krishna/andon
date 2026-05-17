@@ -1,7 +1,9 @@
 <div class="crumb">
-  <span>◢ settings</span>
+  <span class="flex items-center gap-1.5">
+    <lucide-icon name="settings" class="w-3.5 h-3.5"></lucide-icon>Settings
+  </span>
   <span class="ml-auto">
-    @if (actionMsg()) { <span class="text-accent">{{ actionMsg() }}</span> }
+    @if (actionMsg()) { <span class="text-accent flex items-center gap-1.5"><lucide-icon name="check" class="w-3 h-3"></lucide-icon>{{ actionMsg() }}</span> }
   </span>
 </div>
 
@@ -9,12 +11,22 @@
 
   <!-- TOC -->
   <nav class="sticky top-4 self-start">
-    <div class="text-[10px] uppercase tracking-wider text-muted mb-2 px-3">sections</div>
-    <a href="#integration" class="block px-3 py-1.5 font-mono text-[11px] text-muted hover:text-text border-l border-border">integration</a>
-    <a href="#ingestion" class="block px-3 py-1.5 font-mono text-[11px] text-muted hover:text-text border-l border-border">ingestion</a>
-    <a href="#data" class="block px-3 py-1.5 font-mono text-[11px] text-muted hover:text-text border-l border-border">data</a>
-    <a href="#about" class="block px-3 py-1.5 font-mono text-[11px] text-muted hover:text-text border-l border-border">about</a>
-    <a href="#danger" class="block px-3 py-1.5 font-mono text-[11px] text-err hover:text-err border-l border-border">danger zone</a>
+    <div class="text-[10px] uppercase tracking-wider text-muted mb-2 px-3">Sections</div>
+    <a href="#integration" class="block px-3 py-1.5 font-mono text-[11px] text-muted hover:text-text border-l border-border flex items-center gap-1.5">
+      <lucide-icon name="plug" class="w-3 h-3"></lucide-icon>Integration
+    </a>
+    <a href="#ingestion" class="block px-3 py-1.5 font-mono text-[11px] text-muted hover:text-text border-l border-border flex items-center gap-1.5">
+      <lucide-icon name="radio" class="w-3 h-3"></lucide-icon>Ingestion
+    </a>
+    <a href="#data" class="block px-3 py-1.5 font-mono text-[11px] text-muted hover:text-text border-l border-border flex items-center gap-1.5">
+      <lucide-icon name="database" class="w-3 h-3"></lucide-icon>Data
+    </a>
+    <a href="#about" class="block px-3 py-1.5 font-mono text-[11px] text-muted hover:text-text border-l border-border flex items-center gap-1.5">
+      <lucide-icon name="info" class="w-3 h-3"></lucide-icon>About
+    </a>
+    <a href="#danger" class="block px-3 py-1.5 font-mono text-[11px] text-err hover:text-err border-l border-border flex items-center gap-1.5">
+      <lucide-icon name="alert-triangle" class="w-3 h-3"></lucide-icon>Danger zone
+    </a>
   </nav>
 
   <!-- content -->
@@ -22,12 +34,12 @@
 
     <!-- INTEGRATION -->
     <section class="panel" id="integration">
-      <div class="panel-title">claude code integration</div>
+      <div class="panel-title">Claude Code integration</div>
       <div class="panel-body">
         <div class="grid grid-cols-[220px_1fr_auto] gap-5 items-center py-3 border-b border-border/40">
           <div>
-            <div class="text-xs text-muted font-mono">status</div>
-            <div class="text-[10px] text-muted/70 mt-0.5">on first launch, andon patches your settings.json</div>
+            <div class="text-xs text-muted font-mono">Status</div>
+            <div class="text-[10px] text-muted/70 mt-0.5">On first launch, andon patches your settings.json</div>
           </div>
           <div>
             <span class="inline-flex items-center gap-1 px-2 py-0.5 rounded font-mono text-[11px] border"
@@ -37,23 +49,27 @@
                 @switch (integration()!.state) {
                   @case ('already_configured') { {{ $any(integration()!).settings_path }} }
                   @case ('patched') { {{ $any(integration()!).settings_path }} · backup: {{ $any(integration()!).backup_path }} }
-                  @case ('conflict') { conflicts with: {{ $any(integration()!).existing_endpoint }} }
+                  @case ('conflict') { Conflicts with: {{ $any(integration()!).existing_endpoint }} }
                   @case ('error') { {{ $any(integration()!).message }} }
                 }
               </div>
             }
           </div>
-          <button class="filter-chip" (click)="reapplyIntegration()">re-apply ↻</button>
+          <button class="filter-chip flex items-center gap-1.5" (click)="reapplyIntegration()">
+            <lucide-icon name="refresh-cw" class="w-3 h-3"></lucide-icon>Re-apply
+          </button>
         </div>
 
         <div class="grid grid-cols-[220px_1fr_auto] gap-5 items-center py-3">
           <div>
-            <div class="text-xs text-muted font-mono">manual setup</div>
-            <div class="text-[10px] text-muted/70 mt-0.5">if you'd rather configure it yourself</div>
+            <div class="text-xs text-muted font-mono">Manual setup</div>
+            <div class="text-[10px] text-muted/70 mt-0.5">If you'd rather configure it yourself</div>
           </div>
           <div class="col-span-2">
             <pre class="bg-bg border border-border p-3 font-mono text-[11px] leading-relaxed rounded overflow-auto whitespace-pre">{{ settingsSnippet }}</pre>
-            <button class="filter-chip mt-2" (click)="copySnippet()">copy ⧉</button>
+            <button class="filter-chip mt-2 flex items-center gap-1.5" (click)="copySnippet()">
+              <lucide-icon name="copy" class="w-3 h-3"></lucide-icon>Copy
+            </button>
           </div>
         </div>
       </div>
@@ -61,40 +77,52 @@
 
     <!-- INGESTION -->
     <section class="panel" id="ingestion">
-      <div class="panel-title">ingestion</div>
+      <div class="panel-title">Ingestion</div>
       <div class="panel-body">
         <div class="grid grid-cols-[220px_1fr_auto] gap-5 items-center py-3">
           <div>
-            <div class="text-xs text-muted font-mono">accept telemetry</div>
-            <div class="text-[10px] text-muted/70 mt-0.5">drop incoming otlp payloads when off · listeners stay bound</div>
+            <div class="text-xs text-muted font-mono">Accept telemetry</div>
+            <div class="text-[10px] text-muted/70 mt-0.5">Drop incoming OTLP payloads when off · listeners stay bound</div>
           </div>
           <div>
             <span class="inline-flex items-center gap-1.5 font-mono text-[11px]"
                   [class]="paused() ? 'text-warn' : 'text-ok'">
-              {{ paused() ? '⏸ paused' : '● active' }}
+              @if (paused()) {
+                <lucide-icon name="pause" class="w-3 h-3"></lucide-icon>Paused
+              } @else {
+                <lucide-icon name="circle-dot" class="w-3 h-3"></lucide-icon>Active
+              }
             </span>
           </div>
-          <button class="filter-chip" (click)="togglePause()">{{ paused() ? 'resume' : 'pause' }}</button>
+          <button class="filter-chip flex items-center gap-1.5" (click)="togglePause()">
+            @if (paused()) {
+              <lucide-icon name="play" class="w-3 h-3"></lucide-icon>Resume
+            } @else {
+              <lucide-icon name="pause" class="w-3 h-3"></lucide-icon>Pause
+            }
+          </button>
         </div>
       </div>
     </section>
 
     <!-- DATA -->
     <section class="panel" id="data">
-      <div class="panel-title">data</div>
+      <div class="panel-title">Data</div>
       <div class="panel-body">
         @if (stats(); as s) {
           <div class="grid grid-cols-[220px_1fr_auto] gap-5 items-center py-3 border-b border-border/40">
             <div>
-              <div class="text-xs text-muted font-mono">database</div>
-              <div class="text-[10px] text-muted/70 mt-0.5">sqlite · wal mode</div>
+              <div class="text-xs text-muted font-mono">Database</div>
+              <div class="text-[10px] text-muted/70 mt-0.5">SQLite · WAL mode</div>
             </div>
             <div class="font-mono text-xs break-all">{{ s.db_path }}</div>
-            <button class="filter-chip" (click)="openFolder()">open folder ↗</button>
+            <button class="filter-chip flex items-center gap-1.5" (click)="openFolder()">
+              <lucide-icon name="folder" class="w-3 h-3"></lucide-icon>Open folder
+            </button>
           </div>
           <div class="grid grid-cols-[220px_1fr] gap-5 items-start py-3">
             <div>
-              <div class="text-xs text-muted font-mono">table row counts</div>
+              <div class="text-xs text-muted font-mono">Table row counts</div>
             </div>
             <div>
               <table class="font-mono text-xs">
@@ -110,29 +138,31 @@
             </div>
           </div>
         } @else {
-          <div class="text-muted text-xs font-mono">loading…</div>
+          <div class="text-muted text-xs font-mono">Loading…</div>
         }
       </div>
     </section>
 
     <!-- ABOUT -->
     <section class="panel" id="about">
-      <div class="panel-title">about</div>
+      <div class="panel-title">About</div>
       <div class="panel-body">
         <div class="grid grid-cols-[220px_1fr] gap-5 py-2">
-          <span class="text-xs text-muted font-mono">version</span>
-          <span class="font-mono text-xs">0.2.0-alpha</span>
+          <span class="text-xs text-muted font-mono">Version</span>
+          <span class="font-mono text-xs">0.2.2-alpha</span>
         </div>
         <div class="grid grid-cols-[220px_1fr] gap-5 py-2">
-          <span class="text-xs text-muted font-mono">stack</span>
-          <span class="font-mono text-xs text-muted">tauri 2 · rust 1.95 · angular 21 · tailwind 4</span>
+          <span class="text-xs text-muted font-mono">Stack</span>
+          <span class="font-mono text-xs text-muted">Tauri 2 · Rust 1.95 · Angular 21 · Tailwind 4 · lucide-angular</span>
         </div>
         <div class="grid grid-cols-[220px_1fr] gap-5 py-2">
-          <span class="text-xs text-muted font-mono">repo</span>
-          <a href="https://github.com/satish-krishna/andon" class="font-mono text-xs text-info">github.com/satish-krishna/andon</a>
+          <span class="text-xs text-muted font-mono">Repository</span>
+          <a href="https://github.com/satish-krishna/andon" class="font-mono text-xs text-info flex items-center gap-1">
+            github.com/satish-krishna/andon<lucide-icon name="external-link" class="w-3 h-3"></lucide-icon>
+          </a>
         </div>
         <div class="grid grid-cols-[220px_1fr] gap-5 py-2">
-          <span class="text-xs text-muted font-mono">license</span>
+          <span class="text-xs text-muted font-mono">License</span>
           <span class="font-mono text-xs text-muted">MIT</span>
         </div>
       </div>
@@ -140,25 +170,29 @@
 
     <!-- DANGER ZONE -->
     <section class="panel border-err/30" id="danger">
-      <div class="panel-title text-err border-b-err/30">danger zone</div>
+      <div class="panel-title text-err border-b-err/30">Danger zone</div>
       <div class="panel-body">
         <div class="grid grid-cols-[220px_1fr_auto] gap-5 items-center py-3 border-b border-border/40">
           <div>
-            <div class="text-xs text-err font-mono">unpatch settings.json</div>
-            <div class="text-[10px] text-muted mt-0.5">remove andon env vars · claude code stops sending telemetry until you re-apply</div>
+            <div class="text-xs text-err font-mono">Unpatch settings.json</div>
+            <div class="text-[10px] text-muted mt-0.5">Remove andon env vars · Claude Code stops sending telemetry until you re-apply</div>
           </div>
-          <div class="text-muted text-[11px] font-mono">backup will be saved alongside</div>
-          <button class="filter-chip text-err border-err/40 hover:bg-err/10 hover:border-err/60"
-                  (click)="unpatch()">unpatch ⨯</button>
+          <div class="text-muted text-[11px] font-mono">Backup will be saved alongside</div>
+          <button class="filter-chip text-err border-err/40 hover:bg-err/10 hover:border-err/60 flex items-center gap-1.5"
+                  (click)="unpatch()">
+            <lucide-icon name="trash-2" class="w-3 h-3"></lucide-icon>Unpatch
+          </button>
         </div>
         <div class="grid grid-cols-[220px_1fr_auto] gap-5 items-center py-3">
           <div>
-            <div class="text-xs text-err font-mono">restore from andon-backup</div>
-            <div class="text-[10px] text-muted mt-0.5">overwrite settings.json with the file andon created at first patch</div>
+            <div class="text-xs text-err font-mono">Restore from andon-backup</div>
+            <div class="text-[10px] text-muted mt-0.5">Overwrite settings.json with the file andon created at first patch</div>
           </div>
           <div class="text-muted text-[11px] font-mono">.claude/settings.json.andon-backup</div>
-          <button class="filter-chip text-err border-err/40 hover:bg-err/10 hover:border-err/60"
-                  (click)="restoreBackup()">restore ⨯</button>
+          <button class="filter-chip text-err border-err/40 hover:bg-err/10 hover:border-err/60 flex items-center gap-1.5"
+                  (click)="restoreBackup()">
+            <lucide-icon name="refresh-cw" class="w-3 h-3"></lucide-icon>Restore
+          </button>
         </div>
       </div>
     </section>

@@ -24,6 +24,8 @@ struct Inner {
     http_bound: Option<bool>,
     api_bound: Option<bool>,
     last_error: Option<String>,
+    persisted_records: u64,        // seeded from log_events at startup
+    persisted_last_ms: Option<i64>,
 }
 
 #[derive(Clone, Serialize)]
@@ -84,8 +86,32 @@ impl Diagnostics {
                 http_bound: None,
                 api_bound: None,
                 last_error: None,
+                persisted_records: 0,
+                persisted_last_ms: None,
             })),
         }
+    }
+
+    /// Seed the persisted history from the log_events table so that "health"
+    /// reflects whether ANY telemetry has ever arrived (not just since this
+    /// process started).
+    pub fn seed_from_db(&self, pool: &crate::db::DbPool) {
+        let Ok(conn) = pool.get() else { return };
+        let records: u64 = conn
+            .query_row("SELECT COUNT(*) FROM log_events", [], |r| r.get::<_, i64>(0))
+            .unwrap_or(0)
+            .max(0) as u64;
+        let last_ms: Option<i64> = conn
+            .query_row("SELECT MAX(timestamp) FROM log_events", [], |r| r.get::<_, Option<i64>>(0))
+            .unwrap_or(None);
+        let mut i = self.inner.lock().unwrap();
+        i.persisted_records = records;
+        i.persisted_last_ms = last_ms;
+        tracing::info!(
+            persisted_records = records,
+            persisted_last_ms = ?last_ms,
+            "diagnostics seeded from log_events"
+        );
     }
 
     pub fn record_bind(&self, port: &str, ok: bool, error: Option<String>) {
@@ -158,14 +184,31 @@ impl Diagnostics {
         .map(|(n, _)| n.to_string())
         .collect();
 
+        let has_persisted_recent = i
+            .persisted_last_ms
+            .map(|t| now - t < 24 * 60 * 60 * 1000)  // saw something in the last 24h
+            .unwrap_or(false);
+        let has_persisted_ever = i.persisted_records > 0;
+
         let health = if !bind_failed.is_empty() {
             HealthVerdict::BindFailed {
                 ports: bind_failed,
             }
-        } else if i.total_records > 0 {
+        } else if i.total_records > 0 || has_persisted_recent {
             HealthVerdict::Healthy
         } else if now - i.start_ms < STARTUP_GRACE_MS {
             HealthVerdict::Starting
+        } else if has_persisted_ever {
+            HealthVerdict::NoData {
+                reason: format!(
+                    "No telemetry since andon started. \
+                     Last event recorded {} hours ago. \
+                     Start a new Claude Code session so it picks up the OTel env vars.",
+                    i.persisted_last_ms
+                        .map(|t| ((now - t) / (60 * 60 * 1000)).max(1))
+                        .unwrap_or(0)
+                ),
+            }
         } else {
             HealthVerdict::NoData {
                 reason: "No OTLP traffic received yet. \
@@ -175,13 +218,17 @@ impl Diagnostics {
             }
         };
 
+        // expose "last event" using whichever is most recent: this-session or persisted
+        let display_last = i.last_event_ms.or(i.persisted_last_ms);
+        let display_since = display_last.map(|t| (now - t) / 1000);
+
         DiagnosticsSnapshot {
             start_ms: i.start_ms,
             uptime_seconds: uptime,
-            total_records: i.total_records,
+            total_records: i.total_records + i.persisted_records,
             total_payloads: i.total_payloads,
-            last_event_ms: i.last_event_ms,
-            seconds_since_last_event: seconds_since_last,
+            last_event_ms: display_last,
+            seconds_since_last_event: display_since,
             last_session_id: i.last_session_id.clone(),
             event_counters: i.counters.clone(),
             transport_counters: i.transport_counters.clone(),

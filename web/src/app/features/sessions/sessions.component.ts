@@ -2,6 +2,7 @@ import { CommonModule, DatePipe, DecimalPipe } from '@angular/common';
 import { Component, effect, inject, signal } from '@angular/core';
 import { FormsModule } from '@angular/forms';
 import { RouterLink } from '@angular/router';
+import { LucideAngularModule } from 'lucide-angular';
 
 import { ApiService, V2Session, V2FileRow } from '../../core/api.service';
 import { FilterService } from '../../core/filter.service';
@@ -12,7 +13,7 @@ type SortKey = 'time' | 'cost' | 'duration' | 'decisions';
 
 @Component({
   selector: 'app-sessions',
-  imports: [CommonModule, DatePipe, DecimalPipe, FormsModule, RouterLink, FilterBarComponent],
+  imports: [CommonModule, DatePipe, DecimalPipe, FormsModule, RouterLink, FilterBarComponent, LucideAngularModule],
   templateUrl: './sessions.component.html',
   standalone: true,
 })
@@ -95,4 +96,17 @@ export class SessionsComponent {
   }
 
   Math = Math;
+
+  modelLabel(m: string | null): string {
+    if (!m) return '—';
+    return m.replace(/^claude-/, '').replace(/-(\d+)-(\d+)(?:-\d+)?$/, ' $1.$2');
+  }
+  modelColor(m: string | null): string {
+    if (!m) return '#7b8794';
+    const lower = m.toLowerCase();
+    if (lower.includes('opus')) return '#facc15';
+    if (lower.includes('sonnet')) return '#60a5fa';
+    if (lower.includes('haiku')) return '#34d399';
+    return '#a78bfa';
+  }
 }

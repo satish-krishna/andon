@@ -1,73 +1,88 @@
 <div class="crumb">
-  <span>◢ diagnostics</span>
+  <span class="flex items-center gap-1.5">
+    <lucide-icon name="activity" class="w-3.5 h-3.5"></lucide-icon>Diagnostics
+  </span>
   <span class="ml-auto flex items-center gap-3">
-    @if (!paused()) { <span><span class="live-dot"></span><span class="text-ok">live</span></span> }
-    <span>◷ {{ now() | date : 'MMM d · HH:mm' }}</span>
+    @if (!paused()) {
+      <span class="flex items-center gap-1"><span class="live-dot"></span><span class="text-ok">Live</span></span>
+    }
+    <span class="flex items-center gap-1.5">
+      <lucide-icon name="clock" class="w-3 h-3"></lucide-icon>
+      {{ now() | date : 'MMM d · HH:mm' }}
+    </span>
   </span>
 </div>
 
 <div class="px-6 py-5 flex flex-col gap-4">
 
   @if (diag(); as d) {
-    <!-- health -->
-    <div class="border rounded-md p-4 flex items-center gap-4 font-mono"
+    <!-- health banner -->
+    <div class="border rounded-md p-4 flex items-center gap-4"
          [class]="d.health.state === 'healthy' ? 'bg-ok/5 border-ok/40' :
                   d.health.state === 'no_data' ? 'bg-warn/5 border-warn/40' :
                   d.health.state === 'bind_failed' ? 'bg-err/5 border-err/40' :
                   'bg-info/5 border-info/40'">
-      <span class="text-2xl">{{ d.health.state === 'healthy' ? '✓' :
-                                 d.health.state === 'no_data' ? '⚠' :
-                                 d.health.state === 'bind_failed' ? '✗' : 'ℹ' }}</span>
+      @switch (d.health.state) {
+        @case ('healthy')      { <lucide-icon name="check-circle-2" class="w-6 h-6 text-ok"></lucide-icon> }
+        @case ('no_data')      { <lucide-icon name="alert-triangle" class="w-6 h-6 text-warn"></lucide-icon> }
+        @case ('bind_failed')  { <lucide-icon name="x-circle" class="w-6 h-6 text-err"></lucide-icon> }
+        @default               { <lucide-icon name="info" class="w-6 h-6 text-info"></lucide-icon> }
+      }
       <div class="flex-1">
-        <div class="text-base">{{ d.health.state === 'healthy' ? 'healthy' :
-                                  d.health.state === 'no_data' ? 'no data received yet' :
-                                  d.health.state === 'bind_failed' ? 'bind failed' :
-                                  'starting up' }}
+        <div class="text-base font-medium">
+          {{ d.health.state === 'healthy' ? 'Healthy' :
+             d.health.state === 'no_data' ? 'No data received yet' :
+             d.health.state === 'bind_failed' ? 'Bind failed' :
+             'Starting up' }}
           @if (d.health.state === 'healthy' && d.seconds_since_last_event != null) {
-            <span class="text-muted text-xs ml-2">last event {{ d.seconds_since_last_event }}s ago</span>
+            <span class="text-muted text-xs ml-2 font-mono">Last event {{ d.seconds_since_last_event }}s ago</span>
           }
         </div>
         @if (d.health.reason) {
           <div class="text-[11px] text-muted mt-1">{{ d.health.reason }}</div>
         }
         @if (d.health.ports) {
-          <div class="text-[11px] text-muted mt-1">ports that failed: <span class="text-text">{{ d.health.ports.join(', ') }}</span> — another process likely owns them.</div>
+          <div class="text-[11px] text-muted mt-1">Ports that failed: <span class="text-text">{{ d.health.ports.join(', ') }}</span></div>
         }
       </div>
-      <button class="filter-chip" (click)="reapply()">re-check integration ↻</button>
-      <button class="filter-chip" (click)="download()">download report ↓</button>
+      <button class="filter-chip flex items-center gap-1.5" (click)="reapply()">
+        <lucide-icon name="refresh-cw" class="w-3 h-3"></lucide-icon>Re-check
+      </button>
+      <button class="filter-chip flex items-center gap-1.5" (click)="download()">
+        <lucide-icon name="download" class="w-3 h-3"></lucide-icon>Download report
+      </button>
     </div>
 
     <!-- top stats -->
     <div class="grid grid-cols-4 gap-4">
       <section class="panel">
-        <div class="panel-title">records received</div>
+        <div class="panel-title">Records received</div>
         <div class="panel-body">
           <div class="text-3xl font-mono tabular-nums">{{ d.total_records | number }}</div>
-          <div class="text-[11px] text-muted mt-1">{{ d.total_payloads | number }} payloads</div>
+          <div class="text-[11px] text-muted mt-1">{{ d.total_payloads | number }} payloads this session</div>
         </div>
       </section>
       <section class="panel">
-        <div class="panel-title">last event</div>
+        <div class="panel-title">Last event</div>
         <div class="panel-body">
           @if (d.seconds_since_last_event != null) {
             <div class="text-3xl font-mono tabular-nums">{{ d.seconds_since_last_event }}s</div>
             <div class="text-[11px] text-muted mt-1">at {{ d.last_event_ms | date : 'HH:mm:ss' }}</div>
           } @else {
             <div class="text-3xl font-mono tabular-nums text-muted">—</div>
-            <div class="text-[11px] text-muted mt-1">no events yet</div>
+            <div class="text-[11px] text-muted mt-1">No events yet</div>
           }
         </div>
       </section>
       <section class="panel">
-        <div class="panel-title">uptime</div>
+        <div class="panel-title">Uptime</div>
         <div class="panel-body">
           <div class="text-3xl font-mono tabular-nums">{{ d.uptime_seconds }}s</div>
-          <div class="text-[11px] text-muted mt-1">since {{ d.start_ms | date : 'HH:mm:ss' }}</div>
+          <div class="text-[11px] text-muted mt-1">Since {{ d.start_ms | date : 'HH:mm:ss' }}</div>
         </div>
       </section>
       <section class="panel">
-        <div class="panel-title">last session</div>
+        <div class="panel-title">Last session</div>
         <div class="panel-body">
           <div class="text-sm font-mono break-all text-accent">{{ d.last_session_id || '—' }}</div>
         </div>
@@ -77,22 +92,22 @@
     <!-- binds + transports -->
     <div class="grid grid-cols-2 gap-4">
       <section class="panel">
-        <div class="panel-title">listener binds</div>
+        <div class="panel-title">Listener binds</div>
         <div class="panel-body">
           <div class="grid grid-cols-[80px_60px_1fr] items-center py-1 font-mono text-xs">
             <span class="text-muted">4317 grpc</span>
             <span [class]="bindClass(d.binds.grpc_4317)">{{ bindLabel(d.binds.grpc_4317) }}</span>
-            <span class="text-[11px] text-muted">otlp metrics + logs</span>
+            <span class="text-[11px] text-muted">OTLP metrics + logs</span>
           </div>
           <div class="grid grid-cols-[80px_60px_1fr] items-center py-1 font-mono text-xs">
             <span class="text-muted">4318 http</span>
             <span [class]="bindClass(d.binds.http_4318)">{{ bindLabel(d.binds.http_4318) }}</span>
-            <span class="text-[11px] text-muted">otlp http/protobuf</span>
+            <span class="text-[11px] text-muted">OTLP HTTP/protobuf</span>
           </div>
           <div class="grid grid-cols-[80px_60px_1fr] items-center py-1 font-mono text-xs">
             <span class="text-muted">8765 api</span>
             <span [class]="bindClass(d.binds.api_8765)">{{ bindLabel(d.binds.api_8765) }}</span>
-            <span class="text-[11px] text-muted">internal ui api</span>
+            <span class="text-[11px] text-muted">Internal UI API</span>
           </div>
           @if (d.last_error) {
             <div class="mt-2 text-xs text-err font-mono break-all">{{ d.last_error }}</div>
@@ -101,10 +116,10 @@
       </section>
 
       <section class="panel">
-        <div class="panel-title">transports</div>
+        <div class="panel-title">Transports</div>
         <div class="panel-body">
           @if (!d.transport_counters || (d.transport_counters | json) === '{}') {
-            <div class="text-muted text-xs font-mono">no payloads received yet</div>
+            <div class="text-muted text-xs font-mono">No payloads received yet</div>
           } @else {
             @for (e of d.transport_counters | keyvalue; track e.key) {
               <div class="flex justify-between items-center py-1 font-mono text-xs border-b border-border/40">
@@ -119,17 +134,17 @@
 
     <!-- event counters -->
     <section class="panel">
-      <div class="panel-title">event counters · this session</div>
+      <div class="panel-title">Event counters · this session</div>
       <div class="panel-body">
         @if (sortedCounters().length === 0) {
-          <div class="text-muted text-xs font-mono">no events received yet</div>
+          <div class="text-muted text-xs font-mono">No events received yet</div>
         } @else {
           <table class="w-full text-xs font-mono">
             <thead>
               <tr class="text-left text-[10px] uppercase text-muted">
-                <th class="pb-1.5">event name</th>
-                <th class="pb-1.5 text-right">count</th>
-                <th class="pb-1.5 text-right">filter</th>
+                <th class="pb-1.5">Event name</th>
+                <th class="pb-1.5 text-right">Count</th>
+                <th class="pb-1.5 text-right">Filter</th>
               </tr>
             </thead>
             <tbody>
@@ -138,7 +153,9 @@
                   <td class="py-1.5">{{ c[0] }}</td>
                   <td class="py-1.5 text-right tabular-nums">{{ c[1] | number }}</td>
                   <td class="py-1.5 text-right">
-                    <button class="text-accent hover:underline" (click)="setFilter(c[0])">view ↗</button>
+                    <button class="text-accent hover:underline inline-flex items-center gap-1" (click)="setFilter(c[0])">
+                      View <lucide-icon name="external-link" class="w-3 h-3"></lucide-icon>
+                    </button>
                   </td>
                 </tr>
               }
@@ -151,9 +168,9 @@
     <!-- event feed -->
     <section class="panel">
       <div class="panel-title">
-        <span><span class="live-dot"></span>event feed</span>
+        <span class="flex items-center gap-1.5"><span class="live-dot"></span>Event feed</span>
         <span class="flex items-center gap-2 text-[10px]">
-          filter:
+          Filter:
           <select class="bg-bg border border-border text-text text-[11px] font-mono px-1 py-0.5"
                   [ngModel]="feedFilter() || 'all'"
                   (ngModelChange)="setFilter($event)">
@@ -162,14 +179,20 @@
               <option [value]="c[0]">{{ c[0] }}</option>
             }
           </select>
-          <button class="filter-chip"
+          <button class="filter-chip flex items-center gap-1"
                   [attr.data-active]="paused() ? 'true' : null"
-                  (click)="togglePause()">{{ paused() ? '▶ resume' : '⏸ pause' }}</button>
+                  (click)="togglePause()">
+            @if (paused()) {
+              <lucide-icon name="play" class="w-3 h-3"></lucide-icon>Resume
+            } @else {
+              <lucide-icon name="pause" class="w-3 h-3"></lucide-icon>Pause
+            }
+          </button>
         </span>
       </div>
       <div class="panel-body p-0">
         @if (events().length === 0) {
-          <div class="p-6 text-center text-muted font-mono text-xs">no events</div>
+          <div class="p-6 text-center text-muted font-mono text-xs">No events</div>
         } @else {
           <div style="max-height: 500px; overflow-y: auto;">
             @for (e of events(); track e.id) {
@@ -199,6 +222,6 @@
     </section>
 
   } @else {
-    <div class="text-center py-10 text-muted font-mono">loading…</div>
+    <div class="text-center py-10 text-muted font-mono">Loading…</div>
   }
 </div>

@@ -1,12 +1,16 @@
 import { Component, inject } from '@angular/core';
+import { LucideAngularModule } from 'lucide-angular';
 import { FilterService, RangePreset } from '../core/filter.service';
 
 @Component({
   selector: 'app-filter-bar',
+  imports: [LucideAngularModule],
   template: `
     <div class="sticky top-0 z-10 bg-panel/90 backdrop-blur-sm border-b border-border">
       <div class="px-6 py-2.5 flex items-center gap-3">
-        <span class="filter-label">▸ range</span>
+        <span class="filter-label flex items-center gap-1.5">
+          <lucide-icon name="calendar" class="w-3 h-3"></lucide-icon>Range
+        </span>
         <div class="flex items-center gap-1.5">
           @for (r of ranges; track r.id) {
             <button class="filter-chip"
@@ -17,24 +21,28 @@ import { FilterService, RangePreset } from '../core/filter.service';
         <span class="ml-auto text-[11px] font-mono text-muted">{{ filter.rangeLabel() }}</span>
       </div>
       <div class="px-6 py-2.5 flex items-center gap-3 border-t border-border/50">
-        <span class="filter-label">▸ model</span>
+        <span class="filter-label flex items-center gap-1.5">
+          <lucide-icon name="layers" class="w-3 h-3"></lucide-icon>Model
+        </span>
         <div class="flex items-center gap-1.5">
           @for (m of filter.allModels(); track m) {
             <button class="filter-chip"
                     [attr.data-active]="filter.models().has(m) ? 'true' : null"
                     (click)="filter.toggleModel(m)">
-              {{ m }}<span class="chip-state">{{ filter.models().has(m) ? 'on' : 'off' }}</span>
+              {{ m }}
             </button>
           }
         </div>
         @if (filter.hasActiveFilters()) {
-          <button class="ml-auto text-muted hover:text-text font-mono text-[11px]"
-                  (click)="filter.clearFilters()">⊗ clear</button>
+          <button class="ml-auto text-muted hover:text-text font-mono text-[11px] flex items-center gap-1"
+                  (click)="filter.clearFilters()">
+            <lucide-icon name="x" class="w-3 h-3"></lucide-icon>Clear
+          </button>
         }
       </div>
-      <div class="px-6 py-2 text-[11px] uppercase tracking-wider border-t border-border/50 text-muted">
-        <span class="inline-block w-14">▸ repo</span>
-        <span>— not emitted by claude code · filter by session instead</span>
+      <div class="px-6 py-2 text-[11px] uppercase tracking-wider border-t border-border/50 text-muted flex items-center gap-1.5">
+        <lucide-icon name="git-branch" class="w-3 h-3"></lucide-icon>
+        <span>Repo — not emitted by Claude Code (filter by session instead)</span>
       </div>
     </div>
   `,
@@ -42,10 +50,10 @@ import { FilterService, RangePreset } from '../core/filter.service';
 export class FilterBarComponent {
   filter = inject(FilterService);
   ranges: { id: RangePreset; label: string }[] = [
-    { id: 'today', label: 'today' },
-    { id: 'week', label: 'this week' },
-    { id: 'month', label: 'this month' },
-    { id: '30d', label: 'last 30d' },
-    { id: 'custom', label: 'custom…' },
+    { id: 'today', label: 'Today' },
+    { id: 'week', label: 'This week' },
+    { id: 'month', label: 'This month' },
+    { id: '30d', label: 'Last 30d' },
+    { id: 'custom', label: 'Custom…' },
   ];
 }

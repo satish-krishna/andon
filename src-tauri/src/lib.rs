@@ -65,6 +65,7 @@ pub fn run() {
 
     let control = otlp::IngestionControl::new();
     let diagnostics = diagnostics::Diagnostics::new();
+    diagnostics.seed_from_db(&pool);
 
     let api_state = api::ApiState {
         pool: pool.clone(),
