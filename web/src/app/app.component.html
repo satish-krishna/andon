@@ -1,0 +1,24 @@
+<div class="grid grid-cols-[200px_1fr] h-screen w-screen">
+  <aside class="bg-panel border-r border-border flex flex-col">
+    <div class="px-4 py-5 border-b border-border">
+      <div class="text-lg font-semibold tracking-tight">andon</div>
+      <div class="text-xs text-muted mt-0.5">claude code dashboard</div>
+    </div>
+    <nav class="flex flex-col py-2">
+      <a routerLink="/overview" routerLinkActive="bg-border text-accent"
+         class="px-4 py-2 text-sm text-text hover:bg-border">Overview</a>
+      <a routerLink="/sessions" routerLinkActive="bg-border text-accent"
+         class="px-4 py-2 text-sm text-text hover:bg-border">Sessions</a>
+      <a routerLink="/files" routerLinkActive="bg-border text-accent"
+         class="px-4 py-2 text-sm text-text hover:bg-border">Files</a>
+      <a routerLink="/settings" routerLinkActive="bg-border text-accent"
+         class="px-4 py-2 text-sm text-text hover:bg-border">Settings</a>
+    </nav>
+    <div class="mt-auto px-4 py-3 text-[11px] text-muted border-t border-border">
+      v0.1.0
+    </div>
+  </aside>
+  <main class="overflow-auto">
+    <router-outlet />
+  </main>
+</div>

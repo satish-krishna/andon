@@ -1,0 +1,32 @@
+import { Routes } from '@angular/router';
+
+export const routes: Routes = [
+  { path: '', pathMatch: 'full', redirectTo: 'overview' },
+  {
+    path: 'overview',
+    loadComponent: () =>
+      import('./features/overview/overview.component').then((m) => m.OverviewComponent),
+  },
+  {
+    path: 'sessions',
+    loadComponent: () =>
+      import('./features/sessions/sessions.component').then((m) => m.SessionsComponent),
+  },
+  {
+    path: 'sessions/:id',
+    loadComponent: () =>
+      import('./features/sessions/session-detail.component').then(
+        (m) => m.SessionDetailComponent,
+      ),
+  },
+  {
+    path: 'files',
+    loadComponent: () =>
+      import('./features/files/files.component').then((m) => m.FilesComponent),
+  },
+  {
+    path: 'settings',
+    loadComponent: () =>
+      import('./features/settings/settings.component').then((m) => m.SettingsComponent),
+  },
+];

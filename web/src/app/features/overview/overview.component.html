@@ -1,0 +1,71 @@
+<div class="p-6 flex flex-col gap-6">
+  <div class="grid grid-cols-3 gap-4">
+    <app-panel title="Today's cost">
+      <div class="text-3xl font-mono">
+        $ {{ (today()?.cost_usd ?? 0) | number : '1.4-4' }}
+      </div>
+    </app-panel>
+    <app-panel title="Sessions today">
+      <div class="text-3xl font-mono">{{ today()?.sessions ?? 0 }}</div>
+    </app-panel>
+    <app-panel title="Accept rate today">
+      <div class="text-3xl font-mono">
+        {{ (today()?.accept_rate ?? 0) | percent : '1.0-1' }}
+      </div>
+    </app-panel>
+  </div>
+
+  <div class="grid grid-cols-2 gap-4">
+    <app-panel title="Cost — last 30 days (by model)">
+      @if (costChart(); as cfg) {
+        <div class="h-64">
+          <canvas baseChart [type]="'bar'" [data]="cfg.data" [options]="cfg.options"></canvas>
+        </div>
+      } @else {
+        <app-empty />
+      }
+    </app-panel>
+
+    <app-panel title="Tokens — last 30 days (by type)">
+      @if (tokensChart(); as cfg) {
+        <div class="h-64">
+          <canvas baseChart [type]="'line'" [data]="cfg.data" [options]="cfg.options"></canvas>
+        </div>
+      } @else {
+        <app-empty />
+      }
+    </app-panel>
+  </div>
+
+  <div class="grid grid-cols-2 gap-4">
+    <app-panel title="Accept rate by language">
+      @if (accept().length) {
+        <div class="h-64">
+          <canvas baseChart [type]="'bar'" [data]="acceptChart()!.data" [options]="acceptChart()!.options"></canvas>
+        </div>
+      } @else {
+        <app-empty />
+      }
+    </app-panel>
+
+    <app-panel title="Active time today">
+      @if (activeTime(); as t) {
+        <div class="flex flex-col gap-3 pt-2">
+          <div class="text-3xl font-mono">{{ fmtDuration(totalActive()) }}</div>
+          <div class="grid grid-cols-2 gap-3 text-sm">
+            <div class="bg-bg rounded p-3">
+              <div class="text-muted text-xs">User</div>
+              <div class="font-mono">{{ fmtDuration(t.user_seconds) }}</div>
+            </div>
+            <div class="bg-bg rounded p-3">
+              <div class="text-muted text-xs">CLI</div>
+              <div class="font-mono">{{ fmtDuration(t.cli_seconds) }}</div>
+            </div>
+          </div>
+        </div>
+      } @else {
+        <app-empty />
+      }
+    </app-panel>
+  </div>
+</div>
