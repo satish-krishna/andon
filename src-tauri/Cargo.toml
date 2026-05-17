@@ -1,0 +1,47 @@
+[package]
+name = "andon"
+version = "0.1.0"
+edition = "2021"
+description = "Local andon board for Claude Code telemetry"
+authors = ["Andon"]
+default-run = "andon"
+
+[lib]
+name = "andon_lib"
+crate-type = ["staticlib", "cdylib", "rlib"]
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+tauri = { version = "2", features = ["tray-icon"] }
+tauri-plugin-shell = "2"
+
+tokio = { version = "1", features = ["full"] }
+tonic = "0.12"
+prost = "0.13"
+opentelemetry-proto = { version = "0.27", features = ["gen-tonic", "metrics", "logs", "trace"] }
+
+axum = "0.7"
+tower-http = { version = "0.6", features = ["cors", "fs"] }
+
+rusqlite = { version = "0.32", features = ["bundled"] }
+r2d2 = "0.8"
+r2d2_sqlite = "0.25"
+
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+
+anyhow = "1"
+thiserror = "2"
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+
+dirs = "5"
+
+[profile.release]
+codegen-units = 1
+lto = true
+opt-level = "s"
+panic = "abort"
+strip = true

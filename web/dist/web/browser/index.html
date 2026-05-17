@@ -1,0 +1,26 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <title>andon</title>
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <style>
+      html,body{margin:0;height:100%;background:#0b0d10;color:#e6e6e6;font-family:-apple-system,Segoe UI,system-ui,sans-serif}
+      .wrap{display:flex;align-items:center;justify-content:center;height:100%;flex-direction:column;gap:8px}
+      .dim{opacity:.6;font-size:13px}
+    </style>
+  </head>
+  <body>
+    <div class="wrap">
+      <div>andon</div>
+      <div class="dim">SPA placeholder — Angular frontend lands in Section 5.</div>
+      <div class="dim" id="health">checking api…</div>
+    </div>
+    <script>
+      fetch('http://127.0.0.1:8765/api/health')
+        .then(r => r.json())
+        .then(j => document.getElementById('health').textContent = 'api: ' + j.status + ' · ' + j.db)
+        .catch(e => document.getElementById('health').textContent = 'api: unreachable');
+    </script>
+  </body>
+</html>

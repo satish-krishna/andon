@@ -1,0 +1,21 @@
+# Rust
+target/
+**/*.rs.bk
+src-tauri/gen/
+
+# Node / Angular
+node_modules/
+web/dist/
+!web/dist/web/browser/index.html
+
+# Andon data (local-only)
+.andon/
+
+# OS
+Thumbs.db
+.DS_Store
+
+# IDE
+.idea/
+.vscode/
+*.iml
