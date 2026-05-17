@@ -1,0 +1,516 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<title>andon — settings (prototype)</title>
+<meta name="viewport" content="width=1400" />
+<script src="https://cdn.tailwindcss.com"></script>
+<link rel="preconnect" href="https://fonts.googleapis.com" />
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+<link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;600&family=Inter:wght@400;500;600&display=swap" rel="stylesheet" />
+<link rel="stylesheet" href="_shared.css" />
+<script>
+  tailwind.config = {
+    theme: {
+      extend: {
+        colors: {
+          bg: '#0b0d10', panel: '#11151a', 'panel-2': '#161a20',
+          border: '#1f242c', 'border-bright': '#2a313b',
+          accent: '#facc15', muted: '#7b8794', text: '#e6e6e6',
+          ok: '#34d399', warn: '#f59e0b', err: '#f87171', info: '#60a5fa',
+        },
+        fontFamily: {
+          sans: ['Inter', 'system-ui', 'sans-serif'],
+          mono: ['"JetBrains Mono"', 'ui-monospace', 'Consolas', 'monospace'],
+        },
+      },
+    },
+  };
+</script>
+<style>
+  /* settings row */
+  .setting-row {
+    display: grid;
+    grid-template-columns: 220px 1fr auto;
+    gap: 20px;
+    align-items: center;
+    padding: 12px 0;
+    border-bottom: 1px solid rgba(31, 36, 44, 0.5);
+  }
+  .setting-row:last-child { border-bottom: none; }
+  .setting-row .key {
+    font-size: 12px;
+    color: var(--muted);
+    font-family: 'JetBrains Mono', monospace;
+  }
+  .setting-row .key-sub {
+    font-size: 10px;
+    color: var(--muted);
+    opacity: 0.7;
+    margin-top: 2px;
+  }
+  .setting-row .val {
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 12px;
+    color: var(--text);
+    word-break: break-all;
+  }
+
+  /* toggle */
+  .toggle {
+    position: relative;
+    display: inline-block;
+    width: 34px;
+    height: 18px;
+    cursor: pointer;
+  }
+  .toggle input { display: none; }
+  .toggle .track {
+    position: absolute;
+    inset: 0;
+    background: var(--border);
+    border-radius: 2px;
+    transition: background 100ms;
+  }
+  .toggle .thumb {
+    position: absolute;
+    top: 2px; left: 2px;
+    width: 14px; height: 14px;
+    background: var(--muted);
+    border-radius: 1px;
+    transition: transform 100ms, background 100ms;
+  }
+  .toggle input:checked + .track { background: rgba(250, 204, 21, 0.25); }
+  .toggle input:checked + .track + .thumb { transform: translateX(16px); background: var(--accent); }
+
+  /* status badge */
+  .badge {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    padding: 2px 8px;
+    border-radius: 2px;
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 11px;
+    border: 1px solid;
+  }
+  .badge.ok    { color: var(--ok);    border-color: rgba(52, 211, 153, 0.4); background: rgba(52, 211, 153, 0.06); }
+  .badge.warn  { color: var(--warn);  border-color: rgba(245, 158, 11, 0.4); background: rgba(245, 158, 11, 0.06); }
+  .badge.err   { color: var(--err);   border-color: rgba(248, 113, 113, 0.4); background: rgba(248, 113, 113, 0.06); }
+  .badge.muted { color: var(--muted); }
+
+  /* code block */
+  .code {
+    background: var(--bg);
+    border: 1px solid var(--border);
+    padding: 10px 12px;
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 11px;
+    line-height: 1.5;
+    border-radius: 3px;
+    white-space: pre;
+    overflow-x: auto;
+    color: var(--text);
+  }
+  .code .k { color: var(--info); }
+  .code .s { color: var(--ok); }
+  .code .p { color: var(--muted); }
+
+  /* danger panel */
+  .danger { border-color: rgba(248, 113, 113, 0.3); }
+  .danger .panel-title { border-bottom-color: rgba(248, 113, 113, 0.3); color: var(--err); }
+  .danger .danger-btn {
+    color: var(--err);
+    border-color: rgba(248, 113, 113, 0.4);
+  }
+  .danger .danger-btn:hover {
+    background: rgba(248, 113, 113, 0.1);
+    border-color: rgba(248, 113, 113, 0.6);
+  }
+
+  /* table count */
+  .table-count-row {
+    display: grid;
+    grid-template-columns: 1fr 100px;
+    align-items: center;
+    padding: 4px 0;
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 11px;
+    border-bottom: 1px solid rgba(31, 36, 44, 0.4);
+  }
+  .table-count-row:last-child { border-bottom: none; }
+
+  /* section anchors nav */
+  .toc-link {
+    display: block;
+    padding: 6px 12px;
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 11px;
+    color: var(--muted);
+    border-left: 1px solid var(--border);
+    transition: color 80ms, border-color 80ms;
+  }
+  .toc-link:hover { color: var(--text); border-left-color: var(--border-bright); }
+  .toc-link.active { color: var(--accent); border-left-color: var(--accent); }
+</style>
+</head>
+<body class="min-h-screen">
+
+<div class="grid grid-cols-[200px_1fr] min-h-screen">
+
+  <!-- sidebar -->
+  <aside class="bg-panel border-r border-border flex flex-col">
+    <div class="px-4 py-5 border-b border-border">
+      <div class="text-base font-semibold tracking-tight">andon</div>
+      <div class="text-[10px] text-muted mt-0.5 uppercase tracking-wider">claude code · v0.1.2</div>
+    </div>
+    <nav class="flex flex-col py-2">
+      <a href="overview.html" class="nav-link">overview</a>
+      <a href="sessions.html" class="nav-link">sessions</a>
+      <a href="files.html" class="nav-link">files</a>
+      <a href="diagnostics.html" class="nav-link">diagnostics</a>
+      <a href="settings.html" class="nav-link active">settings</a>
+    </nav>
+    <div class="mt-auto px-4 py-3 text-[10px] text-muted border-t border-border font-mono">
+      <div><span class="live-dot"></span>listening</div>
+      <div class="text-[9px] mt-1">:4317 grpc · :4318 http</div>
+    </div>
+  </aside>
+
+  <main class="overflow-auto">
+    <div class="crumb">
+      <span>◢ settings</span>
+      <span class="ml-auto">◷ may 17, 2026 · 14:32</span>
+    </div>
+
+    <!-- NOTE: no filter bar on settings, per design -->
+
+    <!-- two-column: TOC sidebar + content -->
+    <div class="grid grid-cols-[180px_1fr] gap-6 px-6 py-5">
+
+      <!-- TOC -->
+      <nav class="sticky top-4 self-start">
+        <div class="text-[10px] uppercase tracking-wider text-muted mb-2 px-3">sections</div>
+        <a href="#integration" class="toc-link active">integration</a>
+        <a href="#ingestion" class="toc-link">ingestion</a>
+        <a href="#data" class="toc-link">data</a>
+        <a href="#app" class="toc-link">app</a>
+        <a href="#about" class="toc-link">about</a>
+        <a href="#danger" class="toc-link">danger zone</a>
+      </nav>
+
+      <!-- content -->
+      <div class="flex flex-col gap-4 max-w-3xl">
+
+        <!-- INTEGRATION -->
+        <section class="panel" id="integration">
+          <div class="panel-title">claude code integration</div>
+          <div class="panel-body">
+            <div class="setting-row" style="grid-template-columns: 220px 1fr auto;">
+              <div>
+                <div class="key">status</div>
+                <div class="key-sub">on first launch, andon patches your settings.json with the required otel env vars</div>
+              </div>
+              <div class="val">
+                <span class="badge ok" id="integ-badge">✓ configured</span>
+                <div class="text-muted text-[10px] mt-1.5">C:\Users\psati\.claude\settings.json</div>
+              </div>
+              <button class="filter-chip">re-apply ↻</button>
+            </div>
+            <div class="setting-row">
+              <div>
+                <div class="key">backup</div>
+                <div class="key-sub">created before any modification</div>
+              </div>
+              <div class="val text-muted">settings.json.andon-backup · created may 17</div>
+              <button class="filter-chip">restore ↺</button>
+            </div>
+            <div class="setting-row">
+              <div>
+                <div class="key">manual setup</div>
+                <div class="key-sub">if you'd rather configure it yourself</div>
+              </div>
+              <div class="val col-span-2">
+                <pre class="code"><span class="p">{</span>
+  <span class="s">"env"</span><span class="p">:</span> <span class="p">{</span>
+    <span class="s">"CLAUDE_CODE_ENABLE_TELEMETRY"</span><span class="p">:</span> <span class="s">"1"</span><span class="p">,</span>
+    <span class="s">"OTEL_METRICS_EXPORTER"</span><span class="p">:</span> <span class="s">"otlp"</span><span class="p">,</span>
+    <span class="s">"OTEL_LOGS_EXPORTER"</span><span class="p">:</span> <span class="s">"otlp"</span><span class="p">,</span>
+    <span class="s">"OTEL_EXPORTER_OTLP_PROTOCOL"</span><span class="p">:</span> <span class="s">"grpc"</span><span class="p">,</span>
+    <span class="s">"OTEL_EXPORTER_OTLP_ENDPOINT"</span><span class="p">:</span> <span class="s">"http://localhost:4317"</span>
+  <span class="p">}</span>
+<span class="p">}</span></pre>
+                <button class="filter-chip mt-2" onclick="navigator.clipboard.writeText('demo')">copy ⧉</button>
+              </div>
+            </div>
+          </div>
+        </section>
+
+        <!-- INGESTION -->
+        <section class="panel" id="ingestion">
+          <div class="panel-title">ingestion</div>
+          <div class="panel-body">
+            <div class="setting-row">
+              <div>
+                <div class="key">accept telemetry</div>
+                <div class="key-sub">drop incoming otlp payloads when off · listeners stay bound</div>
+              </div>
+              <div class="val">
+                <span class="badge ok" id="paused-badge">● active</span>
+              </div>
+              <label class="toggle">
+                <input type="checkbox" id="pause-toggle" />
+                <span class="track"></span>
+                <span class="thumb"></span>
+              </label>
+            </div>
+            <div class="setting-row">
+              <div>
+                <div class="key">listener binds</div>
+                <div class="key-sub">localhost-only · changes need an app restart</div>
+              </div>
+              <div class="val">
+                <div>:4317 grpc · <span class="text-ok">✓ ok</span></div>
+                <div>:4318 http · <span class="text-ok">✓ ok</span></div>
+                <div>:8765 api  · <span class="text-ok">✓ ok</span></div>
+              </div>
+              <a href="diagnostics.html" class="filter-chip">view diagnostics →</a>
+            </div>
+            <div class="setting-row">
+              <div>
+                <div class="key">redact prompts</div>
+                <div class="key-sub">claude code redacts by default; this is just confirmation</div>
+              </div>
+              <div class="val text-muted">prompts already arrive as <span class="text-text">"&lt;REDACTED&gt;"</span></div>
+              <span></span>
+            </div>
+          </div>
+        </section>
+
+        <!-- DATA -->
+        <section class="panel" id="data">
+          <div class="panel-title">data</div>
+          <div class="panel-body">
+            <div class="setting-row">
+              <div>
+                <div class="key">database</div>
+                <div class="key-sub">sqlite · wal mode</div>
+              </div>
+              <div class="val">
+                C:\Users\psati\.andon\data.db
+                <div class="text-muted text-[10px] mt-1">14.2 MB · last write 4s ago</div>
+              </div>
+              <button class="filter-chip">open folder ↗</button>
+            </div>
+            <div class="setting-row">
+              <div>
+                <div class="key">retention</div>
+                <div class="key-sub">drop rows older than the threshold · runs once at startup</div>
+              </div>
+              <div class="val">
+                <select class="bg-bg border border-border text-text font-mono text-xs px-2 py-1">
+                  <option>keep forever</option>
+                  <option>90 days</option>
+                  <option>180 days</option>
+                  <option>365 days</option>
+                </select>
+              </div>
+              <button class="filter-chip">vacuum now ↻</button>
+            </div>
+            <div class="setting-row" style="grid-template-columns: 220px 1fr;">
+              <div>
+                <div class="key">table breakdown</div>
+                <div class="key-sub">row counts as of refresh</div>
+              </div>
+              <div class="val">
+                <div class="table-count-row"><span class="text-muted">log_events</span>      <span class="text-right tabular-nums">12,847</span></div>
+                <div class="table-count-row"><span class="text-muted">sessions</span>        <span class="text-right tabular-nums">128</span></div>
+                <div class="table-count-row"><span class="text-muted">cost_entries</span>    <span class="text-right tabular-nums">487</span></div>
+                <div class="table-count-row"><span class="text-muted">token_usage</span>     <span class="text-right tabular-nums">1,422</span></div>
+                <div class="table-count-row"><span class="text-muted">tool_decisions</span>  <span class="text-right tabular-nums">214</span></div>
+                <div class="table-count-row"><span class="text-muted">file_changes</span>    <span class="text-right tabular-nums">163</span></div>
+                <div class="table-count-row"><span class="text-muted">git_activity</span>    <span class="text-right tabular-nums">0</span></div>
+                <div class="table-count-row"><span class="text-muted">active_time</span>     <span class="text-right tabular-nums">487</span></div>
+                <div class="table-count-row"><span class="text-muted">metrics_raw</span>     <span class="text-right tabular-nums">0</span></div>
+              </div>
+            </div>
+            <div class="setting-row">
+              <div>
+                <div class="key">export</div>
+                <div class="key-sub">full database as sqlite file</div>
+              </div>
+              <div class="val text-muted">no recent export</div>
+              <button class="filter-chip">export .db ↓</button>
+            </div>
+          </div>
+        </section>
+
+        <!-- APP -->
+        <section class="panel" id="app">
+          <div class="panel-title">app</div>
+          <div class="panel-body">
+            <div class="setting-row">
+              <div>
+                <div class="key">launch at login</div>
+                <div class="key-sub">windows startup folder · no admin needed</div>
+              </div>
+              <div class="val text-muted">runs minimized to tray on boot</div>
+              <label class="toggle">
+                <input type="checkbox" checked />
+                <span class="track"></span>
+                <span class="thumb"></span>
+              </label>
+            </div>
+            <div class="setting-row">
+              <div>
+                <div class="key">hide on close</div>
+                <div class="key-sub">window minimizes to tray instead of quitting</div>
+              </div>
+              <div class="val text-muted">tray menu · "quit andon" to fully exit</div>
+              <label class="toggle">
+                <input type="checkbox" checked />
+                <span class="track"></span>
+                <span class="thumb"></span>
+              </label>
+            </div>
+            <div class="setting-row">
+              <div>
+                <div class="key">log file</div>
+                <div class="key-sub">daily rotation · stderr also captured</div>
+              </div>
+              <div class="val">
+                C:\Users\psati\.andon\log.txt.2026-05-17
+                <div class="text-muted text-[10px] mt-1">3.4 KB · 47 lines today</div>
+              </div>
+              <button class="filter-chip">open log ↗</button>
+            </div>
+            <div class="setting-row">
+              <div>
+                <div class="key">api base url</div>
+                <div class="key-sub">for the embedded ui</div>
+              </div>
+              <div class="val text-muted">http://127.0.0.1:8765</div>
+              <span></span>
+            </div>
+          </div>
+        </section>
+
+        <!-- ABOUT -->
+        <section class="panel" id="about">
+          <div class="panel-title">about</div>
+          <div class="panel-body">
+            <div class="setting-row">
+              <div class="key">version</div>
+              <div class="val">0.1.2-alpha</div>
+              <a class="filter-chip" href="#">check for updates ↗</a>
+            </div>
+            <div class="setting-row">
+              <div class="key">build</div>
+              <div class="val text-muted">e848da4 · may 17 2026 · windows-x64-msvc</div>
+              <span></span>
+            </div>
+            <div class="setting-row">
+              <div class="key">tauri / rust</div>
+              <div class="val text-muted">tauri 2.11 · rust 1.95</div>
+              <span></span>
+            </div>
+            <div class="setting-row">
+              <div class="key">repository</div>
+              <div class="val text-info">github.com/satish-krishna/andon</div>
+              <a class="filter-chip" href="#">open ↗</a>
+            </div>
+            <div class="setting-row">
+              <div class="key">license</div>
+              <div class="val text-muted">MIT</div>
+              <span></span>
+            </div>
+          </div>
+        </section>
+
+        <!-- DANGER ZONE -->
+        <section class="panel danger" id="danger">
+          <div class="panel-title">danger zone</div>
+          <div class="panel-body">
+            <div class="setting-row">
+              <div>
+                <div class="key" style="color: var(--err)">delete all data</div>
+                <div class="key-sub">drops every row in the database · listeners stay up · cannot be undone</div>
+              </div>
+              <div class="val text-muted">12,847 rows · 14.2 MB</div>
+              <button class="filter-chip danger-btn">delete all rows ⨯</button>
+            </div>
+            <div class="setting-row">
+              <div>
+                <div class="key" style="color: var(--err)">factory reset</div>
+                <div class="key-sub">delete database + log files + integration backup · next launch behaves like first install</div>
+              </div>
+              <div class="val text-muted">~/.andon/ will be removed</div>
+              <button class="filter-chip danger-btn">factory reset ⨯</button>
+            </div>
+            <div class="setting-row">
+              <div>
+                <div class="key" style="color: var(--err)">uninstall integration</div>
+                <div class="key-sub">restore your settings.json from backup · revert env var patch</div>
+              </div>
+              <div class="val text-muted">claude code will stop sending telemetry to andon</div>
+              <button class="filter-chip danger-btn">unpatch settings.json ⨯</button>
+            </div>
+          </div>
+        </section>
+
+      </div>
+    </div>
+  </main>
+</div>
+
+<!-- demo panel -->
+<div class="demo-panel">
+  <div class="label mb-1.5 text-[10px] uppercase tracking-wider">prototype controls</div>
+  <select id="integ-state" class="w-full">
+    <option value="ok">integration · configured</option>
+    <option value="patched">integration · just patched</option>
+    <option value="conflict">integration · conflict</option>
+    <option value="err">integration · error</option>
+  </select>
+  <div class="mt-2 text-[10px] label">try: pause toggle, scroll & TOC sync</div>
+</div>
+
+<script>
+  // TOC scroll-spy
+  const tocLinks = document.querySelectorAll('.toc-link');
+  const sections = [...document.querySelectorAll('section.panel[id]')];
+  function updateActive() {
+    const scrollY = window.scrollY + 100;
+    let activeIdx = 0;
+    sections.forEach((s, i) => { if (s.offsetTop <= scrollY) activeIdx = i; });
+    tocLinks.forEach((l, i) => l.classList.toggle('active', i === activeIdx));
+  }
+  window.addEventListener('scroll', updateActive);
+
+  // pause toggle
+  const pauseToggle = document.getElementById('pause-toggle');
+  const pauseBadge = document.getElementById('paused-badge');
+  pauseToggle.addEventListener('change', (e) => {
+    if (e.target.checked) {
+      pauseBadge.className = 'badge warn';
+      pauseBadge.textContent = '⏸ paused';
+    } else {
+      pauseBadge.className = 'badge ok';
+      pauseBadge.textContent = '● active';
+    }
+  });
+
+  // integration state toggle
+  document.getElementById('integ-state').onchange = (e) => {
+    const b = document.getElementById('integ-badge');
+    b.className = 'badge';
+    switch (e.target.value) {
+      case 'ok':       b.classList.add('ok');   b.textContent = '✓ configured'; break;
+      case 'patched':  b.classList.add('ok');   b.textContent = '↻ patched · restart claude sessions'; break;
+      case 'conflict': b.classList.add('warn'); b.textContent = '⚠ conflict · manual review'; break;
+      case 'err':      b.classList.add('err');  b.textContent = '✗ error'; break;
+    }
+  };
+</script>
+</body>
+</html>
