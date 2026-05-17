@@ -1,0 +1,490 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<title>andon — files (prototype)</title>
+<meta name="viewport" content="width=1400" />
+<script src="https://cdn.tailwindcss.com"></script>
+<link rel="preconnect" href="https://fonts.googleapis.com" />
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+<link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;600&family=Inter:wght@400;500;600&display=swap" rel="stylesheet" />
+<link rel="stylesheet" href="_shared.css" />
+<script>
+  tailwind.config = {
+    theme: {
+      extend: {
+        colors: {
+          bg: '#0b0d10', panel: '#11151a', 'panel-2': '#161a20',
+          border: '#1f242c', 'border-bright': '#2a313b',
+          accent: '#facc15', muted: '#7b8794', text: '#e6e6e6',
+          ok: '#34d399', warn: '#f59e0b', err: '#f87171', info: '#60a5fa',
+        },
+        fontFamily: {
+          sans: ['Inter', 'system-ui', 'sans-serif'],
+          mono: ['"JetBrains Mono"', 'ui-monospace', 'Consolas', 'monospace'],
+        },
+      },
+    },
+  };
+</script>
+<style>
+  /* file row */
+  .file-row {
+    display: grid;
+    grid-template-columns: 1fr 180px 70px 100px 70px 80px;
+    gap: 14px;
+    padding: 6px 14px;
+    align-items: center;
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 12px;
+    border-bottom: 1px solid rgba(31, 36, 44, 0.5);
+    cursor: pointer;
+    transition: background 80ms;
+  }
+  .file-row:hover { background: rgba(31, 36, 44, 0.4); }
+  .file-row.selected { background: rgba(250, 204, 21, 0.06); border-left: 2px solid var(--accent); padding-left: 12px; }
+  .file-row .meter { height: 8px; background: var(--border); position: relative; }
+  .file-row .meter > div { height: 100%; }
+
+  /* lang chip */
+  .lang-chip {
+    display: inline-block;
+    padding: 1px 6px;
+    border-radius: 2px;
+    font-size: 10px;
+    font-family: 'JetBrains Mono', monospace;
+    border: 1px solid var(--border-bright);
+    color: var(--muted);
+  }
+  .lang-chip.rust       { color: #f59e0b; border-color: rgba(245,158,11,0.4); }
+  .lang-chip.typescript { color: var(--info); border-color: rgba(96,165,250,0.4); }
+  .lang-chip.python     { color: var(--ok); border-color: rgba(52,211,153,0.4); }
+  .lang-chip.go         { color: #06b6d4; border-color: rgba(6,182,212,0.4); }
+  .lang-chip.json       { color: var(--muted); }
+  .lang-chip.html       { color: #ec4899; border-color: rgba(236,72,153,0.4); }
+  .lang-chip.css        { color: #8b5cf6; border-color: rgba(139,92,246,0.4); }
+  .lang-chip.md         { color: var(--muted); }
+
+  /* treemap cell */
+  .tm-cell {
+    border: 1px solid var(--bg);
+    padding: 6px 8px;
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 10px;
+    overflow: hidden;
+    cursor: pointer;
+    transition: filter 80ms;
+    color: rgba(11, 13, 16, 0.95);
+    display: flex;
+    flex-direction: column;
+    justify-content: space-between;
+  }
+  .tm-cell:hover { filter: brightness(1.15); }
+  .tm-cell .count { font-size: 14px; font-weight: 600; }
+
+  /* lang breakdown bar */
+  .lang-bar {
+    display: grid;
+    grid-template-columns: 90px 1fr 60px;
+    gap: 12px;
+    align-items: center;
+    padding: 4px 0;
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 12px;
+  }
+  .lang-bar .fill { height: 10px; background: var(--border); }
+
+  /* spark */
+  .spark {
+    display: inline-flex;
+    align-items: flex-end;
+    gap: 1px;
+    height: 12px;
+  }
+  .spark > div {
+    width: 2px;
+    background: var(--muted);
+  }
+  .spark > div.lit { background: var(--accent); }
+</style>
+</head>
+<body class="min-h-screen">
+
+<div class="grid grid-cols-[200px_1fr] min-h-screen">
+
+  <!-- sidebar -->
+  <aside class="bg-panel border-r border-border flex flex-col">
+    <div class="px-4 py-5 border-b border-border">
+      <div class="text-base font-semibold tracking-tight">andon</div>
+      <div class="text-[10px] text-muted mt-0.5 uppercase tracking-wider">claude code · v0.1.2</div>
+    </div>
+    <nav class="flex flex-col py-2">
+      <a href="overview.html" class="nav-link">overview</a>
+      <a href="sessions.html" class="nav-link">sessions</a>
+      <a href="files.html" class="nav-link active">files</a>
+      <a href="diagnostics.html" class="nav-link">diagnostics</a>
+      <a href="#" class="nav-link">settings</a>
+    </nav>
+    <div class="mt-auto px-4 py-3 text-[10px] text-muted border-t border-border font-mono">
+      <div><span class="live-dot"></span>listening</div>
+      <div class="text-[9px] mt-1">:4317 grpc · :4318 http</div>
+    </div>
+  </aside>
+
+  <main class="overflow-auto">
+    <div class="crumb">
+      <span>◢ files</span>
+      <span class="ml-auto">◷ may 17, 2026 · 14:32</span>
+    </div>
+
+    <!-- filter bar -->
+    <div class="sticky top-0 z-10 bg-panel/90 backdrop-blur-sm border-b border-border">
+      <div class="px-6 py-2.5 flex items-center gap-3">
+        <span class="filter-label">▸ range</span>
+        <div class="flex items-center gap-1.5">
+          <button class="filter-chip" data-range="today">today</button>
+          <button class="filter-chip" data-range="week">this week</button>
+          <button class="filter-chip" data-range="month" data-active="true">this month</button>
+          <button class="filter-chip" data-range="30d">last 30d</button>
+        </div>
+        <input class="search-input ml-auto" placeholder="filter files…" id="search" />
+      </div>
+      <div class="px-6 py-2.5 flex items-center gap-3 border-t border-border/50">
+        <span class="filter-label">▸ lang</span>
+        <div class="flex items-center gap-1.5" id="lang-chips"></div>
+        <span class="filter-label ml-4" style="width: auto">▸ sort</span>
+        <div class="flex items-center gap-1.5">
+          <button class="filter-chip sort" data-sort="edits" data-active="true">edits</button>
+          <button class="filter-chip sort" data-sort="accept">accept rate</button>
+          <button class="filter-chip sort" data-sort="recent">last touched</button>
+          <button class="filter-chip sort" data-sort="churn">churn (+/−)</button>
+        </div>
+      </div>
+    </div>
+
+    <div class="px-6 py-5 flex flex-col gap-4">
+
+      <!-- summary strip -->
+      <div class="grid grid-cols-4 gap-4">
+        <section class="panel">
+          <div class="panel-title">files touched · month</div>
+          <div class="panel-body">
+            <div class="text-3xl font-mono tabular-nums" id="kpi-files">28</div>
+            <div class="text-[11px] text-muted mt-1">across 7 languages</div>
+          </div>
+        </section>
+        <section class="panel">
+          <div class="panel-title">total edits</div>
+          <div class="panel-body">
+            <div class="text-3xl font-mono tabular-nums" id="kpi-edits">214</div>
+            <div class="text-[11px] text-muted mt-1">avg/file · 7.6</div>
+          </div>
+        </section>
+        <section class="panel">
+          <div class="panel-title">lines · added / removed</div>
+          <div class="panel-body">
+            <div class="text-3xl font-mono tabular-nums">
+              <span class="text-ok">+1,847</span>
+              <span class="text-muted text-xl">/</span>
+              <span class="text-err">−412</span>
+            </div>
+            <div class="text-[11px] text-muted mt-1">net +1,435</div>
+          </div>
+        </section>
+        <section class="panel">
+          <div class="panel-title">overall accept rate</div>
+          <div class="panel-body">
+            <div class="text-3xl font-mono tabular-nums">76<span class="text-xl text-muted">%</span></div>
+            <div class="text-[11px] text-muted mt-1">163 accept · 38 reject · 13 abort</div>
+          </div>
+        </section>
+      </div>
+
+      <!-- two-column main -->
+      <div class="grid grid-cols-[1.7fr_1fr] gap-4">
+
+        <!-- file list -->
+        <section class="panel">
+          <div class="panel-title">
+            <span>files · <span id="result-count">28</span> shown</span>
+            <span class="text-[10px]">click row to see history</span>
+          </div>
+          <div class="panel-body p-0">
+            <div class="px-3.5 py-2 text-[10px] uppercase tracking-wider text-muted border-b border-border" style="display: grid; grid-template-columns: 1fr 180px 70px 100px 70px 80px; gap: 14px;">
+              <span>file</span>
+              <span>edits / accept</span>
+              <span class="text-right">+ −</span>
+              <span class="text-right">pulse (30d)</span>
+              <span>lang</span>
+              <span class="text-right">last</span>
+            </div>
+            <div id="file-list" style="max-height: 620px; overflow-y: auto;"></div>
+          </div>
+        </section>
+
+        <!-- treemap + lang breakdown -->
+        <div class="flex flex-col gap-4">
+          <section class="panel">
+            <div class="panel-title">heatmap · edits × accept rate</div>
+            <div class="panel-body">
+              <div id="treemap" style="display: grid; gap: 2px; grid-template-columns: repeat(5, 1fr); height: 300px;"></div>
+              <div class="mt-3 text-[10px] text-muted flex justify-between font-mono">
+                <span>● low accept</span>
+                <div class="flex h-2 items-center gap-0" style="background: linear-gradient(to right, #f87171, #f59e0b, #34d399); width: 120px;"></div>
+                <span>● high accept</span>
+              </div>
+              <div class="mt-1 text-[10px] text-muted font-mono">cell size = edit count · color = accept rate</div>
+            </div>
+          </section>
+
+          <section class="panel">
+            <div class="panel-title">by language</div>
+            <div class="panel-body" id="lang-bars"></div>
+          </section>
+        </div>
+      </div>
+
+      <!-- no results -->
+      <div id="no-results" class="hidden">
+        <section class="panel">
+          <div class="panel-body py-10 text-center font-mono text-sm text-muted">
+            no files match your filters.
+            <button class="filter-chip mt-3" onclick="resetFilters()" data-active="true">⊗ clear filters</button>
+          </div>
+        </section>
+      </div>
+
+    </div>
+  </main>
+</div>
+
+<!-- demo panel -->
+<div class="demo-panel">
+  <div class="label mb-1.5 text-[10px] uppercase tracking-wider">prototype controls</div>
+  <select id="view-mode" class="w-full">
+    <option value="data">with files</option>
+    <option value="empty">no files touched yet</option>
+  </select>
+  <div class="mt-2 text-[10px] label">try: click a row, search "src/", click lang chips</div>
+</div>
+
+<script>
+  const FILES = [
+    { path: 'src-tauri/src/api/routes.rs',     lang: 'rust',       edits: 42, accept: 0.93, added: 312, removed: 45, last: '2m', pulse: 30 },
+    { path: 'src-tauri/src/otlp/ingestor.rs',  lang: 'rust',       edits: 38, accept: 0.87, added: 287, removed: 38, last: '14m', pulse: 28 },
+    { path: 'src-tauri/src/lib.rs',            lang: 'rust',       edits: 29, accept: 0.92, added: 180, removed: 22, last: '1h', pulse: 22 },
+    { path: 'web/src/app/features/overview/overview.component.ts', lang: 'typescript', edits: 24, accept: 0.71, added: 142, removed: 18, last: '38m', pulse: 18 },
+    { path: 'web/src/app/core/api.service.ts', lang: 'typescript', edits: 22, accept: 0.73, added: 95, removed: 12, last: '22m', pulse: 16 },
+    { path: 'src-tauri/src/db/migrations.rs',  lang: 'rust',       edits: 18, accept: 0.88, added: 78, removed: 5, last: '2h', pulse: 14 },
+    { path: 'src-tauri/src/diagnostics.rs',    lang: 'rust',       edits: 15, accept: 0.94, added: 168, removed: 12, last: '1h', pulse: 12 },
+    { path: 'web/src/app/features/settings/settings.component.ts', lang: 'typescript', edits: 12, accept: 0.69, added: 88, removed: 24, last: '3h', pulse: 10 },
+    { path: 'web/src/app/app.component.html',  lang: 'html',       edits: 11, accept: 0.81, added: 42, removed: 8, last: '40m', pulse: 9 },
+    { path: 'CLAUDE.md',                       lang: 'md',         edits: 9,  accept: 1.00, added: 218, removed: 12, last: '5h', pulse: 8 },
+    { path: 'src-tauri/Cargo.toml',            lang: 'toml',       edits: 8,  accept: 0.62, added: 14, removed: 3, last: '20m', pulse: 7 },
+    { path: 'src-tauri/src/integration.rs',    lang: 'rust',       edits: 7,  accept: 0.85, added: 122, removed: 8, last: '5h', pulse: 6 },
+    { path: 'web/src/styles.css',              lang: 'css',        edits: 6,  accept: 0.50, added: 18, removed: 2, last: '4h', pulse: 5 },
+    { path: 'web/tailwind.config.js',          lang: 'js',         edits: 5,  accept: 0.40, added: 24, removed: 8, last: '6h', pulse: 5 },
+    { path: 'scripts/smoke_otlp.py',           lang: 'python',     edits: 4,  accept: 0.75, added: 110, removed: 6, last: '8h', pulse: 4 },
+    { path: 'README.md',                       lang: 'md',         edits: 4,  accept: 1.00, added: 88, removed: 22, last: '1d', pulse: 3 },
+    { path: 'web/src/app/features/diagnostics/diagnostics.component.ts', lang: 'typescript', edits: 4, accept: 0.50, added: 32, removed: 4, last: '2d', pulse: 3 },
+    { path: 'src-tauri/tauri.conf.json',       lang: 'json',       edits: 3,  accept: 0.66, added: 8, removed: 2, last: '6h', pulse: 2 },
+    { path: 'web/src/app/app.routes.ts',       lang: 'typescript', edits: 3,  accept: 1.00, added: 18, removed: 1, last: '2d', pulse: 2 },
+    { path: '.gitignore',                      lang: 'plain',      edits: 2,  accept: 1.00, added: 5, removed: 0, last: '4d', pulse: 1 },
+    { path: 'scripts/smoke_grpc.js',           lang: 'js',         edits: 2,  accept: 0.50, added: 65, removed: 4, last: '4h', pulse: 2 },
+    { path: 'src-tauri/src/config.rs',         lang: 'rust',       edits: 2,  accept: 1.00, added: 12, removed: 1, last: '5d', pulse: 1 },
+    { path: 'src-tauri/src/db/mod.rs',         lang: 'rust',       edits: 2,  accept: 1.00, added: 28, removed: 0, last: '5d', pulse: 1 },
+    { path: 'web/package.json',                lang: 'json',       edits: 2,  accept: 0.50, added: 6, removed: 1, last: '5h', pulse: 1 },
+    { path: 'src-tauri/build.rs',              lang: 'rust',       edits: 1,  accept: 1.00, added: 3, removed: 0, last: '5d', pulse: 1 },
+    { path: 'src-tauri/capabilities/default.json', lang: 'json',   edits: 1,  accept: 1.00, added: 9, removed: 0, last: '5d', pulse: 1 },
+    { path: 'web/src/index.html',              lang: 'html',       edits: 1,  accept: 1.00, added: 1, removed: 1, last: '5d', pulse: 1 },
+    { path: 'web/src/main.ts',                 lang: 'typescript', edits: 1,  accept: 0.00, added: 0, removed: 0, last: '5d', pulse: 1 },
+  ];
+
+  const state = {
+    langs: new Set(),  // empty = all
+    search: '',
+    sort: 'edits',
+    selected: null,
+  };
+
+  function init() {
+    const langs = [...new Set(FILES.map(f => f.lang))];
+    const wrap = document.getElementById('lang-chips');
+    wrap.innerHTML = langs.map(l =>
+      `<button class="filter-chip lang" data-lang="${l}"><span class="lang-chip ${l} mr-1">${l}</span></button>`
+    ).join('');
+    wrap.querySelectorAll('[data-lang]').forEach(b => {
+      b.onclick = () => {
+        const l = b.dataset.lang;
+        if (state.langs.has(l)) { state.langs.delete(l); b.removeAttribute('data-active'); }
+        else { state.langs.add(l); b.setAttribute('data-active', 'true'); }
+        render();
+      };
+    });
+  }
+
+  function filterSort() {
+    let rows = FILES.slice();
+    if (state.langs.size > 0) rows = rows.filter(f => state.langs.has(f.lang));
+    if (state.search) {
+      const q = state.search.toLowerCase();
+      rows = rows.filter(f => f.path.toLowerCase().includes(q));
+    }
+    if (state.sort === 'edits')  rows.sort((a, b) => b.edits - a.edits);
+    if (state.sort === 'accept') rows.sort((a, b) => b.accept - a.accept);
+    if (state.sort === 'recent') rows.sort((a, b) => parsedLast(a.last) - parsedLast(b.last));
+    if (state.sort === 'churn')  rows.sort((a, b) => (b.added + b.removed) - (a.added + a.removed));
+    return rows;
+  }
+  function parsedLast(s) {
+    const n = parseInt(s);
+    if (s.endsWith('m')) return n;
+    if (s.endsWith('h')) return n * 60;
+    if (s.endsWith('d')) return n * 60 * 24;
+    return 999999;
+  }
+
+  function acceptColor(rate) {
+    if (rate >= 0.85) return '#34d399';
+    if (rate >= 0.65) return '#facc15';
+    if (rate >= 0.40) return '#f59e0b';
+    return '#f87171';
+  }
+
+  function renderPulse(n) {
+    const arr = Array.from({ length: 30 }, (_, i) => {
+      const seed = Math.sin(i * 3 + n * 7) * 10000;
+      const r = seed - Math.floor(seed);
+      return Math.max(0, r * (n / 30));
+    });
+    const max = Math.max(...arr, 0.01);
+    return '<span class="spark">' +
+      arr.map((v, i) => `<div style="height:${(v / max) * 100}%; ${i >= 25 ? 'background: var(--accent);' : ''}"></div>`).join('') +
+      '</span>';
+  }
+
+  function render() {
+    const rows = filterSort();
+    const list = document.getElementById('file-list');
+    const noRes = document.getElementById('no-results');
+    document.getElementById('result-count').textContent = rows.length;
+
+    if (rows.length === 0) {
+      list.innerHTML = '';
+      noRes.classList.remove('hidden');
+    } else {
+      noRes.classList.add('hidden');
+    }
+
+    const maxEdits = Math.max(...rows.map(r => r.edits), 1);
+
+    list.innerHTML = rows.map(f => {
+      const editPct = (f.edits / maxEdits) * 100;
+      const accColor = acceptColor(f.accept);
+      const isSel = state.selected === f.path;
+      return `
+        <div class="file-row ${isSel ? 'selected' : ''}" data-path="${f.path}">
+          <div class="truncate" title="${f.path}">${f.path}</div>
+          <div>
+            <div class="flex justify-between items-center text-[10px] mb-0.5">
+              <span class="text-muted">${f.edits} edits</span>
+              <span style="color: ${accColor}">${(f.accept * 100).toFixed(0)}%</span>
+            </div>
+            <div class="meter"><div style="width:${editPct}%; background:${accColor}"></div></div>
+          </div>
+          <div class="text-right">
+            <span class="text-ok">+${f.added}</span>
+            <span class="text-muted text-[10px]">/</span>
+            <span class="text-err">−${f.removed}</span>
+          </div>
+          <div class="text-right">${renderPulse(f.edits)}</div>
+          <div><span class="lang-chip ${f.lang}">${f.lang}</span></div>
+          <div class="text-right text-muted">${f.last}</div>
+        </div>
+      `;
+    }).join('');
+
+    list.querySelectorAll('.file-row').forEach(el => {
+      el.onclick = () => {
+        state.selected = state.selected === el.dataset.path ? null : el.dataset.path;
+        render();
+      };
+    });
+
+    // treemap (use top N by edits)
+    const top = rows.slice(0, 12);
+    const tm = document.getElementById('treemap');
+    const totalEdits = top.reduce((a, f) => a + f.edits, 0) || 1;
+    tm.innerHTML = top.map(f => {
+      const span = Math.max(1, Math.round((f.edits / totalEdits) * 12));
+      const filename = f.path.split('/').pop();
+      return `
+        <div class="tm-cell" style="background: ${acceptColor(f.accept)}; grid-column: span ${Math.min(span, 5)};" title="${f.path}">
+          <div class="truncate">${filename}</div>
+          <div class="count">${f.edits}</div>
+        </div>
+      `;
+    }).join('');
+
+    // language breakdown
+    const langTotal = {};
+    rows.forEach(f => { langTotal[f.lang] = (langTotal[f.lang] || 0) + f.edits; });
+    const langSorted = Object.entries(langTotal).sort((a, b) => b[1] - a[1]);
+    const maxLang = Math.max(...langSorted.map(x => x[1]), 1);
+    const langBars = document.getElementById('lang-bars');
+    langBars.innerHTML = langSorted.map(([l, n]) => {
+      const pct = (n / maxLang) * 100;
+      return `
+        <div class="lang-bar">
+          <span><span class="lang-chip ${l}">${l}</span></span>
+          <div class="fill"><div style="width:${pct}%; background: var(--accent)" class="h-full"></div></div>
+          <span class="text-right tabular-nums text-muted">${n}</span>
+        </div>
+      `;
+    }).join('');
+
+    // KPI count
+    document.getElementById('kpi-files').textContent = rows.length;
+    document.getElementById('kpi-edits').textContent = rows.reduce((a, f) => a + f.edits, 0);
+  }
+
+  document.querySelectorAll('.sort').forEach(btn => {
+    btn.onclick = () => {
+      document.querySelectorAll('.sort').forEach(b => b.removeAttribute('data-active'));
+      btn.setAttribute('data-active', 'true');
+      state.sort = btn.dataset.sort;
+      render();
+    };
+  });
+  document.querySelectorAll('[data-range]').forEach(btn => {
+    btn.onclick = () => {
+      document.querySelectorAll('[data-range]').forEach(b => b.removeAttribute('data-active'));
+      btn.setAttribute('data-active', 'true');
+    };
+  });
+  document.getElementById('search').oninput = (e) => { state.search = e.target.value; render(); };
+
+  function resetFilters() {
+    state.langs.clear();
+    state.search = '';
+    document.getElementById('search').value = '';
+    document.querySelectorAll('.lang').forEach(b => b.removeAttribute('data-active'));
+    render();
+  }
+
+  document.getElementById('view-mode').onchange = (e) => {
+    if (e.target.value === 'empty') {
+      state.search = '__no_match__';
+      document.getElementById('search').value = '__no_match__';
+    } else {
+      state.search = '';
+      document.getElementById('search').value = '';
+    }
+    render();
+  };
+
+  init();
+  render();
+</script>
+</body>
+</html>

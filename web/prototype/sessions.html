@@ -1,0 +1,556 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<title>andon — sessions (prototype)</title>
+<meta name="viewport" content="width=1400" />
+<script src="https://cdn.tailwindcss.com"></script>
+<link rel="preconnect" href="https://fonts.googleapis.com" />
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+<link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;600&family=Inter:wght@400;500;600&display=swap" rel="stylesheet" />
+<link rel="stylesheet" href="_shared.css" />
+<script>
+  tailwind.config = {
+    theme: {
+      extend: {
+        colors: {
+          bg: '#0b0d10', panel: '#11151a', 'panel-2': '#161a20',
+          border: '#1f242c', 'border-bright': '#2a313b',
+          accent: '#facc15', muted: '#7b8794', text: '#e6e6e6',
+          ok: '#34d399', warn: '#f59e0b', err: '#f87171', info: '#60a5fa',
+        },
+        fontFamily: {
+          sans: ['Inter', 'system-ui', 'sans-serif'],
+          mono: ['"JetBrains Mono"', 'ui-monospace', 'Consolas', 'monospace'],
+        },
+      },
+    },
+  };
+</script>
+<style>
+  /* sparkline */
+  .spark {
+    display: inline-flex;
+    align-items: flex-end;
+    gap: 1px;
+    height: 14px;
+    vertical-align: middle;
+  }
+  .spark > div {
+    width: 3px;
+    background: var(--muted);
+    opacity: 0.6;
+  }
+  .spark > div.lit { background: var(--accent); opacity: 1; }
+
+  /* session expand */
+  tr.session-row { cursor: pointer; transition: background 80ms; }
+  tr.session-row:hover { background: rgba(31, 36, 44, 0.5); }
+  tr.session-row.expanded { background: rgba(31, 36, 44, 0.6); }
+  tr.session-row.expanded td:first-child { border-left: 2px solid var(--accent); padding-left: 14px; }
+  .chevron { display: inline-block; width: 12px; transition: transform 100ms; color: var(--muted); }
+  tr.session-row.expanded .chevron { transform: rotate(90deg); color: var(--accent); }
+
+  /* decision dots */
+  .dot {
+    display: inline-block;
+    width: 6px; height: 6px;
+    border-radius: 50%;
+    margin: 0 1px;
+  }
+  .dot.ok    { background: var(--ok); }
+  .dot.rej   { background: var(--err); }
+  .dot.abort { background: var(--warn); }
+
+  /* model chip */
+  .model-tag {
+    display: inline-block;
+    padding: 1px 6px;
+    border-radius: 2px;
+    font-size: 10px;
+    font-family: 'JetBrains Mono', monospace;
+    border: 1px solid var(--border-bright);
+  }
+  .model-tag.opus   { color: var(--accent); border-color: rgba(250,204,21,0.4); }
+  .model-tag.sonnet { color: var(--info);   border-color: rgba(96,165,250,0.4); }
+  .model-tag.haiku  { color: var(--ok);     border-color: rgba(52,211,153,0.4); }
+
+  /* timeline */
+  .timeline-row {
+    display: grid;
+    grid-template-columns: 90px 100px 60px 1fr;
+    gap: 12px;
+    padding: 4px 0;
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 11px;
+    border-bottom: 1px solid rgba(31, 36, 44, 0.5);
+  }
+</style>
+</head>
+<body class="min-h-screen">
+
+<div class="grid grid-cols-[200px_1fr] min-h-screen">
+
+  <!-- sidebar -->
+  <aside class="bg-panel border-r border-border flex flex-col">
+    <div class="px-4 py-5 border-b border-border">
+      <div class="text-base font-semibold tracking-tight">andon</div>
+      <div class="text-[10px] text-muted mt-0.5 uppercase tracking-wider">claude code · v0.1.2</div>
+    </div>
+    <nav class="flex flex-col py-2">
+      <a href="overview.html" class="nav-link">overview</a>
+      <a href="sessions.html" class="nav-link active">sessions</a>
+      <a href="files.html" class="nav-link">files</a>
+      <a href="diagnostics.html" class="nav-link">diagnostics</a>
+      <a href="#" class="nav-link">settings</a>
+    </nav>
+    <div class="mt-auto px-4 py-3 text-[10px] text-muted border-t border-border font-mono">
+      <div><span class="live-dot"></span>listening</div>
+      <div class="text-[9px] mt-1">:4317 grpc · :4318 http</div>
+    </div>
+  </aside>
+
+  <!-- main -->
+  <main class="overflow-auto">
+    <div class="crumb">
+      <span>◢ sessions</span>
+      <span class="ml-auto">◷ may 17, 2026 · 14:32</span>
+    </div>
+
+    <!-- FILTER BAR (persistent across pages) -->
+    <div class="sticky top-0 z-10 bg-panel/90 backdrop-blur-sm border-b border-border">
+      <div class="px-6 py-2.5 flex items-center gap-3">
+        <span class="filter-label">▸ range</span>
+        <div class="flex items-center gap-1.5">
+          <button class="filter-chip" data-range="today">today</button>
+          <button class="filter-chip" data-range="week">this week</button>
+          <button class="filter-chip" data-range="month" data-active="true">this month</button>
+          <button class="filter-chip" data-range="30d">last 30d</button>
+          <button class="filter-chip" data-range="custom">custom…</button>
+        </div>
+        <input class="search-input ml-auto" placeholder="search session id, file, prompt…" id="search" />
+      </div>
+      <div class="px-6 py-2.5 flex items-center gap-3 border-t border-border/50">
+        <span class="filter-label">▸ model</span>
+        <div class="flex items-center gap-1.5">
+          <button class="filter-chip" data-model="opus" data-active="true">opus<span class="state">on</span></button>
+          <button class="filter-chip" data-model="sonnet" data-active="true">sonnet<span class="state">on</span></button>
+          <button class="filter-chip" data-model="haiku" data-active="true">haiku<span class="state">on</span></button>
+        </div>
+        <span class="filter-label ml-4" style="width: auto">▸ sort</span>
+        <div class="flex items-center gap-1.5">
+          <button class="filter-chip sort" data-sort="time" data-active="true">time ↓</button>
+          <button class="filter-chip sort" data-sort="cost">cost</button>
+          <button class="filter-chip sort" data-sort="duration">duration</button>
+          <button class="filter-chip sort" data-sort="decisions">decisions</button>
+        </div>
+        <button class="ml-auto text-muted hover:text-text font-mono text-[11px]" onclick="resetFilters()">⊗ clear (0)</button>
+      </div>
+    </div>
+
+    <div class="px-6 py-5 flex flex-col gap-4">
+
+      <!-- summary strip -->
+      <div class="grid grid-cols-4 gap-4">
+        <section class="panel">
+          <div class="panel-title">sessions · month</div>
+          <div class="panel-body">
+            <div class="text-3xl font-mono tabular-nums">128</div>
+            <div class="text-[11px] text-muted mt-1">7 shown · filtered</div>
+          </div>
+        </section>
+        <section class="panel">
+          <div class="panel-title">total cost</div>
+          <div class="panel-body">
+            <div class="text-3xl font-mono tabular-nums">$47.32</div>
+            <div class="text-[11px] text-muted mt-1">avg/session · $0.37</div>
+          </div>
+        </section>
+        <section class="panel">
+          <div class="panel-title">total tokens</div>
+          <div class="panel-body">
+            <div class="text-3xl font-mono tabular-nums">2.78M</div>
+            <div class="text-[11px] text-muted mt-1">in 2.4M · out 384k</div>
+          </div>
+        </section>
+        <section class="panel">
+          <div class="panel-title">total active time</div>
+          <div class="panel-body">
+            <div class="text-3xl font-mono tabular-nums">7h 53m</div>
+            <div class="text-[11px] text-muted mt-1">avg/session · 3m 42s</div>
+          </div>
+        </section>
+      </div>
+
+      <!-- sessions table -->
+      <section class="panel">
+        <div class="panel-title">
+          <span>sessions · <span id="result-count">7</span> shown</span>
+          <span class="text-[10px]">click row to expand</span>
+        </div>
+        <div class="panel-body p-0">
+          <table class="w-full font-mono text-xs">
+            <thead>
+              <tr class="text-left text-[10px] uppercase text-muted bg-bg/40">
+                <th class="px-4 py-2 font-normal w-8"></th>
+                <th class="px-2 py-2 font-normal col-sort active" data-col="time">time<span class="arrow">↓</span></th>
+                <th class="px-2 py-2 font-normal">session</th>
+                <th class="px-2 py-2 font-normal">model</th>
+                <th class="px-2 py-2 font-normal text-right col-sort" data-col="cost">cost<span class="arrow">↕</span></th>
+                <th class="px-2 py-2 font-normal text-right">tokens</th>
+                <th class="px-2 py-2 font-normal text-right">decisions</th>
+                <th class="px-2 py-2 font-normal text-right col-sort" data-col="duration">duration<span class="arrow">↕</span></th>
+                <th class="px-2 py-2 font-normal">pulse</th>
+                <th class="px-4 py-2 font-normal"></th>
+              </tr>
+            </thead>
+            <tbody id="sessions-body"></tbody>
+          </table>
+        </div>
+      </section>
+
+      <!-- if no results -->
+      <div id="no-results" class="hidden">
+        <section class="panel">
+          <div class="panel-body py-10 text-center font-mono text-sm text-muted">
+            no sessions match your filters.
+            <button class="filter-chip mt-3" onclick="resetFilters()" data-active="true">⊗ clear filters</button>
+          </div>
+        </section>
+      </div>
+
+    </div>
+  </main>
+</div>
+
+<!-- demo panel -->
+<div class="demo-panel">
+  <div class="label mb-1.5 text-[10px] uppercase tracking-wider">prototype controls</div>
+  <select id="view-mode" class="w-full">
+    <option value="data">with sessions</option>
+    <option value="empty">no sessions (this month)</option>
+  </select>
+  <div class="mt-2 text-[10px] label">try: search "44ef", click a row to expand, toggle model chips</div>
+</div>
+
+<script>
+  const SESSIONS = [
+    {
+      time: '14:32', timeAbs: '14:32:01', day: 'today', id: 'a78e0448-7bbf-490c-9643-f0f0bab887a1',
+      model: 'opus', cost: 0.42, inTok: 250, outTok: 40, cache: 1200,
+      accept: 3, reject: 1, abort: 0, duration: 134, pulse: [3, 5, 2, 4, 6, 3, 8, 2],
+      version: '2.1.143', terminal: 'cygwin',
+      timeline: [
+        { ts: '14:32:01', tool: 'Edit', target: 'src/main.rs', decision: 'accept' },
+        { ts: '14:32:18', tool: 'Bash', target: 'cargo check', decision: 'accept' },
+        { ts: '14:32:42', tool: 'Edit', target: 'src/lib.rs', decision: 'reject' },
+        { ts: '14:33:15', tool: 'Edit', target: 'src/main.rs', decision: 'accept' },
+        { ts: '14:34:01', tool: 'Read', target: 'Cargo.toml', decision: 'accept' },
+      ],
+      files: [
+        { path: 'src/main.rs', added: 12, removed: 3 },
+        { path: 'src/lib.rs', added: 4, removed: 0 },
+      ],
+      modelBreakdown: { opus: 0.42 },
+      tokenBreakdown: { input: 250, output: 40, cacheRead: 1100, cacheCreation: 100 },
+    },
+    {
+      time: '14:17', timeAbs: '14:17:08', day: 'today', id: 'bd5c1109-22ee-4567-8901-abc123def456',
+      model: 'sonnet', cost: 0.18, inTok: 100, outTok: 22, cache: 400,
+      accept: 1, reject: 0, abort: 0, duration: 43, pulse: [2, 3, 5],
+      version: '2.1.143', terminal: 'cygwin',
+      timeline: [
+        { ts: '14:17:08', tool: 'Read', target: 'README.md', decision: 'accept' },
+      ],
+      files: [], modelBreakdown: { sonnet: 0.18 },
+      tokenBreakdown: { input: 100, output: 22, cacheRead: 400, cacheCreation: 0 },
+    },
+    {
+      time: '13:48', timeAbs: '13:48:22', day: 'today', id: '44ef2200-9988-4321-fedc-ba9876543210',
+      model: 'opus', cost: 1.10, inTok: 880, outTok: 120, cache: 4200,
+      accept: 8, reject: 2, abort: 1, duration: 322, pulse: [2, 4, 3, 5, 8, 6, 4, 9, 7, 3, 5, 2],
+      version: '2.1.143', terminal: 'cygwin',
+      timeline: [
+        { ts: '13:48:22', tool: 'Read', target: 'src/api/routes.rs', decision: 'accept' },
+        { ts: '13:48:55', tool: 'Edit', target: 'src/api/routes.rs', decision: 'accept' },
+        { ts: '13:49:12', tool: 'Bash', target: 'cargo check', decision: 'accept' },
+        { ts: '13:49:48', tool: 'Edit', target: 'src/api/routes.rs', decision: 'reject' },
+        { ts: '13:50:30', tool: 'Edit', target: 'src/api/dto.rs', decision: 'accept' },
+        { ts: '13:51:12', tool: 'Edit', target: 'src/api/dto.rs', decision: 'abort' },
+        { ts: '13:51:48', tool: 'Edit', target: 'src/db/queries.rs', decision: 'accept' },
+        { ts: '13:52:30', tool: 'Bash', target: 'cargo build', decision: 'accept' },
+      ],
+      files: [
+        { path: 'src/api/routes.rs', added: 47, removed: 12 },
+        { path: 'src/api/dto.rs', added: 22, removed: 3 },
+        { path: 'src/db/queries.rs', added: 8, removed: 0 },
+      ],
+      modelBreakdown: { opus: 1.10 },
+      tokenBreakdown: { input: 880, output: 120, cacheRead: 3800, cacheCreation: 400 },
+    },
+    {
+      time: '12:11', timeAbs: '12:11:45', day: 'today', id: 'ff9a0023-1234-5678-9abc-def012345678',
+      model: 'haiku', cost: 0.04, inTok: 60, outTok: 8, cache: 0,
+      accept: 1, reject: 0, abort: 0, duration: 12, pulse: [2, 1],
+      version: '2.1.143', terminal: 'cygwin',
+      timeline: [
+        { ts: '12:11:45', tool: 'Bash', target: 'ls', decision: 'accept' },
+      ],
+      files: [], modelBreakdown: { haiku: 0.04 },
+      tokenBreakdown: { input: 60, output: 8, cacheRead: 0, cacheCreation: 0 },
+    },
+    {
+      time: '11:55', timeAbs: '11:55:12', day: 'today', id: 'c0995e8f-2f6e-4bef-85cc-912d7fa4664f',
+      model: 'sonnet', cost: 0.36, inTok: 240, outTok: 38, cache: 880,
+      accept: 4, reject: 1, abort: 0, duration: 187, pulse: [2, 3, 4, 5, 3, 6, 2, 4],
+      version: '2.1.143', terminal: 'cygwin',
+      timeline: [
+        { ts: '11:55:12', tool: 'Read', target: 'web/package.json', decision: 'accept' },
+        { ts: '11:56:01', tool: 'Edit', target: 'web/package.json', decision: 'accept' },
+        { ts: '11:57:30', tool: 'Bash', target: 'npm install', decision: 'reject' },
+        { ts: '11:58:15', tool: 'Edit', target: 'web/tailwind.config.js', decision: 'accept' },
+        { ts: '11:58:48', tool: 'Bash', target: 'npm run build', decision: 'accept' },
+      ],
+      files: [
+        { path: 'web/package.json', added: 3, removed: 1 },
+        { path: 'web/tailwind.config.js', added: 18, removed: 2 },
+      ],
+      modelBreakdown: { sonnet: 0.36 },
+      tokenBreakdown: { input: 240, output: 38, cacheRead: 880, cacheCreation: 0 },
+    },
+    {
+      time: '10:08', timeAbs: '10:08:30', day: 'today', id: '2e1c9a45-aaaa-bbbb-cccc-dddddddddddd',
+      model: 'opus', cost: 0.62, inTok: 470, outTok: 71, cache: 2200,
+      accept: 5, reject: 0, abort: 0, duration: 218, pulse: [3, 5, 4, 7, 6, 5, 3],
+      version: '2.1.143', terminal: 'cygwin',
+      timeline: [
+        { ts: '10:08:30', tool: 'Read', target: 'src/lib.rs', decision: 'accept' },
+        { ts: '10:09:14', tool: 'Edit', target: 'src/lib.rs', decision: 'accept' },
+        { ts: '10:09:55', tool: 'Bash', target: 'cargo test', decision: 'accept' },
+      ],
+      files: [
+        { path: 'src/lib.rs', added: 28, removed: 6 },
+      ],
+      modelBreakdown: { opus: 0.62 },
+      tokenBreakdown: { input: 470, output: 71, cacheRead: 1900, cacheCreation: 300 },
+    },
+    {
+      time: '21:08 yest', timeAbs: '21:08:14 may 16', day: 'yesterday', id: 'e5b08810-eeee-ffff-0000-111111111111',
+      model: 'haiku', cost: 0.04, inTok: 55, outTok: 6, cache: 0,
+      accept: 1, reject: 0, abort: 0, duration: 15, pulse: [2, 1],
+      version: '2.1.143', terminal: 'cygwin',
+      timeline: [
+        { ts: '21:08:14', tool: 'Bash', target: 'date', decision: 'accept' },
+      ],
+      files: [], modelBreakdown: { haiku: 0.04 },
+      tokenBreakdown: { input: 55, output: 6, cacheRead: 0, cacheCreation: 0 },
+    },
+  ];
+
+  const state = {
+    models: new Set(['opus', 'sonnet', 'haiku']),
+    search: '',
+    sort: 'time',
+    expanded: null,
+  };
+
+  function fmt$(n) { return '$' + n.toFixed(2); }
+  function fmtDuration(s) {
+    if (s < 60) return s + 's';
+    const m = Math.floor(s / 60);
+    const r = s % 60;
+    return `${m}m ${r}s`;
+  }
+
+  function renderPulse(arr) {
+    const max = Math.max(...arr, 1);
+    return '<span class="spark">' +
+      arr.map(v => `<div style="height:${(v / max) * 100}%" class="${v > max * 0.7 ? 'lit' : ''}"></div>`).join('') +
+      '</span>';
+  }
+
+  function renderDecisions(s) {
+    const dots = [];
+    for (let i = 0; i < s.accept; i++) dots.push('<span class="dot ok"></span>');
+    for (let i = 0; i < s.reject; i++) dots.push('<span class="dot rej"></span>');
+    for (let i = 0; i < s.abort; i++) dots.push('<span class="dot abort"></span>');
+    return dots.join('') || '<span class="text-muted">—</span>';
+  }
+
+  function renderExpanded(s) {
+    const kpi = (title, value, sub) => `
+      <div class="bg-bg/40 rounded p-3 border border-border">
+        <div class="text-[10px] uppercase tracking-wider text-muted">${title}</div>
+        <div class="text-xl font-mono tabular-nums mt-1">${value}</div>
+        ${sub ? `<div class="text-[10px] text-muted mt-1">${sub}</div>` : ''}
+      </div>`;
+    const tokenSub = `cache r/c · ${s.tokenBreakdown.cacheRead}/${s.tokenBreakdown.cacheCreation}`;
+    const fileRows = s.files.length ? s.files.map(f => `
+      <div class="flex items-center gap-3 py-1 border-b border-border/30 font-mono text-xs">
+        <span class="flex-1 truncate">${f.path}</span>
+        <span class="text-ok">+${f.added}</span>
+        <span class="text-err">−${f.removed}</span>
+      </div>
+    `).join('') : '<div class="text-muted text-xs font-mono italic">no files touched</div>';
+    const decisionColor = { accept: 'text-ok', reject: 'text-err', abort: 'text-warn' };
+    const timelineRows = s.timeline.map(t => `
+      <div class="timeline-row">
+        <span class="text-muted">${t.ts}</span>
+        <span>${t.tool}</span>
+        <span class="${decisionColor[t.decision]}">${t.decision}</span>
+        <span class="text-muted truncate">${t.target}</span>
+      </div>
+    `).join('');
+    return `
+      <tr class="bg-bg/60">
+        <td colspan="10" class="px-6 py-5">
+          <div class="flex items-center gap-4 mb-4">
+            <div class="text-[10px] uppercase tracking-wider text-muted">session</div>
+            <div class="font-mono text-sm text-accent">${s.id}</div>
+            <div class="ml-auto flex gap-3 text-[11px] font-mono text-muted">
+              <span>v ${s.version}</span>
+              <span>${s.terminal}</span>
+              <span>${s.timeAbs}</span>
+            </div>
+          </div>
+          <div class="grid grid-cols-4 gap-3 mb-5">
+            ${kpi('cost', fmt$(s.cost), '23% vs avg')}
+            ${kpi('tokens', s.inTok + ' / ' + s.outTok, tokenSub)}
+            ${kpi('decisions', s.accept + '/' + s.reject + '/' + s.abort, 'accept/reject/abort')}
+            ${kpi('duration', fmtDuration(s.duration), 'cli time')}
+          </div>
+          <div class="grid grid-cols-2 gap-4">
+            <div>
+              <div class="text-[10px] uppercase tracking-wider text-muted mb-2">files touched</div>
+              ${fileRows}
+            </div>
+            <div>
+              <div class="text-[10px] uppercase tracking-wider text-muted mb-2">timeline · ${s.timeline.length} events</div>
+              <div>${timelineRows}</div>
+            </div>
+          </div>
+          <div class="mt-4 text-right">
+            <button class="filter-chip" onclick="alert('would navigate to full session detail page')">open full detail ↗</button>
+          </div>
+        </td>
+      </tr>
+    `;
+  }
+
+  function filterSort() {
+    let rows = SESSIONS.filter(s => state.models.has(s.model));
+    if (state.search) {
+      const q = state.search.toLowerCase();
+      rows = rows.filter(s => s.id.toLowerCase().includes(q) || s.timeline.some(t => t.target.toLowerCase().includes(q)));
+    }
+    if (state.sort === 'cost')      rows.sort((a, b) => b.cost - a.cost);
+    if (state.sort === 'duration')  rows.sort((a, b) => b.duration - a.duration);
+    if (state.sort === 'decisions') rows.sort((a, b) => (b.accept + b.reject + b.abort) - (a.accept + a.reject + a.abort));
+    // time is already the order
+    return rows;
+  }
+
+  function render() {
+    const rows = filterSort();
+    const body = document.getElementById('sessions-body');
+    const noResults = document.getElementById('no-results');
+    document.getElementById('result-count').textContent = rows.length;
+
+    if (rows.length === 0) {
+      body.innerHTML = '';
+      noResults.classList.remove('hidden');
+      return;
+    }
+    noResults.classList.add('hidden');
+
+    let lastDay = null;
+    let html = '';
+    rows.forEach(s => {
+      if (s.day !== lastDay) {
+        html += `<tr><td colspan="10" class="px-4 pt-3 pb-1 text-[10px] uppercase tracking-wider text-muted">${s.day}</td></tr>`;
+        lastDay = s.day;
+      }
+      const isExpanded = state.expanded === s.id;
+      html += `
+        <tr class="session-row border-t border-border ${isExpanded ? 'expanded' : ''}" data-id="${s.id}">
+          <td class="px-4 py-2"><span class="chevron">▶</span></td>
+          <td class="px-2 py-2 text-muted">${s.time}</td>
+          <td class="px-2 py-2"><span class="text-accent">${s.id.slice(0, 8)}</span><span class="text-muted">…</span></td>
+          <td class="px-2 py-2"><span class="model-tag ${s.model}">${s.model}</span></td>
+          <td class="px-2 py-2 text-right tabular-nums">${fmt$(s.cost)}</td>
+          <td class="px-2 py-2 text-right tabular-nums">${s.inTok}<span class="text-muted">/</span>${s.outTok}</td>
+          <td class="px-2 py-2 text-right">${renderDecisions(s)}</td>
+          <td class="px-2 py-2 text-right tabular-nums text-muted">${fmtDuration(s.duration)}</td>
+          <td class="px-2 py-2">${renderPulse(s.pulse)}</td>
+          <td class="px-4 py-2"></td>
+        </tr>
+      `;
+      if (isExpanded) html += renderExpanded(s);
+    });
+    body.innerHTML = html;
+
+    body.querySelectorAll('.session-row').forEach(tr => {
+      tr.onclick = () => {
+        const id = tr.dataset.id;
+        state.expanded = state.expanded === id ? null : id;
+        render();
+      };
+    });
+  }
+
+  document.querySelectorAll('[data-model]').forEach(btn => {
+    btn.onclick = () => {
+      const m = btn.dataset.model;
+      if (state.models.has(m)) { state.models.delete(m); btn.removeAttribute('data-active'); btn.querySelector('.state').textContent = 'off'; }
+      else { state.models.add(m); btn.setAttribute('data-active', 'true'); btn.querySelector('.state').textContent = 'on'; }
+      render();
+    };
+  });
+
+  document.querySelectorAll('.sort').forEach(btn => {
+    btn.onclick = () => {
+      document.querySelectorAll('.sort').forEach(b => b.removeAttribute('data-active'));
+      btn.setAttribute('data-active', 'true');
+      state.sort = btn.dataset.sort;
+      render();
+    };
+  });
+
+  document.querySelectorAll('[data-range]').forEach(btn => {
+    btn.onclick = () => {
+      document.querySelectorAll('[data-range]').forEach(b => b.removeAttribute('data-active'));
+      btn.setAttribute('data-active', 'true');
+    };
+  });
+
+  document.getElementById('search').oninput = (e) => {
+    state.search = e.target.value;
+    render();
+  };
+
+  function resetFilters() {
+    state.models = new Set(['opus', 'sonnet', 'haiku']);
+    state.search = '';
+    document.getElementById('search').value = '';
+    document.querySelectorAll('[data-model]').forEach(b => {
+      b.setAttribute('data-active', 'true');
+      b.querySelector('.state').textContent = 'on';
+    });
+    render();
+  }
+
+  document.getElementById('view-mode').onchange = (e) => {
+    if (e.target.value === 'empty') { state.models = new Set(); }
+    else { state.models = new Set(['opus', 'sonnet', 'haiku']); }
+    document.querySelectorAll('[data-model]').forEach(b => {
+      const on = state.models.has(b.dataset.model);
+      if (on) { b.setAttribute('data-active', 'true'); b.querySelector('.state').textContent = 'on'; }
+      else    { b.removeAttribute('data-active');     b.querySelector('.state').textContent = 'off'; }
+    });
+    render();
+  };
+
+  render();
+</script>
+</body>
+</html>

@@ -1,0 +1,639 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<title>andon — overview (prototype)</title>
+<meta name="viewport" content="width=1400" />
+<script src="https://cdn.tailwindcss.com"></script>
+<link rel="preconnect" href="https://fonts.googleapis.com" />
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+<link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;600&family=Inter:wght@400;500;600&display=swap" rel="stylesheet" />
+<link rel="stylesheet" href="_shared.css" />
+<script>
+  tailwind.config = {
+    theme: {
+      extend: {
+        colors: {
+          bg: '#0b0d10',
+          panel: '#11151a',
+          'panel-2': '#161a20',
+          border: '#1f242c',
+          'border-bright': '#2a313b',
+          accent: '#facc15',
+          'accent-dim': '#a17f0a',
+          muted: '#7b8794',
+          text: '#e6e6e6',
+          ok: '#34d399',
+          warn: '#f59e0b',
+          err: '#f87171',
+        },
+        fontFamily: {
+          sans: ['Inter', 'system-ui', 'sans-serif'],
+          mono: ['"JetBrains Mono"', 'ui-monospace', 'Consolas', 'monospace'],
+        },
+      },
+    },
+  };
+</script>
+<style>
+  /* page-specific styles only — shared in _shared.css */
+
+  /* tape */
+  .tape-day {
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+    align-items: stretch;
+    min-width: 0;
+    cursor: pointer;
+    position: relative;
+  }
+  .tape-bar {
+    background: rgba(250, 204, 21, 0.40);
+    border-top: 1px solid rgba(250, 204, 21, 0.7);
+    transition: background 100ms;
+  }
+  .tape-bar.today {
+    background: #facc15;
+    border-top: 1px solid #fde68a;
+  }
+  .tape-bar.future {
+    background: transparent;
+    border-top: 1px dashed #2a313b;
+    border-left: 1px dashed #2a313b;
+    border-right: 1px dashed #2a313b;
+  }
+  .tape-ghost {
+    background: rgba(123, 135, 148, 0.25);
+  }
+  .tape-day:hover .tape-bar:not(.future) { background: #facc15; }
+  .tape-axis {
+    font-family: 'JetBrains Mono', ui-monospace, monospace;
+    font-size: 9px;
+    color: #7b8794;
+    text-align: center;
+    padding-top: 4px;
+  }
+  .tape-axis.today { color: #facc15; }
+
+  /* tooltip */
+  .tape-tooltip {
+    position: absolute;
+    bottom: calc(100% + 4px);
+    left: 50%;
+    transform: translateX(-50%);
+    background: #161a20;
+    border: 1px solid #2a313b;
+    padding: 6px 8px;
+    font-family: 'JetBrains Mono', ui-monospace, monospace;
+    font-size: 10px;
+    line-height: 1.4;
+    border-radius: 2px;
+    white-space: nowrap;
+    z-index: 20;
+    pointer-events: none;
+    opacity: 0;
+    transition: opacity 80ms;
+  }
+  .tape-day:hover .tape-tooltip { opacity: 1; }
+
+  /* horizontal model bars */
+  .modelbar { display: grid; grid-template-columns: 88px 1fr 64px; gap: 12px; align-items: center; font-family: 'JetBrains Mono', ui-monospace, monospace; font-size: 12px; padding: 4px 0; }
+  .modelbar .fill { height: 14px; background: var(--border); position: relative; }
+  .modelbar .fill > div { height: 100%; }
+</style>
+</head>
+<body class="min-h-screen">
+
+<div class="grid grid-cols-[200px_1fr] min-h-screen">
+
+  <!-- sidebar -->
+  <aside class="bg-panel border-r border-border flex flex-col">
+    <div class="px-4 py-5 border-b border-border">
+      <div class="text-base font-semibold tracking-tight">andon</div>
+      <div class="text-[10px] text-muted mt-0.5 uppercase tracking-wider">claude code · v0.1.2</div>
+    </div>
+    <nav class="flex flex-col py-2">
+      <a href="overview.html" class="nav-link active">overview</a>
+      <a href="sessions.html" class="nav-link">sessions</a>
+      <a href="files.html" class="nav-link">files</a>
+      <a href="diagnostics.html" class="nav-link">diagnostics</a>
+      <a href="#" class="nav-link">settings</a>
+    </nav>
+    <div class="mt-auto px-4 py-3 text-[10px] text-muted border-t border-border font-mono">
+      <div><span class="live-dot"></span>listening</div>
+      <div class="text-[9px] mt-1">:4317 grpc · :4318 http</div>
+    </div>
+  </aside>
+
+  <!-- main -->
+  <main id="main" class="overflow-auto">
+    <!-- breadcrumb header -->
+    <div class="px-6 py-3 flex items-center text-xs font-mono text-muted border-b border-border">
+      <span>◢ overview</span>
+      <span class="ml-auto">◷ <span id="now-label">may 17, 2026 · 14:32</span></span>
+    </div>
+
+    <!-- FILTER BAR (sticky) -->
+    <div class="sticky top-0 z-10 bg-panel/90 backdrop-blur-sm border-b border-border">
+      <div class="px-6 py-2.5 flex items-center gap-3">
+        <span class="filter-label">▸ range</span>
+        <div class="flex items-center gap-1.5">
+          <button class="filter-chip" data-range="today">today</button>
+          <button class="filter-chip" data-range="week">this week</button>
+          <button class="filter-chip" data-range="month" data-active="true">this month</button>
+          <button class="filter-chip" data-range="30d">last 30d</button>
+          <button class="filter-chip" data-range="custom">custom…</button>
+        </div>
+        <span class="ml-auto text-[11px] font-mono text-muted" id="range-context">17 may · day 17 of 31</span>
+      </div>
+      <div class="px-6 py-2.5 flex items-center gap-3 border-t border-border/50">
+        <span class="filter-label">▸ model</span>
+        <div class="flex items-center gap-1.5" id="model-chips">
+          <button class="filter-chip" data-model="opus" data-active="true">opus<span class="state">on</span></button>
+          <button class="filter-chip" data-model="sonnet" data-active="true">sonnet<span class="state">on</span></button>
+          <button class="filter-chip" data-model="haiku" data-active="true">haiku<span class="state">on</span></button>
+        </div>
+        <button id="clear-filters" class="ml-auto text-muted hover:text-text font-mono text-[11px]">⊗ clear (0)</button>
+      </div>
+      <div class="px-6 py-2 text-[11px] uppercase tracking-wider border-t border-border/50 text-muted">
+        <span class="inline-block w-14">▸ repo</span>
+        <span>— not emitted by claude code · </span>
+        <a class="text-accent/80 hover:text-accent normal-case underline-offset-2 hover:underline cursor-pointer">filter by session instead ↗</a>
+      </div>
+    </div>
+
+    <!-- ==================== DATA VIEW ==================== -->
+    <div id="data-view" class="px-6 py-5 flex flex-col gap-4">
+
+      <!-- KPI strip -->
+      <div class="grid grid-cols-[2fr_1fr_1fr] gap-4">
+        <section class="panel">
+          <div class="panel-title">cost · month-to-date</div>
+          <div class="panel-body">
+            <div class="flex items-end gap-4">
+              <div class="text-5xl font-mono tabular-nums" id="kpi-cost">$47.32</div>
+              <div class="pb-2">
+                <div class="text-xs font-mono delta-up">▲ +18% vs day 17 last month</div>
+                <div class="text-[11px] text-muted mt-1">last mo same day · <span class="font-mono">$40.07</span></div>
+              </div>
+            </div>
+            <div class="mt-3 h-px bg-border"></div>
+            <div class="mt-2 text-[11px] text-muted">projected eom · <span class="font-mono text-text">$84.06</span> at current pace</div>
+          </div>
+        </section>
+
+        <section class="panel">
+          <div class="panel-title">sessions</div>
+          <div class="panel-body">
+            <div class="text-5xl font-mono tabular-nums" id="kpi-sessions">128</div>
+            <div class="text-xs font-mono delta-up mt-1">▲ +12%</div>
+            <div class="mt-3 h-px bg-border"></div>
+            <div class="mt-2 text-[11px] text-muted">pace · <span class="font-mono text-text">248/mo</span></div>
+          </div>
+        </section>
+
+        <section class="panel">
+          <div class="panel-title">tokens</div>
+          <div class="panel-body">
+            <div class="grid grid-cols-[auto_1fr_auto] gap-x-2 text-sm font-mono items-baseline">
+              <span class="text-muted text-[11px]">in</span>
+              <span class="text-2xl tabular-nums" id="kpi-tok-in">2.4M</span>
+              <span class="text-[11px] delta-up">▲ +22%</span>
+
+              <span class="text-muted text-[11px]">out</span>
+              <span class="text-2xl tabular-nums" id="kpi-tok-out">384k</span>
+              <span class="text-[11px] delta-up">▲ +9%</span>
+
+              <span class="text-muted text-[11px]">cache</span>
+              <span class="text-2xl tabular-nums text-muted" id="kpi-tok-cache">18.2M</span>
+              <span></span>
+            </div>
+          </div>
+        </section>
+      </div>
+
+      <!-- THE TAPE -->
+      <section class="panel">
+        <div class="panel-title">
+          <span>may · the tape</span>
+          <span class="font-mono text-text">◷ today · <span id="tape-today-cost">$3.40</span></span>
+        </div>
+        <div class="panel-body">
+          <div class="flex items-end gap-[2px] h-[68px]" id="tape-current"></div>
+          <div class="flex items-start gap-[2px] h-[20px] mt-1" id="tape-prev"></div>
+          <div class="flex gap-[2px] mt-1" id="tape-axis"></div>
+          <div class="mt-3 flex items-center gap-4 text-[11px] text-muted">
+            <span class="flex items-center gap-1.5"><span class="inline-block w-3 h-2 bg-accent"></span>today</span>
+            <span class="flex items-center gap-1.5"><span class="inline-block w-3 h-2 bg-accent/40"></span>this month</span>
+            <span class="flex items-center gap-1.5"><span class="inline-block w-3 h-2 bg-muted/30"></span>same days · last month</span>
+            <span class="flex items-center gap-1.5"><span class="inline-block w-3 h-2 border border-dashed border-border-bright"></span>future</span>
+          </div>
+        </div>
+      </section>
+
+      <!-- two-up -->
+      <div class="grid grid-cols-2 gap-4">
+        <section class="panel">
+          <div class="panel-title">cost by model · month</div>
+          <div class="panel-body" id="model-bars">
+            <!-- populated by JS -->
+          </div>
+        </section>
+
+        <section class="panel">
+          <div class="panel-title">accept rate by language</div>
+          <div class="panel-body" id="accept-bars">
+            <!-- populated by JS -->
+          </div>
+        </section>
+      </div>
+
+      <!-- bottom row -->
+      <div class="grid grid-cols-[1fr_1.4fr] gap-4">
+        <section class="panel">
+          <div class="panel-title">active time · month</div>
+          <div class="panel-body">
+            <div class="space-y-3 font-mono text-sm">
+              <div>
+                <div class="flex justify-between items-baseline mb-1">
+                  <span class="text-muted text-[11px]">user</span>
+                  <span class="tabular-nums" id="active-user">4h 12m</span>
+                </div>
+                <div class="h-2 bg-border"><div class="h-full bg-accent" style="width: 53%"></div></div>
+              </div>
+              <div>
+                <div class="flex justify-between items-baseline mb-1">
+                  <span class="text-muted text-[11px]">cli</span>
+                  <span class="tabular-nums" id="active-cli">3h 41m</span>
+                </div>
+                <div class="h-2 bg-border"><div class="h-full bg-accent/60" style="width: 47%"></div></div>
+              </div>
+              <div class="pt-2 border-t border-border flex justify-between items-baseline">
+                <span class="text-muted text-[11px]">total</span>
+                <span class="tabular-nums text-base" id="active-total">7h 53m</span>
+              </div>
+            </div>
+          </div>
+        </section>
+
+        <section class="panel">
+          <div class="panel-title">
+            <span>recent sessions</span>
+            <a class="text-accent/80 hover:text-accent cursor-pointer">view all ↗</a>
+          </div>
+          <div class="panel-body p-0">
+            <table class="w-full font-mono text-xs">
+              <thead>
+                <tr class="text-[10px] uppercase text-muted">
+                  <th class="text-left px-4 py-1.5 font-normal">time</th>
+                  <th class="text-left px-4 py-1.5 font-normal">id</th>
+                  <th class="text-right px-4 py-1.5 font-normal">cost</th>
+                  <th class="text-left px-4 py-1.5 font-normal">model</th>
+                  <th class="text-right px-4 py-1.5 font-normal pr-4">tokens</th>
+                </tr>
+              </thead>
+              <tbody id="sessions-body"></tbody>
+            </table>
+          </div>
+        </section>
+      </div>
+
+    </div>
+
+    <!-- ==================== EMPTY: NO DATA THIS MONTH ==================== -->
+    <div id="empty-no-data" class="hidden px-6 py-5">
+      <section class="panel">
+        <div class="panel-body py-12">
+          <div class="max-w-xl mx-auto font-mono text-sm">
+            <div class="text-text mb-6 text-base">no telemetry from claude code yet this month.</div>
+            <div class="space-y-2 text-muted">
+              <div>· settings.json has the otel env vars
+                <span class="text-ok">[ ✓ configured ]</span>
+              </div>
+              <div>· andon is listening on :4317 / :4318
+                <span class="text-ok">[ ✓ bound ]</span>
+              </div>
+              <div>· claude code session restarted post-setup
+                <span class="text-muted">[ ? unknown ]</span>
+              </div>
+            </div>
+            <div class="mt-6 text-[12px] text-muted">
+              run any claude session — data appears within 10s.
+            </div>
+            <div class="mt-4 text-[10px] text-muted">
+              still nothing after a fresh session? check the
+              <a class="text-accent/80 hover:text-accent cursor-pointer">diagnostics tab ↗</a>
+              for received-event counters.
+            </div>
+          </div>
+        </div>
+      </section>
+    </div>
+
+    <!-- ==================== EMPTY: FILTER EXCLUDED ALL ==================== -->
+    <div id="empty-filtered" class="hidden px-6 py-5">
+      <section class="panel">
+        <div class="panel-body py-12">
+          <div class="max-w-xl mx-auto font-mono text-sm">
+            <div class="text-text mb-2">filters excluded all data.</div>
+            <div class="space-y-1 text-muted text-[12px]">
+              <div>· this month has <span class="text-text">128 sessions</span> across opus, sonnet, haiku</div>
+              <div>· current filters: model = none selected</div>
+            </div>
+            <div class="mt-5 flex items-center gap-2">
+              <button class="filter-chip" data-active="true" onclick="resetFilters()">⊗ clear filters</button>
+              <button class="filter-chip" onclick="showWhatsAvailable()">show what's available</button>
+            </div>
+          </div>
+        </div>
+      </section>
+    </div>
+  </main>
+</div>
+
+<!-- demo panel -->
+<div class="demo-panel">
+  <div class="text-muted mb-1.5 text-[10px] uppercase tracking-wider">prototype controls</div>
+  <select id="state-toggle" class="w-full">
+    <option value="data">with data (filtered)</option>
+    <option value="no-data">no data this month</option>
+    <option value="filtered-out">filters excluded all</option>
+  </select>
+  <div class="mt-2 text-[10px] text-muted">try: click range / model chips, hover tape days</div>
+</div>
+
+<script>
+  // ===== mock data =====
+  const DAYS_IN_MONTH = 31;
+  const TODAY = 17;
+  const MODEL_COLORS = { opus: '#facc15', sonnet: '#60a5fa', haiku: '#34d399' };
+
+  // deterministic pseudo-random
+  function rand(seed) {
+    let x = Math.sin(seed) * 10000;
+    return x - Math.floor(x);
+  }
+
+  // generate per-day cost for this month + last month
+  const thisMonth = [];
+  const lastMonth = [];
+  for (let d = 1; d <= DAYS_IN_MONTH; d++) {
+    const base = 1.5 + rand(d * 7) * 4;
+    const weekendDrop = (d % 7 === 0 || d % 7 === 6) ? 0.3 : 1;
+    thisMonth.push({
+      day: d,
+      cost: d <= TODAY ? base * weekendDrop : 0,
+      future: d > TODAY,
+      byModel: {
+        opus: base * weekendDrop * (0.5 + rand(d * 13) * 0.2),
+        sonnet: base * weekendDrop * 0.3,
+        haiku: base * weekendDrop * 0.1,
+      },
+    });
+    lastMonth.push({
+      day: d,
+      cost: (1.2 + rand(d * 11) * 3.2) * weekendDrop,
+    });
+  }
+
+  const SESSIONS = [
+    { time: '14:32', id: 'a78e0448', cost: 0.42, model: 'opus',   in: 250,  out: 40 },
+    { time: '14:17', id: 'bd5c1109', cost: 0.18, model: 'sonnet', in: 100,  out: 22 },
+    { time: '13:48', id: '44ef2200', cost: 1.10, model: 'opus',   in: 880,  out: 120 },
+    { time: '12:11', id: 'ff9a0023', cost: 0.04, model: 'haiku',  in: 60,   out: 8 },
+    { time: '11:55', id: 'c0995e8f', cost: 0.36, model: 'sonnet', in: 240,  out: 38 },
+    { time: '10:08', id: '2e1c9a45', cost: 0.62, model: 'opus',   in: 470,  out: 71 },
+    { time: 'yest 21:08', id: 'e5b08810', cost: 0.04, model: 'haiku', in: 55, out: 6 },
+  ];
+
+  const LANGS = [
+    { lang: 'rust',       accept: 0.87, total: 142 },
+    { lang: 'typescript', accept: 0.72, total: 88 },
+    { lang: 'python',     accept: 0.65, total: 44 },
+    { lang: 'go',         accept: 0.28, total: 9 },
+    { lang: 'unknown',    accept: 0.12, total: 3 },
+  ];
+
+  // ===== state =====
+  const state = {
+    range: 'month',
+    models: new Set(['opus', 'sonnet', 'haiku']),
+  };
+
+  // ===== render =====
+  function render() {
+    const activeModels = [...state.models];
+    if (activeModels.length === 0) {
+      document.getElementById('state-toggle').value = 'filtered-out';
+      showView('filtered-out');
+      return;
+    }
+    showView('data');
+
+    // filter data
+    const days = thisMonth.map(d => {
+      let c = 0;
+      for (const m of activeModels) c += d.byModel[m] || 0;
+      return { ...d, cost: d.future ? 0 : c };
+    });
+
+    // KPIs
+    const cost = days.reduce((a, d) => a + d.cost, 0);
+    document.getElementById('kpi-cost').textContent = `$${cost.toFixed(2)}`;
+    const projected = (cost / TODAY) * DAYS_IN_MONTH;
+    document.querySelector('.panel-body .mt-2 .font-mono').textContent = `$${projected.toFixed(2)}`;
+
+    // tape current row
+    const maxCost = Math.max(...days.map(d => d.cost), ...lastMonth.map(d => d.cost));
+    const tapeCurrent = document.getElementById('tape-current');
+    tapeCurrent.innerHTML = '';
+    days.forEach(d => {
+      const day = document.createElement('div');
+      day.className = 'tape-day';
+      const height = d.future ? 100 : Math.max(8, (d.cost / maxCost) * 100);
+      const bar = document.createElement('div');
+      bar.className = 'tape-bar';
+      if (d.day === TODAY) bar.classList.add('today');
+      if (d.future) bar.classList.add('future');
+      bar.style.height = `${height}%`;
+      bar.style.marginTop = 'auto';
+      day.appendChild(bar);
+
+      if (!d.future) {
+        const tip = document.createElement('div');
+        tip.className = 'tape-tooltip';
+        tip.innerHTML = `may ${d.day}<br>$${d.cost.toFixed(2)}`;
+        day.appendChild(tip);
+      }
+      day.onclick = () => alert(`(prototype) would filter to may ${d.day}`);
+      tapeCurrent.appendChild(day);
+    });
+
+    // tape previous (ghost)
+    const tapePrev = document.getElementById('tape-prev');
+    tapePrev.innerHTML = '';
+    lastMonth.forEach(d => {
+      const day = document.createElement('div');
+      day.className = 'tape-day';
+      const bar = document.createElement('div');
+      bar.className = 'tape-bar tape-ghost';
+      const height = Math.max(6, (d.cost / maxCost) * 100);
+      bar.style.height = `${height}%`;
+      day.appendChild(bar);
+
+      const tip = document.createElement('div');
+      tip.className = 'tape-tooltip';
+      tip.innerHTML = `apr ${d.day}<br>$${d.cost.toFixed(2)} <span class="text-muted">(last mo)</span>`;
+      day.appendChild(tip);
+      tapePrev.appendChild(day);
+    });
+
+    // axis
+    const axis = document.getElementById('tape-axis');
+    axis.innerHTML = '';
+    for (let d = 1; d <= DAYS_IN_MONTH; d++) {
+      const el = document.createElement('div');
+      el.className = 'tape-axis flex-1';
+      if (d === TODAY) {
+        el.classList.add('today');
+        el.textContent = `${d}↑`;
+      } else if (d === 1 || d % 5 === 0 || d === DAYS_IN_MONTH) {
+        el.textContent = d;
+      } else {
+        el.textContent = '·';
+      }
+      axis.appendChild(el);
+    }
+
+    // model bars
+    const totalByModel = activeModels.map(m => ({
+      m,
+      total: days.reduce((a, d) => a + (d.byModel[m] || 0), 0),
+    })).sort((a, b) => b.total - a.total);
+    const maxModel = Math.max(...totalByModel.map(x => x.total), 0.01);
+    const modelEl = document.getElementById('model-bars');
+    modelEl.innerHTML = '';
+    totalByModel.forEach(({ m, total }) => {
+      const pct = (total / maxModel) * 100;
+      const row = document.createElement('div');
+      row.className = 'modelbar';
+      row.innerHTML = `
+        <span class="text-muted">${m}</span>
+        <div class="fill"><div style="width:${pct}%; background:${MODEL_COLORS[m]}"></div></div>
+        <span class="text-right tabular-nums">$${total.toFixed(2)}</span>
+      `;
+      modelEl.appendChild(row);
+    });
+
+    // accept bars
+    const acceptEl = document.getElementById('accept-bars');
+    acceptEl.innerHTML = '';
+    LANGS.forEach(({ lang, accept, total }) => {
+      const row = document.createElement('div');
+      row.className = 'modelbar';
+      const pct = accept * 100;
+      const color = accept > 0.7 ? '#34d399' : accept > 0.4 ? '#facc15' : '#f59e0b';
+      row.style.gridTemplateColumns = '100px 1fr 80px';
+      row.innerHTML = `
+        <span class="text-muted">${lang}</span>
+        <div class="fill"><div style="width:${pct}%; background:${color}"></div></div>
+        <span class="text-right tabular-nums">${pct.toFixed(0)}% <span class="text-muted">${total}</span></span>
+      `;
+      acceptEl.appendChild(row);
+    });
+
+    // sessions
+    const tbody = document.getElementById('sessions-body');
+    tbody.innerHTML = '';
+    SESSIONS
+      .filter(s => activeModels.includes(s.model))
+      .forEach(s => {
+        const tr = document.createElement('tr');
+        tr.className = 'border-t border-border/40 hover:bg-border/30 cursor-pointer';
+        tr.innerHTML = `
+          <td class="text-left px-4 py-1.5 text-muted">${s.time}</td>
+          <td class="text-left px-4 py-1.5"><span class="text-accent">${s.id}</span>…</td>
+          <td class="text-right px-4 py-1.5 tabular-nums">$${s.cost.toFixed(2)}</td>
+          <td class="text-left px-4 py-1.5">${s.model}</td>
+          <td class="text-right px-4 py-1.5 pr-4 tabular-nums">${s.in}<span class="text-muted">/</span>${s.out}</td>
+        `;
+        tbody.appendChild(tr);
+      });
+
+    // clear count
+    const inactive = 3 - state.models.size;
+    document.getElementById('clear-filters').textContent = inactive === 0 ? '⊗ clear (0)' : `⊗ clear (${inactive})`;
+  }
+
+  function showView(which) {
+    document.getElementById('data-view').classList.toggle('hidden', which !== 'data');
+    document.getElementById('empty-no-data').classList.toggle('hidden', which !== 'no-data');
+    document.getElementById('empty-filtered').classList.toggle('hidden', which !== 'filtered-out');
+  }
+
+  // ===== interactions =====
+  document.querySelectorAll('[data-range]').forEach(btn => {
+    btn.onclick = () => {
+      document.querySelectorAll('[data-range]').forEach(b => b.removeAttribute('data-active'));
+      btn.setAttribute('data-active', 'true');
+      state.range = btn.dataset.range;
+      // update context label
+      const labels = {
+        today: 'today only',
+        week: 'this week · mon–today',
+        month: '17 may · day 17 of 31',
+        '30d': 'last 30 days · 18 apr – 17 may',
+        custom: 'custom · click to set…',
+      };
+      document.getElementById('range-context').textContent = labels[state.range];
+      render();
+    };
+  });
+
+  document.querySelectorAll('[data-model]').forEach(btn => {
+    btn.onclick = () => {
+      const m = btn.dataset.model;
+      if (state.models.has(m)) {
+        state.models.delete(m);
+        btn.removeAttribute('data-active');
+        btn.querySelector('.state').textContent = 'off';
+      } else {
+        state.models.add(m);
+        btn.setAttribute('data-active', 'true');
+        btn.querySelector('.state').textContent = 'on';
+      }
+      render();
+    };
+  });
+
+  document.getElementById('clear-filters').onclick = resetFilters;
+
+  function resetFilters() {
+    state.models = new Set(['opus', 'sonnet', 'haiku']);
+    document.querySelectorAll('[data-model]').forEach(b => {
+      b.setAttribute('data-active', 'true');
+      b.querySelector('.state').textContent = 'on';
+    });
+    render();
+  }
+
+  function showWhatsAvailable() {
+    state.models = new Set(['opus', 'sonnet']);
+    document.querySelectorAll('[data-model]').forEach(b => {
+      const on = state.models.has(b.dataset.model);
+      if (on) { b.setAttribute('data-active', 'true'); b.querySelector('.state').textContent = 'on'; }
+      else    { b.removeAttribute('data-active');     b.querySelector('.state').textContent = 'off'; }
+    });
+    render();
+  }
+
+  document.getElementById('state-toggle').onchange = (e) => {
+    showView(e.target.value);
+  };
+
+  // initial render
+  render();
+</script>
+</body>
+</html>

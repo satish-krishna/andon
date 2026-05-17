@@ -1,0 +1,568 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<title>andon — diagnostics (prototype)</title>
+<meta name="viewport" content="width=1400" />
+<script src="https://cdn.tailwindcss.com"></script>
+<link rel="preconnect" href="https://fonts.googleapis.com" />
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+<link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;600&family=Inter:wght@400;500;600&display=swap" rel="stylesheet" />
+<link rel="stylesheet" href="_shared.css" />
+<script>
+  tailwind.config = {
+    theme: {
+      extend: {
+        colors: {
+          bg: '#0b0d10', panel: '#11151a', 'panel-2': '#161a20',
+          border: '#1f242c', 'border-bright': '#2a313b',
+          accent: '#facc15', muted: '#7b8794', text: '#e6e6e6',
+          ok: '#34d399', warn: '#f59e0b', err: '#f87171', info: '#60a5fa',
+        },
+        fontFamily: {
+          sans: ['Inter', 'system-ui', 'sans-serif'],
+          mono: ['"JetBrains Mono"', 'ui-monospace', 'Consolas', 'monospace'],
+        },
+      },
+    },
+  };
+</script>
+<style>
+  /* health bar */
+  .health-bar {
+    padding: 14px 18px;
+    border: 1px solid;
+    border-radius: 6px;
+    display: flex;
+    align-items: center;
+    gap: 16px;
+    font-family: 'JetBrains Mono', monospace;
+  }
+  .health-bar.ok    { background: rgba(52, 211, 153, 0.08); border-color: rgba(52, 211, 153, 0.35); }
+  .health-bar.warn  { background: rgba(245, 158, 11, 0.08); border-color: rgba(245, 158, 11, 0.35); }
+  .health-bar.err   { background: rgba(248, 113, 113, 0.08); border-color: rgba(248, 113, 113, 0.35); }
+  .health-bar.info  { background: rgba(96, 165, 250, 0.08); border-color: rgba(96, 165, 250, 0.35); }
+  .health-bar .icon { font-size: 22px; }
+
+  /* bind row */
+  .bind-row {
+    display: grid;
+    grid-template-columns: 80px 60px 1fr;
+    align-items: center;
+    padding: 4px 0;
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 12px;
+  }
+
+  /* counter row */
+  .counter-row {
+    display: grid;
+    grid-template-columns: 1fr 80px 100px 60px;
+    align-items: center;
+    padding: 6px 0;
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 12px;
+    border-bottom: 1px solid rgba(31, 36, 44, 0.5);
+  }
+  .counter-row .sparkmini {
+    display: inline-flex;
+    align-items: flex-end;
+    gap: 1px;
+    height: 12px;
+  }
+  .counter-row .sparkmini > div {
+    width: 2px;
+    background: var(--accent);
+    opacity: 0.5;
+  }
+
+  /* event feed row */
+  .feed-row {
+    padding: 6px 12px;
+    border-bottom: 1px solid rgba(31, 36, 44, 0.5);
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 11px;
+    cursor: pointer;
+    transition: background 80ms;
+  }
+  .feed-row:hover { background: rgba(31, 36, 44, 0.4); }
+  .feed-row.expanded { background: rgba(31, 36, 44, 0.6); border-left: 2px solid var(--accent); padding-left: 10px; }
+  .feed-row.new { animation: flashRow 800ms ease-out; }
+  @keyframes flashRow {
+    0%   { background: rgba(250, 204, 21, 0.25); }
+    100% { background: transparent; }
+  }
+  .feed-tag {
+    display: inline-block;
+    padding: 1px 5px;
+    border-radius: 2px;
+    font-size: 10px;
+    border: 1px solid var(--border-bright);
+    margin-right: 6px;
+  }
+  .feed-tag.api_request           { color: var(--accent); border-color: rgba(250,204,21,0.4); }
+  .feed-tag.user_prompt           { color: var(--info);   border-color: rgba(96,165,250,0.4); }
+  .feed-tag.mcp_server_connection { color: var(--ok);     border-color: rgba(52,211,153,0.4); }
+  .feed-tag.plugin_loaded         { color: var(--muted); }
+  .feed-tag.tool_decision         { color: var(--warn);   border-color: rgba(245,158,11,0.4); }
+  .feed-tag.unknown               { color: var(--err); border-color: rgba(248,113,113,0.4); }
+
+  .attrs-tree {
+    background: var(--bg);
+    border: 1px solid var(--border);
+    padding: 8px 10px;
+    margin-top: 6px;
+    max-height: 220px;
+    overflow-y: auto;
+    font-size: 10px;
+  }
+  .attrs-tree .k { color: var(--muted); }
+  .attrs-tree .v { color: var(--text); }
+  .attrs-tree .v-str { color: var(--ok); }
+  .attrs-tree .v-num { color: var(--info); }
+  .attrs-tree .v-bool { color: var(--warn); }
+</style>
+</head>
+<body class="min-h-screen">
+
+<div class="grid grid-cols-[200px_1fr] min-h-screen">
+
+  <!-- sidebar -->
+  <aside class="bg-panel border-r border-border flex flex-col">
+    <div class="px-4 py-5 border-b border-border">
+      <div class="text-base font-semibold tracking-tight">andon</div>
+      <div class="text-[10px] text-muted mt-0.5 uppercase tracking-wider">claude code · v0.1.2</div>
+    </div>
+    <nav class="flex flex-col py-2">
+      <a href="overview.html" class="nav-link">overview</a>
+      <a href="sessions.html" class="nav-link">sessions</a>
+      <a href="files.html" class="nav-link">files</a>
+      <a href="diagnostics.html" class="nav-link active">diagnostics</a>
+      <a href="#" class="nav-link">settings</a>
+    </nav>
+    <div class="mt-auto px-4 py-3 text-[10px] text-muted border-t border-border font-mono">
+      <div><span class="live-dot"></span>listening</div>
+      <div class="text-[9px] mt-1">:4317 grpc · :4318 http</div>
+    </div>
+  </aside>
+
+  <main class="overflow-auto">
+    <div class="crumb">
+      <span>◢ diagnostics</span>
+      <span class="ml-auto flex items-center gap-3">
+        <span><span class="live-dot"></span><span class="text-ok">live</span></span>
+        <span>◷ may 17, 2026 · 14:32</span>
+      </span>
+    </div>
+
+    <!-- NOTE: no filter bar here. diagnostics is global runtime state. -->
+
+    <div class="px-6 py-5 flex flex-col gap-4">
+
+      <!-- health -->
+      <div id="health" class="health-bar ok">
+        <span class="icon">✓</span>
+        <div class="flex-1">
+          <div class="text-base"><span id="health-title">healthy</span> — receiving telemetry</div>
+          <div class="text-[11px] text-muted mt-0.5" id="health-detail">last event 4s ago · payloads flowing on grpc/logs</div>
+        </div>
+        <button class="filter-chip" onclick="alert('reapply integration')">re-check integration ↻</button>
+        <button class="filter-chip" onclick="downloadReport()">download report ↓</button>
+      </div>
+
+      <!-- top stats strip -->
+      <div class="grid grid-cols-4 gap-4">
+        <section class="panel">
+          <div class="panel-title">records received</div>
+          <div class="panel-body">
+            <div class="text-3xl font-mono tabular-nums" id="kpi-records">1,247</div>
+            <div class="text-[11px] text-muted mt-1"><span id="kpi-payloads">84</span> payloads</div>
+          </div>
+        </section>
+        <section class="panel">
+          <div class="panel-title">last event</div>
+          <div class="panel-body">
+            <div class="text-3xl font-mono tabular-nums" id="kpi-last">4s</div>
+            <div class="text-[11px] text-muted mt-1">at <span id="kpi-last-time">14:32:01</span></div>
+          </div>
+        </section>
+        <section class="panel">
+          <div class="panel-title">uptime</div>
+          <div class="panel-body">
+            <div class="text-3xl font-mono tabular-nums">3h 12m</div>
+            <div class="text-[11px] text-muted mt-1">since 11:20</div>
+          </div>
+        </section>
+        <section class="panel">
+          <div class="panel-title">last session</div>
+          <div class="panel-body">
+            <div class="text-sm font-mono break-all text-accent">c0995e8f-2f6e-4bef-85cc-912d7fa4664f</div>
+            <div class="text-[11px] text-muted mt-1">v 2.1.143 · cygwin</div>
+          </div>
+        </section>
+      </div>
+
+      <!-- two-up: binds + transport counters -->
+      <div class="grid grid-cols-[1fr_1fr] gap-4">
+        <section class="panel">
+          <div class="panel-title">listener binds</div>
+          <div class="panel-body">
+            <div class="bind-row">
+              <span class="text-muted">4317 grpc</span>
+              <span class="text-ok">✓ ok</span>
+              <span class="text-[11px] text-muted">otlp metrics + logs · bound at 11:20:14</span>
+            </div>
+            <div class="bind-row">
+              <span class="text-muted">4318 http</span>
+              <span class="text-ok">✓ ok</span>
+              <span class="text-[11px] text-muted">otlp http/protobuf · bound at 11:20:14</span>
+            </div>
+            <div class="bind-row">
+              <span class="text-muted">8765 api</span>
+              <span class="text-ok">✓ ok</span>
+              <span class="text-[11px] text-muted">internal ui api · bound at 11:20:14</span>
+            </div>
+          </div>
+        </section>
+
+        <section class="panel">
+          <div class="panel-title">transports</div>
+          <div class="panel-body">
+            <div class="counter-row">
+              <span>grpc · logs</span>
+              <span class="text-right tabular-nums text-accent">81</span>
+              <span class="sparkmini">
+                <div style="height:30%"></div><div style="height:50%"></div><div style="height:40%"></div>
+                <div style="height:70%"></div><div style="height:60%"></div><div style="height:80%"></div>
+                <div style="height:90%"></div><div style="height:100%"></div>
+              </span>
+              <span class="text-right text-muted text-[10px]">96%</span>
+            </div>
+            <div class="counter-row">
+              <span>grpc · metrics</span>
+              <span class="text-right tabular-nums">3</span>
+              <span class="sparkmini">
+                <div style="height:10%"></div><div style="height:20%"></div><div style="height:10%"></div>
+              </span>
+              <span class="text-right text-muted text-[10px]">3%</span>
+            </div>
+            <div class="counter-row">
+              <span>http · logs</span>
+              <span class="text-right tabular-nums text-muted">0</span>
+              <span></span>
+              <span class="text-right text-muted text-[10px]">—</span>
+            </div>
+            <div class="counter-row">
+              <span>http · metrics</span>
+              <span class="text-right tabular-nums text-muted">0</span>
+              <span></span>
+              <span class="text-right text-muted text-[10px]">—</span>
+            </div>
+          </div>
+        </section>
+      </div>
+
+      <!-- event counters table -->
+      <section class="panel">
+        <div class="panel-title">event counters · this session</div>
+        <div class="panel-body" id="counters">
+          <!-- populated -->
+        </div>
+      </section>
+
+      <!-- live event feed -->
+      <section class="panel">
+        <div class="panel-title">
+          <span><span class="live-dot"></span>live event feed</span>
+          <span class="flex items-center gap-2 text-[10px]">
+            <span>filter:</span>
+            <select id="feed-filter" class="bg-bg border border-border text-text text-[11px] font-mono px-1 py-0.5">
+              <option value="">all events</option>
+              <option value="api_request">api_request</option>
+              <option value="user_prompt">user_prompt</option>
+              <option value="mcp_server_connection">mcp_server_connection</option>
+              <option value="plugin_loaded">plugin_loaded</option>
+            </select>
+            <button class="filter-chip" id="pause-feed">⏸ pause</button>
+          </span>
+        </div>
+        <div class="panel-body p-0">
+          <div id="feed" style="max-height: 480px; overflow-y: auto;"></div>
+        </div>
+      </section>
+
+    </div>
+  </main>
+</div>
+
+<!-- demo panel -->
+<div class="demo-panel">
+  <div class="label mb-1.5 text-[10px] uppercase tracking-wider">prototype controls</div>
+  <select id="state-toggle" class="w-full">
+    <option value="healthy">healthy</option>
+    <option value="no_data">no data yet (post-install)</option>
+    <option value="bind_failed">bind failed (port conflict)</option>
+    <option value="silent">silent for 60s</option>
+  </select>
+  <div class="mt-2 text-[10px] label">events stream live · click row to expand attrs</div>
+</div>
+
+<script>
+  const COUNTERS = [
+    { name: 'api_request',           count: 487, rate: '3.1/min', last: '4s ago' },
+    { name: 'user_prompt',           count: 128, rate: '0.8/min', last: '4s ago' },
+    { name: 'mcp_server_connection', count: 412, rate: '2.6/min', last: '14s ago' },
+    { name: 'plugin_loaded',         count: 64,  rate: '—',       last: '3h ago' },
+    { name: 'tool_decision',         count: 0,   rate: '—',       last: 'never' },
+  ];
+
+  function renderCounters() {
+    const total = COUNTERS.reduce((a, c) => a + c.count, 0) || 1;
+    const max = Math.max(...COUNTERS.map(c => c.count), 1);
+    document.getElementById('counters').innerHTML = `
+      <div class="counter-row text-[10px] uppercase text-muted" style="border: none; padding-bottom: 8px;">
+        <span>event name</span>
+        <span class="text-right">count</span>
+        <span>rate / last</span>
+        <span class="text-right">%</span>
+      </div>
+      ${COUNTERS.map(c => {
+        const isZero = c.count === 0;
+        const pct = ((c.count / total) * 100).toFixed(0);
+        const fillPct = (c.count / max) * 100;
+        return `
+        <div class="counter-row" style="cursor: pointer;" onclick="filterFeed('${c.name}')">
+          <span class="${isZero ? 'text-muted' : ''}">${c.name}</span>
+          <span class="text-right tabular-nums ${isZero ? 'text-muted' : 'text-text'}">${c.count.toLocaleString()}</span>
+          <span class="text-muted text-[11px]">${c.rate} · last ${c.last}</span>
+          <span class="text-right text-[10px] text-muted">${pct}%</span>
+        </div>
+        `;
+      }).join('')}
+    `;
+  }
+
+  // ---- live feed ----
+  const EVENT_TEMPLATES = [
+    {
+      name: 'api_request',
+      session: 'a78e0448',
+      attrs: {
+        'event.name': 'api_request',
+        'session.id': 'a78e0448-7bbf-490c-9643-f0f0bab887a1',
+        'user.account_uuid': '273d3b58-4303-4225-9b00-47ba8f338af7',
+        'organization.id': '17e270b6-9228-4cd2-8d92-324df02f000f',
+        'model': 'claude-opus-4-7',
+        'input_tokens': 250,
+        'output_tokens': 40,
+        'cache_read_tokens': 1100,
+        'cache_creation_tokens': 100,
+        'cost_usd': 0.0421,
+        'cost_usd_micros': 42100,
+        'duration_ms': 1342,
+        'request_id': 'req_011Cb8fpGDo2m6Q1THeMG8B4',
+        'query_source': 'sdk',
+      },
+      transport: 'grpc',
+    },
+    {
+      name: 'user_prompt',
+      session: 'a78e0448',
+      attrs: {
+        'event.name': 'user_prompt',
+        'session.id': 'a78e0448-7bbf-490c-9643-f0f0bab887a1',
+        'prompt.id': '80fb6ff2-adc5-4d90-a2c9-2c776dfaa2d3',
+        'prompt': '<REDACTED>',
+        'prompt_length': 22,
+      },
+      transport: 'grpc',
+    },
+    {
+      name: 'mcp_server_connection',
+      session: 'a78e0448',
+      attrs: {
+        'event.name': 'mcp_server_connection',
+        'session.id': 'a78e0448-7bbf-490c-9643-f0f0bab887a1',
+        'plugin.name': 'chrome-devtools-mcp',
+        'status': 'connected',
+        'transport_type': 'stdio',
+        'duration_ms': 2012,
+        'is_plugin': true,
+      },
+      transport: 'grpc',
+    },
+  ];
+
+  const feed = [];
+  let feedFilter = '';
+  let feedPaused = false;
+  let expandedIdx = null;
+  let nextId = 1;
+
+  function pushEvent(eventName) {
+    const tpl = EVENT_TEMPLATES.find(t => t.name === eventName) || EVENT_TEMPLATES[Math.floor(Math.random() * EVENT_TEMPLATES.length)];
+    const e = {
+      id: nextId++,
+      ts: new Date(),
+      name: tpl.name,
+      session: tpl.session,
+      transport: tpl.transport,
+      attrs: { ...tpl.attrs, 'event.timestamp': new Date().toISOString() },
+      isNew: true,
+    };
+    feed.unshift(e);
+    if (feed.length > 80) feed.length = 80;
+    renderFeed();
+    setTimeout(() => { e.isNew = false; }, 800);
+  }
+
+  function fmtTime(d) {
+    const pad = (n) => String(n).padStart(2, '0');
+    return `${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}.${String(d.getMilliseconds()).padStart(3,'0')}`;
+  }
+
+  function attrsTree(o) {
+    return Object.entries(o).map(([k, v]) => {
+      let cls = 'v', display = String(v);
+      if (typeof v === 'string') { cls = 'v v-str'; display = `"${v}"`; }
+      else if (typeof v === 'number') { cls = 'v v-num'; }
+      else if (typeof v === 'boolean') { cls = 'v v-bool'; }
+      return `<div><span class="k">${k}</span>: <span class="${cls}">${display}</span></div>`;
+    }).join('');
+  }
+
+  function renderFeed() {
+    const wrap = document.getElementById('feed');
+    const filtered = feedFilter ? feed.filter(e => e.name === feedFilter) : feed;
+    if (filtered.length === 0) {
+      wrap.innerHTML = `<div class="p-6 text-center text-muted font-mono text-xs">no events match this filter yet.</div>`;
+      return;
+    }
+    wrap.innerHTML = filtered.map(e => `
+      <div class="feed-row ${e.isNew ? 'new' : ''} ${expandedIdx === e.id ? 'expanded' : ''}" data-id="${e.id}">
+        <div class="flex items-center gap-2">
+          <span class="text-muted w-24">${fmtTime(e.ts)}</span>
+          <span class="feed-tag ${e.name}">${e.name}</span>
+          <span class="text-accent">${e.session}</span>
+          <span class="ml-auto text-muted text-[10px]">${e.transport}</span>
+        </div>
+        ${expandedIdx === e.id ? `<div class="attrs-tree">${attrsTree(e.attrs)}</div>` : ''}
+      </div>
+    `).join('');
+    wrap.querySelectorAll('.feed-row').forEach(el => {
+      el.onclick = () => {
+        const id = parseInt(el.dataset.id);
+        expandedIdx = expandedIdx === id ? null : id;
+        renderFeed();
+      };
+    });
+  }
+
+  function filterFeed(name) {
+    feedFilter = name;
+    document.getElementById('feed-filter').value = name;
+    renderFeed();
+  }
+
+  document.getElementById('feed-filter').onchange = (e) => {
+    feedFilter = e.target.value;
+    renderFeed();
+  };
+
+  document.getElementById('pause-feed').onclick = () => {
+    feedPaused = !feedPaused;
+    document.getElementById('pause-feed').textContent = feedPaused ? '▶ resume' : '⏸ pause';
+    document.getElementById('pause-feed').setAttribute('data-active', feedPaused ? 'true' : 'false');
+  };
+
+  function downloadReport() {
+    const report = {
+      generated_at: new Date().toISOString(),
+      health: 'healthy',
+      events_in_feed: feed.length,
+      counters: COUNTERS,
+    };
+    const blob = new Blob([JSON.stringify(report, null, 2)], { type: 'application/json' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `andon-diagnostics-${Date.now()}.json`;
+    a.click();
+    URL.revokeObjectURL(url);
+  }
+
+  // health state toggle
+  document.getElementById('state-toggle').onchange = (e) => {
+    const bar = document.getElementById('health');
+    const title = document.getElementById('health-title');
+    const detail = document.getElementById('health-detail');
+    const icon = bar.querySelector('.icon');
+    bar.className = 'health-bar';
+    switch (e.target.value) {
+      case 'healthy':
+        bar.classList.add('ok');
+        title.textContent = 'healthy';
+        detail.textContent = 'last event 4s ago · payloads flowing on grpc/logs';
+        icon.textContent = '✓';
+        break;
+      case 'no_data':
+        bar.classList.add('warn');
+        title.textContent = 'no data received yet';
+        detail.innerHTML = 'binds are OK but no telemetry has arrived. <span class="text-text">restart any claude code session</span> so it picks up the env vars.';
+        icon.textContent = '⚠';
+        break;
+      case 'bind_failed':
+        bar.classList.add('err');
+        title.textContent = 'bind failed';
+        detail.innerHTML = '<span class="text-text">:4317 grpc</span> could not bind — another process owns the port. close any other otlp collectors and restart andon.';
+        icon.textContent = '✗';
+        break;
+      case 'silent':
+        bar.classList.add('info');
+        title.textContent = 'silent · 60s with no events';
+        detail.textContent = 'we received data earlier but nothing recent. claude code may be idle. this is informational, not an error.';
+        icon.textContent = 'ℹ';
+        break;
+    }
+  };
+
+  // simulate live feed
+  function tick() {
+    if (!feedPaused) {
+      const r = Math.random();
+      const name =
+        r < 0.45 ? 'api_request' :
+        r < 0.65 ? 'mcp_server_connection' :
+        r < 0.85 ? 'user_prompt' : 'plugin_loaded';
+      pushEvent(name);
+      // bump last-event KPI
+      document.getElementById('kpi-last').textContent = '0s';
+      document.getElementById('kpi-last-time').textContent = fmtTime(new Date()).slice(0, 8);
+      const records = parseInt(document.getElementById('kpi-records').textContent.replace(/,/g, '')) + 1;
+      document.getElementById('kpi-records').textContent = records.toLocaleString();
+    }
+    setTimeout(tick, 2000 + Math.random() * 2500);
+  }
+
+  // bump "last event" timer every second
+  setInterval(() => {
+    if (feedPaused) return;
+    const cur = document.getElementById('kpi-last').textContent;
+    let n = parseInt(cur) || 0;
+    if (!isNaN(n)) {
+      n += 1;
+      document.getElementById('kpi-last').textContent = n + 's';
+    }
+  }, 1000);
+
+  renderCounters();
+  // seed a few events
+  for (let i = 0; i < 6; i++) {
+    pushEvent(['api_request', 'user_prompt', 'mcp_server_connection', 'api_request'][i % 4]);
+  }
+  feed.forEach(e => e.isNew = false);
+  renderFeed();
+  tick();
+</script>
+</body>
+</html>
