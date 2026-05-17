@@ -11,6 +11,7 @@ use tokio::net::TcpListener;
 use tower_http::cors::{Any, CorsLayer};
 
 use crate::db::DbPool;
+use crate::diagnostics::Diagnostics;
 use crate::integration::IntegrationStatus;
 use crate::otlp::IngestionControl;
 
@@ -22,6 +23,7 @@ pub struct ApiState {
     pub db_path: PathBuf,
     pub control: IngestionControl,
     pub integration: Arc<Mutex<IntegrationStatus>>,
+    pub diagnostics: Diagnostics,
 }
 
 pub async fn serve(state: ApiState) -> Result<()> {

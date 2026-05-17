@@ -8,6 +8,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use anyhow::Result;
 
 use crate::db::DbPool;
+use crate::diagnostics::Diagnostics;
 use ingestor::Ingestor;
 
 pub const GRPC_ADDR: &str = "127.0.0.1:4317";
@@ -38,11 +39,15 @@ impl Default for IngestionControl {
     }
 }
 
-pub async fn serve(pool: Arc<DbPool>, control: IngestionControl) -> Result<()> {
-    let ingestor = Arc::new(Ingestor::new(pool, control));
+pub async fn serve(
+    pool: Arc<DbPool>,
+    control: IngestionControl,
+    diagnostics: Diagnostics,
+) -> Result<()> {
+    let ingestor = Arc::new(Ingestor::new(pool, control, diagnostics.clone()));
 
-    let grpc = tokio::spawn(grpc_server::serve(ingestor.clone()));
-    let http = tokio::spawn(http_server::serve(ingestor.clone()));
+    let grpc = tokio::spawn(grpc_server::serve(ingestor.clone(), diagnostics.clone()));
+    let http = tokio::spawn(http_server::serve(ingestor.clone(), diagnostics.clone()));
 
     let (g, h) = tokio::join!(grpc, http);
     if let Err(e) = g {

@@ -1,6 +1,7 @@
 mod api;
 mod config;
 mod db;
+mod diagnostics;
 mod integration;
 mod otlp;
 
@@ -63,12 +64,14 @@ pub fn run() {
     };
 
     let control = otlp::IngestionControl::new();
+    let diagnostics = diagnostics::Diagnostics::new();
 
     let api_state = api::ApiState {
         pool: pool.clone(),
         db_path: paths.db_path.clone(),
         control: control.clone(),
         integration: std::sync::Arc::new(Mutex::new(integration_status)),
+        diagnostics: diagnostics.clone(),
     };
 
     let app_state = AppState {
@@ -80,18 +83,24 @@ pub fn run() {
         .manage(app_state)
         .setup(move |app| {
             // API server
-            let api_state = api_state.clone();
+            let api_state_for_api = api_state.clone();
+            let diag_for_api = diagnostics.clone();
             tauri::async_runtime::spawn(async move {
-                if let Err(e) = api::serve(api_state).await {
-                    tracing::error!(error = ?e, "api server exited with error");
+                match api::serve(api_state_for_api).await {
+                    Ok(()) => diag_for_api.record_bind("api", true, None),
+                    Err(e) => {
+                        tracing::error!(error = ?e, "api server exited with error");
+                        diag_for_api.record_bind("api", false, Some(format!("{e:#}")));
+                    }
                 }
             });
 
             // OTLP servers
             let pool = pool.clone();
             let control_for_otlp = control.clone();
+            let diag_for_otlp = diagnostics.clone();
             tauri::async_runtime::spawn(async move {
-                if let Err(e) = otlp::serve(pool, control_for_otlp).await {
+                if let Err(e) = otlp::serve(pool, control_for_otlp, diag_for_otlp).await {
                     tracing::error!(error = ?e, "otlp server exited with error");
                 }
             });

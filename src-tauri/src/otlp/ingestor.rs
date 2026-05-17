@@ -11,6 +11,7 @@ use opentelemetry_proto::tonic::{
 use rusqlite::params;
 
 use crate::db::DbPool;
+use crate::diagnostics::Diagnostics;
 
 use super::IngestionControl;
 
@@ -44,15 +45,155 @@ impl ResourceCtx {
 pub struct Ingestor {
     pool: Arc<DbPool>,
     control: IngestionControl,
+    diagnostics: Diagnostics,
 }
 
 impl Ingestor {
-    pub fn new(pool: Arc<DbPool>, control: IngestionControl) -> Self {
-        Self { pool, control }
+    pub fn new(pool: Arc<DbPool>, control: IngestionControl, diagnostics: Diagnostics) -> Self {
+        Self {
+            pool,
+            control,
+            diagnostics,
+        }
     }
 
     pub fn is_paused(&self) -> bool {
         self.control.is_paused()
+    }
+
+    pub fn ingest_metrics_v2(
+        &self,
+        request: Vec<ResourceMetrics>,
+        transport: &str,
+    ) -> Result<()> {
+        // OTel metrics — Claude Code (as of 2.1.x) doesn't emit these; kept
+        // for forward-compat with any future shift back to metric exporters.
+        let count = request.iter().map(|r| r.scope_metrics.iter().map(|s| s.metrics.len()).sum::<usize>()).sum::<usize>();
+        if count > 0 {
+            self.diagnostics.record_payload(
+                &format!("{transport}/metrics"),
+                request.len(),
+                count,
+                vec!["<metrics>".into()],
+                None,
+            );
+        }
+        self.ingest_metrics(request)
+    }
+
+    pub fn ingest_logs_v2(
+        &self,
+        request: Vec<opentelemetry_proto::tonic::logs::v1::ResourceLogs>,
+        transport: &str,
+    ) -> Result<()> {
+        if self.control.is_paused() {
+            tracing::debug!("ingestion paused — dropping log payload");
+            return Ok(());
+        }
+
+        let mut conn = self.pool.get()?;
+        let tx = conn.transaction()?;
+        let mut event_names: Vec<String> = Vec::new();
+        let mut record_count = 0usize;
+        let mut last_sid: Option<String> = None;
+
+        for rl in request.iter() {
+            let resource_attrs = rl
+                .resource
+                .as_ref()
+                .map(|r| r.attributes.as_slice())
+                .unwrap_or(&[]);
+            let ctx = ResourceCtx::from_attrs(resource_attrs);
+
+            for sl in rl.scope_logs.iter() {
+                for record in sl.log_records.iter() {
+                    record_count += 1;
+                    let mut record_ctx = ctx.clone();
+                    if record_ctx.session_id.is_none() {
+                        record_ctx.session_id = attr_string(&record.attributes, "session.id");
+                    }
+                    if record_ctx.user_account_uuid.is_none() {
+                        record_ctx.user_account_uuid =
+                            attr_string(&record.attributes, "user.account_uuid")
+                                .or_else(|| attr_string(&record.attributes, "user.id"));
+                    }
+                    if record_ctx.organization_id.is_none() {
+                        record_ctx.organization_id =
+                            attr_string(&record.attributes, "organization.id");
+                    }
+                    if record_ctx.terminal_type.is_none() {
+                        record_ctx.terminal_type =
+                            attr_string(&record.attributes, "terminal.type");
+                    }
+                    if record_ctx.service_version.is_none() {
+                        record_ctx.service_version =
+                            attr_string(&record.attributes, "service.version")
+                                .or_else(|| attr_string(&record.attributes, "claude_code.version"));
+                    }
+
+                    if let Some(sid) = record_ctx.session_id.clone() {
+                        let _ = upsert_session(&tx, &sid, &record_ctx);
+                        last_sid = Some(sid);
+                    }
+
+                    let event_name = attr_string(&record.attributes, "event.name")
+                        .or_else(|| {
+                            record
+                                .body
+                                .as_ref()
+                                .and_then(|b| anyvalue_to_string(b.value.as_ref()))
+                                .map(|s| s.trim_start_matches("claude_code.").to_string())
+                        })
+                        .unwrap_or_else(|| "<unnamed>".into());
+                    event_names.push(event_name.clone());
+
+                    let ts_ms = if record.time_unix_nano > 0 {
+                        (record.time_unix_nano / 1_000_000) as i64
+                    } else if record.observed_time_unix_nano > 0 {
+                        (record.observed_time_unix_nano / 1_000_000) as i64
+                    } else {
+                        now_ms()
+                    };
+
+                    let body_str = record
+                        .body
+                        .as_ref()
+                        .and_then(|b| anyvalue_to_string(b.value.as_ref()));
+
+                    // 1. Always persist a verbatim copy.
+                    let attrs_json = attrs_to_json(&record.attributes);
+                    let _ = tx.execute(
+                        "INSERT INTO log_events (session_id, timestamp, event_name, body, attributes_json, transport)
+                         VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+                        params![
+                            record_ctx.session_id,
+                            ts_ms,
+                            event_name,
+                            body_str,
+                            attrs_json,
+                            transport,
+                        ],
+                    );
+
+                    // 2. Best-effort typed mapping.
+                    if let Err(e) =
+                        handle_event(&tx, &record_ctx, &event_name, ts_ms, &record.attributes)
+                    {
+                        tracing::warn!(event = %event_name, error = ?e, "typed mapping failed; raw row still saved");
+                    }
+                }
+            }
+        }
+        tx.commit()?;
+
+        self.diagnostics.record_payload(
+            &format!("{transport}/logs"),
+            request.len(),
+            record_count,
+            event_names,
+            last_sid,
+        );
+        Ok(())
     }
 
     #[tracing::instrument(skip(self, request))]
@@ -90,76 +231,6 @@ impl Ingestor {
         Ok(())
     }
 
-    #[tracing::instrument(skip(self, request))]
-    pub fn ingest_logs(
-        &self,
-        request: Vec<opentelemetry_proto::tonic::logs::v1::ResourceLogs>,
-    ) -> Result<()> {
-        if self.control.is_paused() {
-            return Ok(());
-        }
-        let mut conn = self.pool.get()?;
-        let tx = conn.transaction()?;
-
-        for rl in request {
-            let resource_attrs = rl
-                .resource
-                .as_ref()
-                .map(|r| r.attributes.as_slice())
-                .unwrap_or(&[]);
-            let ctx = ResourceCtx::from_attrs(resource_attrs);
-
-            for sl in rl.scope_logs {
-                for record in sl.log_records {
-                    // Resource attrs may also live on the record; merge.
-                    let mut record_ctx = ctx.clone();
-                    if record_ctx.session_id.is_none() {
-                        record_ctx.session_id = attr_string(&record.attributes, "session.id");
-                    }
-                    if record_ctx.user_account_uuid.is_none() {
-                        record_ctx.user_account_uuid =
-                            attr_string(&record.attributes, "user.account_uuid")
-                                .or_else(|| attr_string(&record.attributes, "user.id"));
-                    }
-                    if record_ctx.organization_id.is_none() {
-                        record_ctx.organization_id =
-                            attr_string(&record.attributes, "organization.id");
-                    }
-                    if record_ctx.terminal_type.is_none() {
-                        record_ctx.terminal_type =
-                            attr_string(&record.attributes, "terminal.type");
-                    }
-
-                    if let Some(sid) = record_ctx.session_id.clone() {
-                        let _ = upsert_session(&tx, &sid, &record_ctx);
-                    }
-
-                    let event_name = attr_string(&record.attributes, "event.name")
-                        .unwrap_or_default();
-
-                    let ts_ms = if record.time_unix_nano > 0 {
-                        (record.time_unix_nano / 1_000_000) as i64
-                    } else if record.observed_time_unix_nano > 0 {
-                        (record.observed_time_unix_nano / 1_000_000) as i64
-                    } else {
-                        now_ms()
-                    };
-
-                    if let Err(e) = handle_event(
-                        &tx,
-                        &record_ctx,
-                        &event_name,
-                        ts_ms,
-                        &record.attributes,
-                    ) {
-                        tracing::warn!(event = %event_name, error = ?e, "log event handler failed");
-                    }
-                }
-            }
-        }
-        tx.commit()?;
-        Ok(())
-    }
 }
 
 fn handle_event(
@@ -598,6 +669,14 @@ fn anyvalue_to_string(v: Option<&AnyV>) -> Option<String> {
         AnyV::BoolValue(b) => Some(b.to_string()),
         _ => None,
     }
+}
+
+fn attrs_to_json(attrs: &[KeyValue]) -> String {
+    let map: HashMap<String, serde_json::Value> = attrs
+        .iter()
+        .map(|kv| (kv.key.clone(), anyvalue_to_json(kv.value.as_ref())))
+        .collect();
+    serde_json::to_string(&map).unwrap_or_else(|_| "{}".into())
 }
 
 fn anyvalue_to_json(v: Option<&AnyValue>) -> serde_json::Value {

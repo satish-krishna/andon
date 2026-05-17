@@ -15,6 +15,8 @@ use opentelemetry_proto::tonic::collector::{
 use prost::Message;
 use tokio::net::TcpListener;
 
+use crate::diagnostics::Diagnostics;
+
 use super::{HTTP_ADDR, ingestor::Ingestor};
 
 #[derive(Clone)]
@@ -22,7 +24,7 @@ struct HttpState {
     ingestor: Arc<Ingestor>,
 }
 
-pub async fn serve(ingestor: Arc<Ingestor>) {
+pub async fn serve(ingestor: Arc<Ingestor>, diagnostics: Diagnostics) {
     let addr: SocketAddr = HTTP_ADDR.parse().expect("hardcoded otlp http bind valid");
     let state = HttpState { ingestor };
 
@@ -36,12 +38,15 @@ pub async fn serve(ingestor: Arc<Ingestor>) {
         Ok(l) => l,
         Err(e) => {
             tracing::error!(error = ?e, %addr, "failed to bind otlp HTTP listener");
+            diagnostics.record_bind("http", false, Some(e.to_string()));
             return;
         }
     };
     tracing::info!(%addr, "otlp HTTP listening");
+    diagnostics.record_bind("http", true, None);
     if let Err(e) = axum::serve(listener, app).await {
         tracing::error!(error = ?e, "otlp HTTP server stopped");
+        diagnostics.record_bind("http", false, Some(e.to_string()));
     }
 }
 
@@ -50,7 +55,7 @@ async fn metrics(State(state): State<HttpState>, body: Bytes) -> impl IntoRespon
         Ok(req) => {
             let ingestor = state.ingestor.clone();
             tokio::task::spawn_blocking(move || {
-                if let Err(e) = ingestor.ingest_metrics(req.resource_metrics) {
+                if let Err(e) = ingestor.ingest_metrics_v2(req.resource_metrics, "http") {
                     tracing::warn!(error = ?e, "metrics ingestion error (http)");
                 }
             })
@@ -70,7 +75,7 @@ async fn logs(State(state): State<HttpState>, body: Bytes) -> impl IntoResponse 
         Ok(req) => {
             let ingestor = state.ingestor.clone();
             tokio::task::spawn_blocking(move || {
-                if let Err(e) = ingestor.ingest_logs(req.resource_logs) {
+                if let Err(e) = ingestor.ingest_logs_v2(req.resource_logs, "http") {
                     tracing::warn!(error = ?e, "logs ingestion error (http)");
                 }
             })

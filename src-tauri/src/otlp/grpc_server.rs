@@ -13,9 +13,11 @@ use opentelemetry_proto::tonic::collector::{
 };
 use tonic::{Request, Response, Status, transport::Server};
 
+use crate::diagnostics::Diagnostics;
+
 use super::{GRPC_ADDR, ingestor::Ingestor};
 
-pub async fn serve(ingestor: Arc<Ingestor>) {
+pub async fn serve(ingestor: Arc<Ingestor>, diagnostics: Diagnostics) {
     let addr: SocketAddr = GRPC_ADDR.parse().expect("hardcoded grpc bind address valid");
 
     let metrics_svc = MetricsServiceImpl {
@@ -26,6 +28,7 @@ pub async fn serve(ingestor: Arc<Ingestor>) {
     };
 
     tracing::info!(%addr, "otlp gRPC listening");
+    diagnostics.record_bind("grpc", true, None);
     if let Err(e) = Server::builder()
         .add_service(MetricsServiceServer::new(metrics_svc))
         .add_service(LogsServiceServer::new(logs_svc))
@@ -33,6 +36,7 @@ pub async fn serve(ingestor: Arc<Ingestor>) {
         .await
     {
         tracing::error!(error = ?e, "otlp gRPC server stopped");
+        diagnostics.record_bind("grpc", false, Some(e.to_string()));
     }
 }
 
@@ -50,7 +54,7 @@ impl MetricsService for MetricsServiceImpl {
         let ingestor = self.ingestor.clone();
         // Run blocking SQLite work off the async runtime.
         tokio::task::spawn_blocking(move || {
-            if let Err(e) = ingestor.ingest_metrics(req.resource_metrics) {
+            if let Err(e) = ingestor.ingest_metrics_v2(req.resource_metrics, "grpc") {
                 tracing::warn!(error = ?e, "metrics ingestion error");
             }
         })
@@ -73,7 +77,7 @@ impl LogsService for LogsServiceImpl {
         let req = request.into_inner();
         let ingestor = self.ingestor.clone();
         tokio::task::spawn_blocking(move || {
-            if let Err(e) = ingestor.ingest_logs(req.resource_logs) {
+            if let Err(e) = ingestor.ingest_logs_v2(req.resource_logs, "grpc") {
                 tracing::warn!(error = ?e, "logs ingestion error");
             }
         })

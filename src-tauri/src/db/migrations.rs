@@ -81,7 +81,22 @@ CREATE INDEX idx_decisions_session ON tool_decisions(session_id, timestamp);
 CREATE INDEX idx_files_session     ON file_changes(session_id, timestamp);
 "#;
 
-const MIGRATIONS: &[(i32, &str)] = &[(1, MIGRATION_V1)];
+const MIGRATION_V2: &str = r#"
+CREATE TABLE log_events (
+    id              INTEGER PRIMARY KEY,
+    session_id      TEXT,
+    timestamp       INTEGER NOT NULL,
+    event_name      TEXT NOT NULL,
+    body            TEXT,
+    attributes_json TEXT NOT NULL,
+    transport       TEXT NOT NULL  -- 'grpc' | 'http'
+);
+CREATE INDEX idx_log_events_session ON log_events(session_id, timestamp);
+CREATE INDEX idx_log_events_name    ON log_events(event_name, timestamp);
+CREATE INDEX idx_log_events_ts      ON log_events(timestamp DESC);
+"#;
+
+const MIGRATIONS: &[(i32, &str)] = &[(1, MIGRATION_V1), (2, MIGRATION_V2)];
 
 pub fn apply(conn: &mut Connection) -> Result<()> {
     conn.execute_batch(

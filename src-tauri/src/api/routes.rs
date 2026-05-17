@@ -32,6 +32,9 @@ pub fn router(state: ApiState) -> Router {
         .route("/api/open-data-folder", post(open_data_folder))
         .route("/api/integration/status", get(integration_status))
         .route("/api/integration/reapply", post(integration_reapply))
+        .route("/api/diagnostics", get(diagnostics))
+        .route("/api/diagnostics/events", get(recent_events))
+        .route("/api/diagnostics/export", get(export_diag))
         .with_state(state)
 }
 
@@ -455,6 +458,86 @@ async fn resume_ingestion(State(state): State<ApiState>) -> Json<serde_json::Val
 }
 async fn control_status(State(state): State<ApiState>) -> Json<serde_json::Value> {
     Json(json!({"paused": state.control.is_paused()}))
+}
+
+async fn diagnostics(State(state): State<ApiState>) -> Json<serde_json::Value> {
+    let snap = state.diagnostics.snapshot();
+    Json(serde_json::to_value(&snap).unwrap_or(json!({})))
+}
+
+#[derive(Deserialize)]
+struct EventQuery {
+    #[serde(default = "default_event_limit")]
+    limit: i64,
+    event: Option<String>,
+}
+fn default_event_limit() -> i64 {
+    100
+}
+
+async fn recent_events(
+    State(state): State<ApiState>,
+    Query(q): Query<EventQuery>,
+) -> Result<Json<serde_json::Value>, ApiError> {
+    let limit = q.limit.clamp(1, 1000);
+    let conn = state.pool.get().map_err(ApiError::pool)?;
+    let sql = match q.event {
+        Some(_) => "SELECT id, session_id, timestamp, event_name, body, attributes_json, transport
+                    FROM log_events WHERE event_name = ?1 ORDER BY timestamp DESC LIMIT ?2",
+        None => "SELECT id, session_id, timestamp, event_name, body, attributes_json, transport
+                 FROM log_events ORDER BY timestamp DESC LIMIT ?1",
+    };
+    let rows: Vec<serde_json::Value> = if let Some(evt) = &q.event {
+        let mut stmt = conn.prepare(sql)?;
+        let v: Vec<_> = stmt
+            .query_map(params![evt, limit], row_to_event)?
+            .flatten()
+            .collect();
+        v
+    } else {
+        let mut stmt = conn.prepare(sql)?;
+        let v: Vec<_> = stmt
+            .query_map(params![limit], row_to_event)?
+            .flatten()
+            .collect();
+        v
+    };
+    Ok(Json(json!({ "events": rows })))
+}
+
+fn row_to_event(r: &rusqlite::Row) -> rusqlite::Result<serde_json::Value> {
+    let attrs_str: String = r.get(5)?;
+    let attrs: serde_json::Value =
+        serde_json::from_str(&attrs_str).unwrap_or(serde_json::Value::Null);
+    Ok(json!({
+        "id": r.get::<_, i64>(0)?,
+        "session_id": r.get::<_, Option<String>>(1)?,
+        "timestamp": r.get::<_, i64>(2)?,
+        "event_name": r.get::<_, String>(3)?,
+        "body": r.get::<_, Option<String>>(4)?,
+        "attributes": attrs,
+        "transport": r.get::<_, String>(6)?,
+    }))
+}
+
+async fn export_diag(State(state): State<ApiState>) -> Result<Json<serde_json::Value>, ApiError> {
+    // Bundle everything needed for a support report.
+    let snap = state.diagnostics.snapshot();
+    let conn = state.pool.get().map_err(ApiError::pool)?;
+    let mut stmt = conn.prepare(
+        "SELECT id, session_id, timestamp, event_name, body, attributes_json, transport
+         FROM log_events ORDER BY timestamp DESC LIMIT 200",
+    )?;
+    let events: Vec<serde_json::Value> =
+        stmt.query_map([], row_to_event)?.flatten().collect();
+    let integration = state.integration.lock().unwrap().clone();
+    Ok(Json(json!({
+        "generated_at": chrono::Utc::now().to_rfc3339(),
+        "diagnostics": snap,
+        "integration": integration,
+        "db_path": state.db_path.display().to_string(),
+        "recent_events": events,
+    })))
 }
 
 async fn integration_status(State(state): State<ApiState>) -> Json<serde_json::Value> {

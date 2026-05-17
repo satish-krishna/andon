@@ -66,6 +66,16 @@ export class ApiService {
   reapplyIntegration(): Observable<IntegrationStatus> {
     return this.http.post<IntegrationStatus>(`${BASE}/api/integration/reapply`, {});
   }
+  diagnostics(): Observable<any> {
+    return this.http.get<any>(`${BASE}/api/diagnostics`);
+  }
+  recentEvents(limit = 100, event?: string): Observable<{ events: any[] }> {
+    const q = event ? `?limit=${limit}&event=${encodeURIComponent(event)}` : `?limit=${limit}`;
+    return this.http.get<{ events: any[] }>(`${BASE}/api/diagnostics/events${q}`);
+  }
+  exportDiagnostics(): Observable<any> {
+    return this.http.get<any>(`${BASE}/api/diagnostics/export`);
+  }
 }
 
 export type IntegrationStatus =
