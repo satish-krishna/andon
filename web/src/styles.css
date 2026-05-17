@@ -42,14 +42,19 @@
 .tabular-nums { font-variant-numeric: tabular-nums; }
 
 .nav-link {
-  display: block;
+  display: flex;
+  flex-direction: row;
+  align-items: center;
+  gap: 10px;
   padding: 8px 16px;
   font-size: 13px;
   color: var(--color-text);
   border-left: 2px solid transparent;
   cursor: pointer;
   text-decoration: none;
+  line-height: 1;
 }
+.nav-link > lucide-icon { flex-shrink: 0; }
 .nav-link:hover { background: rgba(31, 36, 44, 0.5); }
 .nav-link.active {
   color: var(--color-accent);
