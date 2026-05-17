@@ -6,10 +6,9 @@ import { PanelComponent } from '../../shared/panel.component';
 import { EmptyComponent } from '../../shared/empty.component';
 
 @Component({
-  selector: 'app-diagnostics',
-  standalone: true,
-  imports: [CommonModule, DatePipe, DecimalPipe, PanelComponent, EmptyComponent],
-  template: `
+    selector: 'app-diagnostics',
+    imports: [CommonModule, DatePipe, DecimalPipe, PanelComponent, EmptyComponent],
+    template: `
     <div class="p-6 flex flex-col gap-4">
       <div class="flex items-center gap-3">
         <h1 class="text-xl font-semibold">Diagnostics</h1>
@@ -145,7 +144,7 @@ import { EmptyComponent } from '../../shared/empty.component';
         <app-empty message="Loading…" />
       }
     </div>
-  `,
+  `
 })
 export class DiagnosticsComponent implements OnInit, OnDestroy {
   diag = signal<any>(null);

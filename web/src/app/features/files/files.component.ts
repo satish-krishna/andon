@@ -7,10 +7,9 @@ import { PanelComponent } from '../../shared/panel.component';
 import { EmptyComponent } from '../../shared/empty.component';
 
 @Component({
-  selector: 'app-files',
-  standalone: true,
-  imports: [CommonModule, DecimalPipe, PercentPipe, PanelComponent, EmptyComponent],
-  template: `
+    selector: 'app-files',
+    imports: [CommonModule, DecimalPipe, PercentPipe, PanelComponent, EmptyComponent],
+    template: `
     <div class="p-6 flex flex-col gap-4">
       <h1 class="text-xl font-semibold">Files</h1>
 
@@ -31,7 +30,7 @@ import { EmptyComponent } from '../../shared/empty.component';
         }
       </app-panel>
     </div>
-  `,
+  `
 })
 export class FilesComponent implements OnInit {
   rows = signal<FileHeatmapRow[]>([]);

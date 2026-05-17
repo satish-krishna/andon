@@ -8,18 +8,17 @@ import { PanelComponent } from '../../shared/panel.component';
 import { EmptyComponent } from '../../shared/empty.component';
 
 @Component({
-  selector: 'app-sessions',
-  standalone: true,
-  imports: [
-    CommonModule,
-    DatePipe,
-    DecimalPipe,
-    PercentPipe,
-    RouterLink,
-    PanelComponent,
-    EmptyComponent,
-  ],
-  template: `
+    selector: 'app-sessions',
+    imports: [
+        CommonModule,
+        DatePipe,
+        DecimalPipe,
+        PercentPipe,
+        RouterLink,
+        PanelComponent,
+        EmptyComponent,
+    ],
+    template: `
     <div class="p-6 flex flex-col gap-4">
       <h1 class="text-xl font-semibold">Sessions</h1>
 
@@ -60,7 +59,7 @@ import { EmptyComponent } from '../../shared/empty.component';
         }
       </app-panel>
     </div>
-  `,
+  `
 })
 export class SessionsComponent implements OnInit {
   rows = signal<SessionSummary[]>([]);

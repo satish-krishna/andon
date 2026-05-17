@@ -8,10 +8,9 @@ import { PanelComponent } from '../../shared/panel.component';
 import { EmptyComponent } from '../../shared/empty.component';
 
 @Component({
-  selector: 'app-session-detail',
-  standalone: true,
-  imports: [CommonModule, DatePipe, DecimalPipe, RouterLink, PanelComponent, EmptyComponent],
-  template: `
+    selector: 'app-session-detail',
+    imports: [CommonModule, DatePipe, DecimalPipe, RouterLink, PanelComponent, EmptyComponent],
+    template: `
     <div class="p-6 flex flex-col gap-4">
       <div class="flex items-center gap-3">
         <a routerLink="/sessions" class="text-muted text-xs hover:text-text">← Sessions</a>
@@ -115,7 +114,7 @@ import { EmptyComponent } from '../../shared/empty.component';
         <app-empty message="Loading…" />
       }
     </div>
-  `,
+  `
 })
 export class SessionDetailComponent implements OnInit {
   detail = signal<SessionDetail | null>(null);

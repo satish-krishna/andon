@@ -6,10 +6,9 @@ import { DbStats } from '../../core/models';
 import { PanelComponent } from '../../shared/panel.component';
 
 @Component({
-  selector: 'app-settings',
-  standalone: true,
-  imports: [CommonModule, DecimalPipe, PanelComponent],
-  template: `
+    selector: 'app-settings',
+    imports: [CommonModule, DecimalPipe, PanelComponent],
+    template: `
     <div class="p-6 flex flex-col gap-4 max-w-3xl">
       <h1 class="text-xl font-semibold">Settings</h1>
 
@@ -109,7 +108,7 @@ import { PanelComponent } from '../../shared/panel.component';
         </div>
       </app-panel>
     </div>
-  `,
+  `
 })
 export class SettingsComponent implements OnInit {
   stats = signal<DbStats | null>(null);

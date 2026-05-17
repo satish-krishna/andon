@@ -18,17 +18,16 @@ const MODEL_COLORS = [
 ];
 
 @Component({
-  selector: 'app-overview',
-  standalone: true,
-  imports: [
-    CommonModule,
-    DecimalPipe,
-    PercentPipe,
-    BaseChartDirective,
-    PanelComponent,
-    EmptyComponent,
-  ],
-  templateUrl: './overview.component.html',
+    selector: 'app-overview',
+    imports: [
+        CommonModule,
+        DecimalPipe,
+        PercentPipe,
+        BaseChartDirective,
+        PanelComponent,
+        EmptyComponent,
+    ],
+    templateUrl: './overview.component.html'
 })
 export class OverviewComponent implements OnInit {
   today = signal<OverviewToday | null>(null);
