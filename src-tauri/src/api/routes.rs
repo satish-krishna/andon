@@ -44,6 +44,7 @@ pub fn router(state: ApiState) -> Router {
         .route("/api/integration/reapply", post(integration_reapply))
         .route("/api/integration/unpatch", post(integration_unpatch))
         .route("/api/integration/restore-backup", post(integration_restore))
+        .route("/api/hooks/tool-use", post(hook_tool_use))
         .route("/api/diagnostics", get(diagnostics))
         .route("/api/diagnostics/events", get(recent_events))
         .route("/api/diagnostics/export", get(export_diag))
@@ -1401,6 +1402,140 @@ fn lang_from_path(path: &str) -> &'static str {
 }
 
 // ---------- integration: unpatch + restore ----------
+
+// ---------- claude code hook receiver ----------
+
+async fn hook_tool_use(
+    State(state): State<ApiState>,
+    Json(payload): Json<serde_json::Value>,
+) -> Json<serde_json::Value> {
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_millis() as i64)
+        .unwrap_or(0);
+
+    let sid = payload
+        .get("session_id")
+        .and_then(|v| v.as_str())
+        .map(String::from);
+    let tool = payload
+        .get("tool_name")
+        .and_then(|v| v.as_str())
+        .unwrap_or("")
+        .to_string();
+    let input = payload.get("tool_input");
+    let file_path = input
+        .and_then(|v| v.get("file_path"))
+        .and_then(|v| v.as_str())
+        .map(String::from);
+
+    let (added, removed) = match tool.as_str() {
+        "Write" => {
+            let content = input
+                .and_then(|v| v.get("content"))
+                .and_then(|v| v.as_str())
+                .unwrap_or("");
+            (count_lines(content), 0i64)
+        }
+        "Edit" => {
+            let old = input
+                .and_then(|v| v.get("old_string"))
+                .and_then(|v| v.as_str())
+                .unwrap_or("");
+            let new = input
+                .and_then(|v| v.get("new_string"))
+                .and_then(|v| v.as_str())
+                .unwrap_or("");
+            (count_lines(new), count_lines(old))
+        }
+        "MultiEdit" => {
+            let edits = input
+                .and_then(|v| v.get("edits"))
+                .and_then(|v| v.as_array());
+            let mut a = 0i64;
+            let mut r = 0i64;
+            if let Some(arr) = edits {
+                for e in arr {
+                    a += e
+                        .get("new_string")
+                        .and_then(|v| v.as_str())
+                        .map(count_lines)
+                        .unwrap_or(0);
+                    r += e
+                        .get("old_string")
+                        .and_then(|v| v.as_str())
+                        .map(count_lines)
+                        .unwrap_or(0);
+                }
+            }
+            (a, r)
+        }
+        _ => (0i64, 0i64),
+    };
+
+    let is_error = payload
+        .get("tool_response")
+        .and_then(|v| v.get("is_error"))
+        .and_then(|v| v.as_bool())
+        .unwrap_or(false);
+    let decision = if is_error { "reject" } else { "accept" };
+    let language = file_path.as_deref().map(lang_from_path).map(String::from);
+
+    let conn = match state.pool.get() {
+        Ok(c) => c,
+        Err(_) => return Json(json!({"ok": false, "error": "db unavailable"})),
+    };
+
+    let mut wrote_file = false;
+    let mut wrote_decision = false;
+    if let Some(sid_str) = &sid {
+        if file_path.is_some() && (added > 0 || removed > 0) {
+            wrote_file = conn
+                .execute(
+                    "INSERT INTO file_changes (session_id, timestamp, file_path, lines_added, lines_removed)
+                     VALUES (?1, ?2, ?3, ?4, ?5)",
+                    params![sid_str, now, file_path, added, removed],
+                )
+                .is_ok();
+        }
+        wrote_decision = conn
+            .execute(
+                "INSERT INTO tool_decisions (session_id, timestamp, tool_name, decision, language, file_path)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+                params![sid_str, now, tool, decision, language, file_path],
+            )
+            .is_ok();
+    }
+
+    tracing::info!(
+        ?sid, tool = %tool, file = ?file_path, added, removed, decision,
+        "tool-use hook ingested"
+    );
+
+    Json(json!({
+        "ok": true,
+        "tool": tool,
+        "file_path": file_path,
+        "added": added,
+        "removed": removed,
+        "decision": decision,
+        "wrote_file_change": wrote_file,
+        "wrote_decision": wrote_decision,
+    }))
+}
+
+fn count_lines(s: &str) -> i64 {
+    if s.is_empty() {
+        return 0;
+    }
+    let lines = s.lines().count();
+    // count trailing newline as one more line
+    if s.ends_with('\n') && lines > 0 {
+        lines as i64
+    } else {
+        lines as i64
+    }
+}
 
 async fn integration_unpatch(State(_state): State<ApiState>) -> Json<serde_json::Value> {
     match crate::integration::unpatch_claude_settings() {
