@@ -20,7 +20,7 @@ import { PanelComponent } from '../../shared/panel.component';
                 [class.text-amber-400]="paused()">
             {{ paused() ? 'paused' : 'active' }}
           </span>
-          <button class="ml-auto px-3 py-1 rounded bg-border hover:bg-border/70 text-sm"
+          <button class="ml-auto px-3 py-1 rounded-sm bg-border hover:bg-border/70 text-sm"
                   (click)="toggle()">
             {{ paused() ? 'Resume' : 'Pause' }}
           </button>
@@ -30,7 +30,7 @@ import { PanelComponent } from '../../shared/panel.component';
       <app-panel title="Database">
         <div class="flex items-center gap-2">
           <div class="text-xs font-mono text-muted break-all flex-1">{{ stats()?.db_path }}</div>
-          <button class="px-3 py-1 rounded bg-border hover:bg-border/70 text-xs"
+          <button class="px-3 py-1 rounded-sm bg-border hover:bg-border/70 text-xs"
                   (click)="openFolder()">Open data folder</button>
         </div>
         @if (stats(); as s) {
@@ -84,7 +84,7 @@ import { PanelComponent } from '../../shared/panel.component';
             }
           }
           <div class="flex items-center gap-2 mt-2">
-            <button class="px-3 py-1 rounded bg-border hover:bg-border/70 text-xs"
+            <button class="px-3 py-1 rounded-sm bg-border hover:bg-border/70 text-xs"
                     (click)="reapply()">Re-apply</button>
           </div>
         } @else {
@@ -97,7 +97,7 @@ import { PanelComponent } from '../../shared/panel.component';
           If you'd rather configure it yourself, add the following to
           <code class="text-accent">~/.claude/settings.json</code>:
         </p>
-        <pre class="bg-bg p-3 rounded text-xs font-mono overflow-auto"><code>{{ settingsSnippet }}</code></pre>
+        <pre class="bg-bg p-3 rounded-sm text-xs font-mono overflow-auto"><code>{{ settingsSnippet }}</code></pre>
       </app-panel>
 
       <app-panel title="About">

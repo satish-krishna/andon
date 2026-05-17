@@ -12,9 +12,9 @@ import { EmptyComponent } from '../../shared/empty.component';
     <div class="p-6 flex flex-col gap-4">
       <div class="flex items-center gap-3">
         <h1 class="text-xl font-semibold">Diagnostics</h1>
-        <button class="ml-auto px-3 py-1 rounded bg-border hover:bg-border/70 text-xs"
+        <button class="ml-auto px-3 py-1 rounded-sm bg-border hover:bg-border/70 text-xs"
                 (click)="refresh()">Refresh</button>
-        <button class="px-3 py-1 rounded bg-border hover:bg-border/70 text-xs"
+        <button class="px-3 py-1 rounded-sm bg-border hover:bg-border/70 text-xs"
                 (click)="download()">Download report</button>
       </div>
 
@@ -127,7 +127,7 @@ import { EmptyComponent } from '../../shared/empty.component';
           } @else {
             <div class="text-xs font-mono max-h-[500px] overflow-auto space-y-2">
               @for (e of events(); track e.id) {
-                <details class="bg-bg rounded p-2">
+                <details class="bg-bg rounded-sm p-2">
                   <summary class="cursor-pointer flex gap-3">
                     <span class="text-muted w-24">{{ e.timestamp | date : 'HH:mm:ss.SSS' }}</span>
                     <span class="text-accent w-48">{{ e.event_name }}</span>

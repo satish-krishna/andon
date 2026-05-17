@@ -22,7 +22,7 @@ import { EmptyComponent } from '../../shared/empty.component';
               <div class="col-span-12 grid grid-cols-12 gap-2 items-center text-xs font-mono py-1 border-b border-border/30">
                 <div class="col-span-7 truncate" [title]="r.file_path">{{ r.file_path }}</div>
                 <div class="col-span-2 text-right">{{ r.edit_count | number }}</div>
-                <div class="col-span-3 h-3 rounded"
+                <div class="col-span-3 h-3 rounded-sm"
                      [style.background]="cellColor(r)"></div>
               </div>
             }
