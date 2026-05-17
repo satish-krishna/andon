@@ -90,17 +90,241 @@ impl Ingestor {
         Ok(())
     }
 
-    #[tracing::instrument(skip(self, _request))]
+    #[tracing::instrument(skip(self, request))]
     pub fn ingest_logs(
         &self,
-        _request: Vec<opentelemetry_proto::tonic::logs::v1::ResourceLogs>,
+        request: Vec<opentelemetry_proto::tonic::logs::v1::ResourceLogs>,
     ) -> Result<()> {
         if self.control.is_paused() {
             return Ok(());
         }
-        // Logs accepted but not persisted in v1.
+        let mut conn = self.pool.get()?;
+        let tx = conn.transaction()?;
+
+        for rl in request {
+            let resource_attrs = rl
+                .resource
+                .as_ref()
+                .map(|r| r.attributes.as_slice())
+                .unwrap_or(&[]);
+            let ctx = ResourceCtx::from_attrs(resource_attrs);
+
+            for sl in rl.scope_logs {
+                for record in sl.log_records {
+                    // Resource attrs may also live on the record; merge.
+                    let mut record_ctx = ctx.clone();
+                    if record_ctx.session_id.is_none() {
+                        record_ctx.session_id = attr_string(&record.attributes, "session.id");
+                    }
+                    if record_ctx.user_account_uuid.is_none() {
+                        record_ctx.user_account_uuid =
+                            attr_string(&record.attributes, "user.account_uuid")
+                                .or_else(|| attr_string(&record.attributes, "user.id"));
+                    }
+                    if record_ctx.organization_id.is_none() {
+                        record_ctx.organization_id =
+                            attr_string(&record.attributes, "organization.id");
+                    }
+                    if record_ctx.terminal_type.is_none() {
+                        record_ctx.terminal_type =
+                            attr_string(&record.attributes, "terminal.type");
+                    }
+
+                    if let Some(sid) = record_ctx.session_id.clone() {
+                        let _ = upsert_session(&tx, &sid, &record_ctx);
+                    }
+
+                    let event_name = attr_string(&record.attributes, "event.name")
+                        .unwrap_or_default();
+
+                    let ts_ms = if record.time_unix_nano > 0 {
+                        (record.time_unix_nano / 1_000_000) as i64
+                    } else if record.observed_time_unix_nano > 0 {
+                        (record.observed_time_unix_nano / 1_000_000) as i64
+                    } else {
+                        now_ms()
+                    };
+
+                    if let Err(e) = handle_event(
+                        &tx,
+                        &record_ctx,
+                        &event_name,
+                        ts_ms,
+                        &record.attributes,
+                    ) {
+                        tracing::warn!(event = %event_name, error = ?e, "log event handler failed");
+                    }
+                }
+            }
+        }
+        tx.commit()?;
         Ok(())
     }
+}
+
+fn handle_event(
+    tx: &rusqlite::Transaction,
+    ctx: &ResourceCtx,
+    event_name: &str,
+    ts_ms: i64,
+    attrs: &[KeyValue],
+) -> Result<()> {
+    let Some(sid) = ctx.session_id.as_deref() else {
+        return Ok(());
+    };
+
+    match event_name {
+        "api_request" => {
+            let model =
+                attr_string(attrs, "model").unwrap_or_else(|| "unknown".into());
+            let input = attr_i64(attrs, "input_tokens").unwrap_or(0);
+            let output = attr_i64(attrs, "output_tokens").unwrap_or(0);
+            let cache_read = attr_i64(attrs, "cache_read_tokens").unwrap_or(0);
+            let cache_create = attr_i64(attrs, "cache_creation_tokens").unwrap_or(0);
+            let cost = attr_f64(attrs, "cost_usd")
+                .or_else(|| attr_i64(attrs, "cost_usd_micros").map(|m| m as f64 / 1_000_000.0))
+                .unwrap_or(0.0);
+            let duration_ms = attr_i64(attrs, "duration_ms").unwrap_or(0);
+
+            if cost > 0.0 {
+                let _ = tx.execute(
+                    "INSERT INTO cost_entries (session_id, timestamp, model, cost_usd)
+                     VALUES (?1, ?2, ?3, ?4)",
+                    params![sid, ts_ms, model, cost],
+                );
+            }
+            for (kind, n) in [
+                ("input", input),
+                ("output", output),
+                ("cacheRead", cache_read),
+                ("cacheCreation", cache_create),
+            ] {
+                if n > 0 {
+                    let _ = tx.execute(
+                        "INSERT INTO token_usage (session_id, timestamp, model, token_type, count)
+                         VALUES (?1, ?2, ?3, ?4, ?5)",
+                        params![sid, ts_ms, model, kind, n],
+                    );
+                }
+            }
+            // duration as CLI active time
+            if duration_ms > 0 {
+                let _ = tx.execute(
+                    "INSERT INTO active_time (session_id, timestamp, seconds, kind)
+                     VALUES (?1, ?2, ?3, 'cli')",
+                    params![sid, ts_ms, duration_ms as f64 / 1000.0],
+                );
+            }
+            Ok(())
+        }
+
+        "user_prompt" => {
+            // No native table for prompts — record as user active time + raw.
+            let prompt_length = attr_i64(attrs, "prompt_length").unwrap_or(0);
+            // Heuristic: estimate user "active" seconds as 1s per 5 chars typed.
+            let secs = (prompt_length as f64 / 5.0).max(1.0);
+            let _ = tx.execute(
+                "INSERT INTO active_time (session_id, timestamp, seconds, kind)
+                 VALUES (?1, ?2, ?3, 'user')",
+                params![sid, ts_ms, secs],
+            );
+            Ok(())
+        }
+
+        "tool_decision" | "tool_result" => {
+            let tool = attr_string(attrs, "tool_name")
+                .or_else(|| attr_string(attrs, "tool"))
+                .unwrap_or_else(|| "unknown".into());
+            let decision = attr_string(attrs, "decision")
+                .or_else(|| attr_string(attrs, "result"))
+                .unwrap_or_else(|| "accept".into());
+            let language = attr_string(attrs, "language");
+            let file_path = attr_string(attrs, "file.path")
+                .or_else(|| attr_string(attrs, "file_path"));
+            let _ = tx.execute(
+                "INSERT INTO tool_decisions (session_id, timestamp, tool_name, decision, language, file_path)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+                params![sid, ts_ms, tool, decision, language, file_path],
+            );
+            Ok(())
+        }
+
+        "code_edit" | "file_edit" => {
+            let added = attr_i64(attrs, "lines_added").unwrap_or(0);
+            let removed = attr_i64(attrs, "lines_removed").unwrap_or(0);
+            let file_path = attr_string(attrs, "file.path")
+                .or_else(|| attr_string(attrs, "file_path"));
+            let _ = tx.execute(
+                "INSERT INTO file_changes (session_id, timestamp, file_path, lines_added, lines_removed)
+                 VALUES (?1, ?2, ?3, ?4, ?5)",
+                params![sid, ts_ms, file_path, added, removed],
+            );
+            Ok(())
+        }
+
+        "commit" | "git_commit" => {
+            let _ = tx.execute(
+                "INSERT INTO git_activity (session_id, timestamp, activity, count)
+                 VALUES (?1, ?2, 'commit', 1)",
+                params![sid, ts_ms],
+            );
+            Ok(())
+        }
+
+        "pull_request" | "pr_created" => {
+            let _ = tx.execute(
+                "INSERT INTO git_activity (session_id, timestamp, activity, count)
+                 VALUES (?1, ?2, 'pull_request', 1)",
+                params![sid, ts_ms],
+            );
+            Ok(())
+        }
+
+        _ => {
+            // Stash unknown events as raw for future mapping.
+            let attrs_json = serde_json::to_string(
+                &attrs
+                    .iter()
+                    .map(|kv| (kv.key.clone(), anyvalue_to_json(kv.value.as_ref())))
+                    .collect::<HashMap<_, _>>(),
+            )
+            .unwrap_or_else(|_| "{}".into());
+            let _ = tx.execute(
+                "INSERT INTO metrics_raw (session_id, timestamp, metric_name, attributes_json, value_json)
+                 VALUES (?1, ?2, ?3, ?4, '{}')",
+                params![sid, ts_ms, format!("event:{event_name}"), attrs_json],
+            );
+            Ok(())
+        }
+    }
+}
+
+fn attr_i64(attrs: &[KeyValue], key: &str) -> Option<i64> {
+    for kv in attrs {
+        if kv.key == key {
+            return kv.value.as_ref().and_then(|v| match v.value.as_ref()? {
+                AnyV::IntValue(i) => Some(*i),
+                AnyV::DoubleValue(d) => Some(*d as i64),
+                AnyV::StringValue(s) => s.parse().ok(),
+                _ => None,
+            });
+        }
+    }
+    None
+}
+
+fn attr_f64(attrs: &[KeyValue], key: &str) -> Option<f64> {
+    for kv in attrs {
+        if kv.key == key {
+            return kv.value.as_ref().and_then(|v| match v.value.as_ref()? {
+                AnyV::DoubleValue(d) => Some(*d),
+                AnyV::IntValue(i) => Some(*i as f64),
+                AnyV::StringValue(s) => s.parse().ok(),
+                _ => None,
+            });
+        }
+    }
+    None
 }
 
 fn upsert_session(
