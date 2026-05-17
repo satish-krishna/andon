@@ -1,72 +1,75 @@
-import { CommonModule, DecimalPipe, PercentPipe } from '@angular/common';
-import { Component, OnInit, signal } from '@angular/core';
-import { BaseChartDirective } from 'ng2-charts';
-import { ChartConfiguration } from 'chart.js';
+import { CommonModule, DatePipe, DecimalPipe, PercentPipe } from '@angular/common';
+import { Component, OnInit, computed, effect, inject, signal } from '@angular/core';
+import { RouterLink } from '@angular/router';
 
-import { ApiService } from '../../core/api.service';
 import {
-  AcceptByLanguage,
-  ActiveTimeToday,
-  DailySeries,
-  OverviewToday,
-} from '../../core/models';
-import { PanelComponent } from '../../shared/panel.component';
-import { EmptyComponent } from '../../shared/empty.component';
+  ApiService,
+  V2AcceptLang,
+  V2ActiveTime,
+  V2CostByModel,
+  V2Kpis,
+  V2Session,
+  V2Tape,
+} from '../../core/api.service';
+import { FilterService } from '../../core/filter.service';
+import { FilterBarComponent } from '../../shared/filter-bar.component';
 
-const MODEL_COLORS = [
-  '#facc15', '#60a5fa', '#a78bfa', '#34d399', '#f472b6', '#fb923c', '#22d3ee',
-];
+const MODEL_COLORS: Record<string, string> = {
+  opus: '#facc15',
+  sonnet: '#60a5fa',
+  haiku: '#34d399',
+};
 
 @Component({
-    selector: 'app-overview',
-    imports: [
-        CommonModule,
-        DecimalPipe,
-        PercentPipe,
-        BaseChartDirective,
-        PanelComponent,
-        EmptyComponent,
-    ],
-    templateUrl: './overview.component.html'
+  selector: 'app-overview',
+  imports: [
+    CommonModule,
+    DatePipe,
+    DecimalPipe,
+    PercentPipe,
+    RouterLink,
+    FilterBarComponent,
+  ],
+  templateUrl: './overview.component.html',
 })
 export class OverviewComponent implements OnInit {
-  today = signal<OverviewToday | null>(null);
-  activeTime = signal<ActiveTimeToday | null>(null);
-  accept = signal<AcceptByLanguage[]>([]);
+  filter = inject(FilterService);
+  private api = inject(ApiService);
 
-  costChart = signal<ChartConfiguration<'bar'> | null>(null);
-  tokensChart = signal<ChartConfiguration<'line'> | null>(null);
-  acceptChart = signal<ChartConfiguration<'bar'> | null>(null);
+  kpis = signal<V2Kpis | null>(null);
+  tape = signal<V2Tape | null>(null);
+  costByModel = signal<V2CostByModel[]>([]);
+  acceptLang = signal<V2AcceptLang[]>([]);
+  activeTime = signal<V2ActiveTime | null>(null);
+  recent = signal<V2Session[]>([]);
 
-  baseOptions: any = {
-    responsive: true,
-    maintainAspectRatio: false,
-    plugins: {
-      legend: { labels: { color: '#e6e6e6', boxWidth: 10 } },
-    },
-    scales: {
-      x: { ticks: { color: '#7b8794' }, grid: { color: '#1f242c' } },
-      y: { ticks: { color: '#7b8794' }, grid: { color: '#1f242c' } },
-    },
-  };
+  // tape max for scaling
+  tapeMax = computed(() => {
+    const t = this.tape();
+    if (!t) return 1;
+    return Math.max(1, ...t.current, ...t.previous);
+  });
 
-  constructor(private api: ApiService) {}
+  modelColor(m: string): string {
+    return MODEL_COLORS[m] ?? '#7b8794';
+  }
 
-  ngOnInit() {
-    this.api.overviewToday().subscribe((v) => this.today.set(v));
-    this.api.activeTimeToday().subscribe((v) => this.activeTime.set(v));
-    this.api.costByDay(30).subscribe((s) => this.costChart.set(this.toCostChart(s)));
-    this.api.tokensByDay(30).subscribe((s) => this.tokensChart.set(this.toTokensChart(s)));
-    this.api.acceptByLanguage().subscribe((rows) => {
-      this.accept.set(rows);
-      this.acceptChart.set(this.toAcceptChart(rows));
+  constructor() {
+    // refetch whenever the filter window or models change
+    effect(() => {
+      const w = this.filter.window();
+      const models = this.filter.modelsCsv();
+      const args = { fromMs: w.fromMs, toMs: w.toMs, models };
+      this.api.kpis(args).subscribe((v) => this.kpis.set(v));
+      this.api.tape(undefined, models).subscribe((v) => this.tape.set(v));
+      this.api.costByModel(args).subscribe((v) => this.costByModel.set(v));
+      this.api.acceptByLanguageV2(args).subscribe((v) => this.acceptLang.set(v));
+      this.api.activeTime(args).subscribe((v) => this.activeTime.set(v));
+      this.api.sessionsV2({ ...args, sort: 'time', limit: 6 }).subscribe((v) => this.recent.set(v));
     });
   }
 
-  totalActive(): number {
-    const t = this.activeTime();
-    return t ? t.user_seconds + t.cli_seconds : 0;
-  }
+  ngOnInit() {}
 
   fmtDuration(secs: number): string {
     if (!secs) return '0m';
@@ -75,68 +78,24 @@ export class OverviewComponent implements OnInit {
     return h > 0 ? `${h}h ${m}m` : `${m}m`;
   }
 
-  private toCostChart(s: DailySeries): ChartConfiguration<'bar'> {
-    return {
-      type: 'bar',
-      data: {
-        labels: s.days,
-        datasets: s.series.map((ser, i) => ({
-          label: ser.name,
-          data: ser.values,
-          backgroundColor: MODEL_COLORS[i % MODEL_COLORS.length],
-          stack: 'cost',
-        })),
-      },
-      options: {
-        ...this.baseOptions,
-        scales: {
-          x: { stacked: true, ticks: { color: '#7b8794' }, grid: { color: '#1f242c' } },
-          y: { stacked: true, ticks: { color: '#7b8794' }, grid: { color: '#1f242c' } },
-        },
-      },
-    };
+  fmtTokens(n: number): string {
+    if (n >= 1_000_000) return (n / 1_000_000).toFixed(1) + 'M';
+    if (n >= 1_000) return (n / 1_000).toFixed(1) + 'k';
+    return String(n);
   }
 
-  private toTokensChart(s: DailySeries): ChartConfiguration<'line'> {
-    return {
-      type: 'line',
-      data: {
-        labels: s.days,
-        datasets: s.series.map((ser, i) => ({
-          label: ser.name,
-          data: ser.values,
-          borderColor: MODEL_COLORS[i % MODEL_COLORS.length],
-          backgroundColor: MODEL_COLORS[i % MODEL_COLORS.length] + '33',
-          tension: 0.3,
-          fill: false,
-        })),
-      },
-      options: this.baseOptions as ChartConfiguration<'line'>['options'],
-    };
+  fmtDelta(d: number | null): string {
+    if (d === null || d === undefined) return '—';
+    const sign = d >= 0 ? '▲' : '▾';
+    return `${sign} ${Math.abs(d * 100).toFixed(0)}%`;
   }
 
-  private toAcceptChart(rows: AcceptByLanguage[]): ChartConfiguration<'bar'> {
-    const sorted = [...rows].sort((a, b) => b.accept_rate - a.accept_rate);
-    return {
-      type: 'bar',
-      data: {
-        labels: sorted.map((r) => r.language),
-        datasets: [
-          {
-            label: 'Accept rate',
-            data: sorted.map((r) => r.accept_rate),
-            backgroundColor: '#facc15',
-          },
-        ],
-      },
-      options: {
-        ...this.baseOptions,
-        indexAxis: 'y',
-        scales: {
-          x: { min: 0, max: 1, ticks: { color: '#7b8794' }, grid: { color: '#1f242c' } },
-          y: { ticks: { color: '#7b8794' }, grid: { color: '#1f242c' } },
-        },
-      } as ChartConfiguration<'bar'>['options'],
-    };
+  deltaClass(d: number | null): string {
+    if (d === null || d === undefined) return 'delta-flat';
+    return d >= 0 ? 'delta-up' : 'delta-down';
   }
+
+  tapeMax_ = this.tapeMax; // expose to template
+  Math = Math; // template access
+  now() { return Date.now(); }
 }
