@@ -60,4 +60,16 @@ export class ApiService {
       {},
     );
   }
+  integrationStatus(): Observable<IntegrationStatus> {
+    return this.http.get<IntegrationStatus>(`${BASE}/api/integration/status`);
+  }
+  reapplyIntegration(): Observable<IntegrationStatus> {
+    return this.http.post<IntegrationStatus>(`${BASE}/api/integration/reapply`, {});
+  }
 }
+
+export type IntegrationStatus =
+  | { state: 'already_configured'; settings_path: string }
+  | { state: 'patched'; settings_path: string; backup_path: string }
+  | { state: 'conflict'; settings_path: string; existing_endpoint: string }
+  | { state: 'error'; message: string };

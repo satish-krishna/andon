@@ -1,7 +1,7 @@
 import { CommonModule, DecimalPipe } from '@angular/common';
 import { Component, OnInit, signal } from '@angular/core';
 
-import { ApiService } from '../../core/api.service';
+import { ApiService, IntegrationStatus } from '../../core/api.service';
 import { DbStats } from '../../core/models';
 import { PanelComponent } from '../../shared/panel.component';
 
@@ -48,9 +48,55 @@ import { PanelComponent } from '../../shared/panel.component';
         }
       </app-panel>
 
-      <app-panel title="Claude Code setup">
+      <app-panel title="Claude Code integration">
+        @if (integration(); as i) {
+          @switch (i.state) {
+            @case ('already_configured') {
+              <div class="text-sm flex items-center gap-2">
+                <span class="text-green-400">✓ configured</span>
+                <span class="text-muted text-xs font-mono">{{ i.settings_path }}</span>
+              </div>
+              <div class="text-xs text-muted">OTel env vars are present in your Claude Code settings.</div>
+            }
+            @case ('patched') {
+              <div class="text-sm">
+                <span class="text-accent">↻ patched</span>
+                <span class="text-muted text-xs font-mono ml-2">{{ i.settings_path }}</span>
+              </div>
+              <div class="text-xs text-muted">
+                Andon added the required OTel env vars. Backup at
+                <code class="text-accent">{{ i.backup_path }}</code>.
+                Restart any open Claude Code sessions.
+              </div>
+            }
+            @case ('conflict') {
+              <div class="text-sm text-amber-400">⚠ conflict — manual review needed</div>
+              <div class="text-xs text-muted">
+                Your settings.json already targets a different OTLP endpoint:
+                <code class="text-accent">{{ i.existing_endpoint }}</code>.
+                Andon won't overwrite it. Either point it at
+                <code class="text-accent">http://localhost:4317</code>
+                or remove the variable to let andon take over.
+              </div>
+            }
+            @case ('error') {
+              <div class="text-sm text-red-400">✗ error</div>
+              <div class="text-xs text-muted font-mono">{{ i.message }}</div>
+            }
+          }
+          <div class="flex items-center gap-2 mt-2">
+            <button class="px-3 py-1 rounded bg-border hover:bg-border/70 text-xs"
+                    (click)="reapply()">Re-apply</button>
+          </div>
+        } @else {
+          <div class="text-xs text-muted">Checking…</div>
+        }
+      </app-panel>
+
+      <app-panel title="Manual setup (reference)">
         <p class="text-sm text-muted">
-          Add the following to <code class="text-accent">~/.claude/settings.json</code> to enable telemetry export:
+          If you'd rather configure it yourself, add the following to
+          <code class="text-accent">~/.claude/settings.json</code>:
         </p>
         <pre class="bg-bg p-3 rounded text-xs font-mono overflow-auto"><code>{{ settingsSnippet }}</code></pre>
       </app-panel>
@@ -68,6 +114,7 @@ import { PanelComponent } from '../../shared/panel.component';
 export class SettingsComponent implements OnInit {
   stats = signal<DbStats | null>(null);
   paused = signal(false);
+  integration = signal<IntegrationStatus | null>(null);
 
   settingsSnippet = `{
   "env": {
@@ -84,6 +131,11 @@ export class SettingsComponent implements OnInit {
   ngOnInit() {
     this.api.stats().subscribe((s) => this.stats.set(s));
     this.api.controlStatus().subscribe((c) => this.paused.set(c.paused));
+    this.api.integrationStatus().subscribe((i) => this.integration.set(i));
+  }
+
+  reapply() {
+    this.api.reapplyIntegration().subscribe((i) => this.integration.set(i));
   }
 
   toggle() {

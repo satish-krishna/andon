@@ -29,7 +29,16 @@ Works with **any Claude Code subscription** (Pro, Max, Team, Enterprise, API key
 
 ## Wire up Claude Code
 
-Add the following to `%USERPROFILE%\.claude\settings.json`:
+**Automatic** — on first launch, andon patches `%USERPROFILE%\.claude\settings.json` for you:
+
+- If no `env` block exists, andon adds one with the required OTel variables.
+- If your existing settings already point at andon, nothing changes.
+- If you already export to a *different* OTLP endpoint (e.g., your own collector), andon refuses to overwrite and the Settings page shows a "conflict — manual review needed" notice.
+- Before any write, andon copies your existing settings to `settings.json.andon-backup`.
+
+Then restart any open Claude Code sessions. Within ~10 seconds of finishing a session you'll see today's numbers populate on the Overview page.
+
+### Manual setup (if you'd prefer)
 
 ```json
 {
@@ -42,8 +51,6 @@ Add the following to `%USERPROFILE%\.claude\settings.json`:
   }
 }
 ```
-
-Restart any open Claude Code sessions. Run a session — within ~10 seconds you'll see today's numbers populate on the Overview page.
 
 ## Data location
 

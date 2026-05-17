@@ -30,6 +30,8 @@ pub fn router(state: ApiState) -> Router {
         .route("/api/control/status", get(control_status))
         .route("/api/stats", get(db_stats))
         .route("/api/open-data-folder", post(open_data_folder))
+        .route("/api/integration/status", get(integration_status))
+        .route("/api/integration/reapply", post(integration_reapply))
         .with_state(state)
 }
 
@@ -453,6 +455,17 @@ async fn resume_ingestion(State(state): State<ApiState>) -> Json<serde_json::Val
 }
 async fn control_status(State(state): State<ApiState>) -> Json<serde_json::Value> {
     Json(json!({"paused": state.control.is_paused()}))
+}
+
+async fn integration_status(State(state): State<ApiState>) -> Json<serde_json::Value> {
+    let s = state.integration.lock().unwrap().clone();
+    Json(serde_json::to_value(&s).unwrap_or_else(|_| json!({})))
+}
+
+async fn integration_reapply(State(state): State<ApiState>) -> Json<serde_json::Value> {
+    let new_status = crate::integration::ensure_claude_settings();
+    *state.integration.lock().unwrap() = new_status.clone();
+    Json(serde_json::to_value(&new_status).unwrap_or_else(|_| json!({})))
 }
 
 async fn open_data_folder(State(state): State<ApiState>) -> Json<serde_json::Value> {

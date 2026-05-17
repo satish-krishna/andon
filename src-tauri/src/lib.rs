@@ -1,7 +1,10 @@
 mod api;
 mod config;
 mod db;
+mod integration;
 mod otlp;
+
+use std::sync::Mutex;
 
 use std::sync::Arc;
 
@@ -48,6 +51,9 @@ pub fn run() {
 
     tracing::info!(data_dir = %paths.data_dir.display(), "andon starting");
 
+    let integration_status = integration::ensure_claude_settings();
+    tracing::info!(?integration_status, "claude code integration check complete");
+
     let pool = match db::init(&paths.db_path) {
         Ok(p) => Arc::new(p),
         Err(e) => {
@@ -62,6 +68,7 @@ pub fn run() {
         pool: pool.clone(),
         db_path: paths.db_path.clone(),
         control: control.clone(),
+        integration: std::sync::Arc::new(Mutex::new(integration_status)),
     };
 
     let app_state = AppState {
