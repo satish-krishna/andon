@@ -1,0 +1,204 @@
+<div class="crumb">
+  <span>◢ diagnostics</span>
+  <span class="ml-auto flex items-center gap-3">
+    @if (!paused()) { <span><span class="live-dot"></span><span class="text-ok">live</span></span> }
+    <span>◷ {{ now() | date : 'MMM d · HH:mm' }}</span>
+  </span>
+</div>
+
+<div class="px-6 py-5 flex flex-col gap-4">
+
+  @if (diag(); as d) {
+    <!-- health -->
+    <div class="border rounded-md p-4 flex items-center gap-4 font-mono"
+         [class]="d.health.state === 'healthy' ? 'bg-ok/5 border-ok/40' :
+                  d.health.state === 'no_data' ? 'bg-warn/5 border-warn/40' :
+                  d.health.state === 'bind_failed' ? 'bg-err/5 border-err/40' :
+                  'bg-info/5 border-info/40'">
+      <span class="text-2xl">{{ d.health.state === 'healthy' ? '✓' :
+                                 d.health.state === 'no_data' ? '⚠' :
+                                 d.health.state === 'bind_failed' ? '✗' : 'ℹ' }}</span>
+      <div class="flex-1">
+        <div class="text-base">{{ d.health.state === 'healthy' ? 'healthy' :
+                                  d.health.state === 'no_data' ? 'no data received yet' :
+                                  d.health.state === 'bind_failed' ? 'bind failed' :
+                                  'starting up' }}
+          @if (d.health.state === 'healthy' && d.seconds_since_last_event != null) {
+            <span class="text-muted text-xs ml-2">last event {{ d.seconds_since_last_event }}s ago</span>
+          }
+        </div>
+        @if (d.health.reason) {
+          <div class="text-[11px] text-muted mt-1">{{ d.health.reason }}</div>
+        }
+        @if (d.health.ports) {
+          <div class="text-[11px] text-muted mt-1">ports that failed: <span class="text-text">{{ d.health.ports.join(', ') }}</span> — another process likely owns them.</div>
+        }
+      </div>
+      <button class="filter-chip" (click)="reapply()">re-check integration ↻</button>
+      <button class="filter-chip" (click)="download()">download report ↓</button>
+    </div>
+
+    <!-- top stats -->
+    <div class="grid grid-cols-4 gap-4">
+      <section class="panel">
+        <div class="panel-title">records received</div>
+        <div class="panel-body">
+          <div class="text-3xl font-mono tabular-nums">{{ d.total_records | number }}</div>
+          <div class="text-[11px] text-muted mt-1">{{ d.total_payloads | number }} payloads</div>
+        </div>
+      </section>
+      <section class="panel">
+        <div class="panel-title">last event</div>
+        <div class="panel-body">
+          @if (d.seconds_since_last_event != null) {
+            <div class="text-3xl font-mono tabular-nums">{{ d.seconds_since_last_event }}s</div>
+            <div class="text-[11px] text-muted mt-1">at {{ d.last_event_ms | date : 'HH:mm:ss' }}</div>
+          } @else {
+            <div class="text-3xl font-mono tabular-nums text-muted">—</div>
+            <div class="text-[11px] text-muted mt-1">no events yet</div>
+          }
+        </div>
+      </section>
+      <section class="panel">
+        <div class="panel-title">uptime</div>
+        <div class="panel-body">
+          <div class="text-3xl font-mono tabular-nums">{{ d.uptime_seconds }}s</div>
+          <div class="text-[11px] text-muted mt-1">since {{ d.start_ms | date : 'HH:mm:ss' }}</div>
+        </div>
+      </section>
+      <section class="panel">
+        <div class="panel-title">last session</div>
+        <div class="panel-body">
+          <div class="text-sm font-mono break-all text-accent">{{ d.last_session_id || '—' }}</div>
+        </div>
+      </section>
+    </div>
+
+    <!-- binds + transports -->
+    <div class="grid grid-cols-2 gap-4">
+      <section class="panel">
+        <div class="panel-title">listener binds</div>
+        <div class="panel-body">
+          <div class="grid grid-cols-[80px_60px_1fr] items-center py-1 font-mono text-xs">
+            <span class="text-muted">4317 grpc</span>
+            <span [class]="bindClass(d.binds.grpc_4317)">{{ bindLabel(d.binds.grpc_4317) }}</span>
+            <span class="text-[11px] text-muted">otlp metrics + logs</span>
+          </div>
+          <div class="grid grid-cols-[80px_60px_1fr] items-center py-1 font-mono text-xs">
+            <span class="text-muted">4318 http</span>
+            <span [class]="bindClass(d.binds.http_4318)">{{ bindLabel(d.binds.http_4318) }}</span>
+            <span class="text-[11px] text-muted">otlp http/protobuf</span>
+          </div>
+          <div class="grid grid-cols-[80px_60px_1fr] items-center py-1 font-mono text-xs">
+            <span class="text-muted">8765 api</span>
+            <span [class]="bindClass(d.binds.api_8765)">{{ bindLabel(d.binds.api_8765) }}</span>
+            <span class="text-[11px] text-muted">internal ui api</span>
+          </div>
+          @if (d.last_error) {
+            <div class="mt-2 text-xs text-err font-mono break-all">{{ d.last_error }}</div>
+          }
+        </div>
+      </section>
+
+      <section class="panel">
+        <div class="panel-title">transports</div>
+        <div class="panel-body">
+          @if (!d.transport_counters || (d.transport_counters | json) === '{}') {
+            <div class="text-muted text-xs font-mono">no payloads received yet</div>
+          } @else {
+            @for (e of d.transport_counters | keyvalue; track e.key) {
+              <div class="flex justify-between items-center py-1 font-mono text-xs border-b border-border/40">
+                <span>{{ e.key }}</span>
+                <span class="text-right tabular-nums text-accent">{{ e.value }}</span>
+              </div>
+            }
+          }
+        </div>
+      </section>
+    </div>
+
+    <!-- event counters -->
+    <section class="panel">
+      <div class="panel-title">event counters · this session</div>
+      <div class="panel-body">
+        @if (sortedCounters().length === 0) {
+          <div class="text-muted text-xs font-mono">no events received yet</div>
+        } @else {
+          <table class="w-full text-xs font-mono">
+            <thead>
+              <tr class="text-left text-[10px] uppercase text-muted">
+                <th class="pb-1.5">event name</th>
+                <th class="pb-1.5 text-right">count</th>
+                <th class="pb-1.5 text-right">filter</th>
+              </tr>
+            </thead>
+            <tbody>
+              @for (c of sortedCounters(); track c[0]) {
+                <tr class="border-t border-border/40">
+                  <td class="py-1.5">{{ c[0] }}</td>
+                  <td class="py-1.5 text-right tabular-nums">{{ c[1] | number }}</td>
+                  <td class="py-1.5 text-right">
+                    <button class="text-accent hover:underline" (click)="setFilter(c[0])">view ↗</button>
+                  </td>
+                </tr>
+              }
+            </tbody>
+          </table>
+        }
+      </div>
+    </section>
+
+    <!-- event feed -->
+    <section class="panel">
+      <div class="panel-title">
+        <span><span class="live-dot"></span>event feed</span>
+        <span class="flex items-center gap-2 text-[10px]">
+          filter:
+          <select class="bg-bg border border-border text-text text-[11px] font-mono px-1 py-0.5"
+                  [ngModel]="feedFilter() || 'all'"
+                  (ngModelChange)="setFilter($event)">
+            <option value="all">all events</option>
+            @for (c of sortedCounters(); track c[0]) {
+              <option [value]="c[0]">{{ c[0] }}</option>
+            }
+          </select>
+          <button class="filter-chip"
+                  [attr.data-active]="paused() ? 'true' : null"
+                  (click)="togglePause()">{{ paused() ? '▶ resume' : '⏸ pause' }}</button>
+        </span>
+      </div>
+      <div class="panel-body p-0">
+        @if (events().length === 0) {
+          <div class="p-6 text-center text-muted font-mono text-xs">no events</div>
+        } @else {
+          <div style="max-height: 500px; overflow-y: auto;">
+            @for (e of events(); track e.id) {
+              <div class="border-b border-border/40 cursor-pointer font-mono text-[11px] px-3 py-1.5"
+                   [class.bg-border]="expandedId() === e.id"
+                   [class.border-l-2]="expandedId() === e.id"
+                   [class.border-l-accent]="expandedId() === e.id"
+                   (click)="toggleExpand(e.id)">
+                <div class="flex items-center gap-2">
+                  <span class="text-muted w-20">{{ e.timestamp | date : 'HH:mm:ss' }}</span>
+                  <span class="inline-block px-1.5 py-0.5 rounded text-[10px] border border-border-bright"
+                        [class]="e.event_name === 'api_request' ? 'text-accent' :
+                                 e.event_name === 'user_prompt' ? 'text-info' :
+                                 e.event_name === 'mcp_server_connection' ? 'text-ok' :
+                                 'text-muted'">{{ e.event_name }}</span>
+                  <span class="text-accent">{{ e.session_id?.slice(0, 8) || '—' }}</span>
+                  <span class="ml-auto text-muted text-[10px]">{{ e.transport }}</span>
+                </div>
+                @if (expandedId() === e.id) {
+                  <pre class="bg-bg border border-border p-2 mt-1.5 text-[10px] max-h-[180px] overflow-auto whitespace-pre-wrap">{{ fmtAttrs(e.attributes) }}</pre>
+                }
+              </div>
+            }
+          </div>
+        }
+      </div>
+    </section>
+
+  } @else {
+    <div class="text-center py-10 text-muted font-mono">loading…</div>
+  }
+</div>
