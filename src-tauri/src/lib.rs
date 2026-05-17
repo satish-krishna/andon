@@ -10,7 +10,9 @@ use tracing_subscriber::EnvFilter;
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tracing_subscriber::fmt()
-        .with_env_filter(EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("info")))
+        .with_env_filter(
+            EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("info")),
+        )
         .with_target(false)
         .init();
 
@@ -31,21 +33,32 @@ pub fn run() {
         }
     };
 
+    let control = otlp::IngestionControl::new();
+
     let api_state = api::ApiState {
         pool: pool.clone(),
         db_path: paths.db_path.clone(),
+        control: control.clone(),
     };
 
     tauri::Builder::default()
         .plugin(tauri_plugin_shell::init())
-        .setup(move |app| {
-            let state = api_state.clone();
+        .setup(move |_app| {
+            let api_state = api_state.clone();
             tauri::async_runtime::spawn(async move {
-                if let Err(e) = api::serve(state).await {
+                if let Err(e) = api::serve(api_state).await {
                     tracing::error!(error = ?e, "api server exited with error");
                 }
             });
-            let _ = app;
+
+            let pool = pool.clone();
+            let control = control.clone();
+            tauri::async_runtime::spawn(async move {
+                if let Err(e) = otlp::serve(pool, control).await {
+                    tracing::error!(error = ?e, "otlp server exited with error");
+                }
+            });
+
             Ok(())
         })
         .run(tauri::generate_context!())

@@ -11,6 +11,7 @@ use tokio::net::TcpListener;
 use tower_http::cors::{Any, CorsLayer};
 
 use crate::db::DbPool;
+use crate::otlp::IngestionControl;
 
 const BIND_ADDR: &str = "127.0.0.1:8765";
 
@@ -18,6 +19,7 @@ const BIND_ADDR: &str = "127.0.0.1:8765";
 pub struct ApiState {
     pub pool: Arc<DbPool>,
     pub db_path: PathBuf,
+    pub control: IngestionControl,
 }
 
 pub async fn serve(state: ApiState) -> Result<()> {
