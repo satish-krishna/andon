@@ -1,5 +1,11 @@
 @import 'tailwindcss';
 
+/* Explicit content scan — Angular's PostCSS context doesn't trigger
+   Tailwind v4's auto-discovery walk reliably. */
+@source "./src/**/*.{html,ts}";
+@source "./src/**/*.html";
+@source "./src/**/*.ts";
+
 @theme {
   --color-bg: #0b0d10;
   --color-panel: #11151a;
