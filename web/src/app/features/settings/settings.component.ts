@@ -18,6 +18,7 @@ export class SettingsComponent implements OnInit {
   paused = signal(false);
   integration = signal<IntegrationStatus | null>(null);
   actionMsg = signal<string>('');
+  autostart = signal<{ enabled: boolean; registered_command: string | null } | null>(null);
 
   settingsSnippet = `{
   "env": {
@@ -36,6 +37,16 @@ export class SettingsComponent implements OnInit {
     this.api.stats().subscribe((s) => this.stats.set(s));
     this.api.controlStatus().subscribe((c) => this.paused.set(c.paused));
     this.api.integrationStatus().subscribe((i) => this.integration.set(i));
+    this.api.autostartStatus().subscribe((a) => this.autostart.set(a));
+  }
+
+  toggleAutostart() {
+    const next = !(this.autostart()?.enabled ?? false);
+    const call$ = next ? this.api.autostartEnable() : this.api.autostartDisable();
+    call$.subscribe((r) => {
+      this.flash(r.ok ? (next ? 'autostart enabled' : 'autostart disabled') : `error: ${r.error}`);
+      this.api.autostartStatus().subscribe((a) => this.autostart.set(a));
+    });
   }
 
   togglePause() {

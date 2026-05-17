@@ -46,7 +46,7 @@ dependencies = [
 
 [[package]]
 name = "andon"
-version = "0.2.4"
+version = "0.2.5"
 dependencies = [
  "anyhow",
  "axum",
@@ -70,6 +70,7 @@ dependencies = [
  "tracing",
  "tracing-appender",
  "tracing-subscriber",
+ "winreg",
 ]
 
 [[package]]

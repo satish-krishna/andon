@@ -202,6 +202,15 @@ export class ApiService {
   restoreIntegrationBackup(): Observable<{ ok: boolean; message?: string; error?: string }> {
     return this.http.post<any>(`${BASE}/api/integration/restore-backup`, {});
   }
+  autostartStatus(): Observable<{ enabled: boolean; registered_command: string | null }> {
+    return this.http.get<any>(`${BASE}/api/autostart/status`);
+  }
+  autostartEnable(): Observable<{ ok: boolean; registered_command?: string; error?: string }> {
+    return this.http.post<any>(`${BASE}/api/autostart/enable`, {});
+  }
+  autostartDisable(): Observable<{ ok: boolean; error?: string }> {
+    return this.http.post<any>(`${BASE}/api/autostart/disable`, {});
+  }
   diagnostics(): Observable<any> {
     return this.http.get<any>(`${BASE}/api/diagnostics`);
   }

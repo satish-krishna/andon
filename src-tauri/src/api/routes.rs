@@ -45,6 +45,9 @@ pub fn router(state: ApiState) -> Router {
         .route("/api/integration/unpatch", post(integration_unpatch))
         .route("/api/integration/restore-backup", post(integration_restore))
         .route("/api/hooks/tool-use", post(hook_tool_use))
+        .route("/api/autostart/status", get(autostart_status))
+        .route("/api/autostart/enable", post(autostart_enable))
+        .route("/api/autostart/disable", post(autostart_disable))
         .route("/api/diagnostics", get(diagnostics))
         .route("/api/diagnostics/events", get(recent_events))
         .route("/api/diagnostics/export", get(export_diag))
@@ -1402,6 +1405,29 @@ fn lang_from_path(path: &str) -> &'static str {
 }
 
 // ---------- integration: unpatch + restore ----------
+
+// ---------- autostart ----------
+
+async fn autostart_status(State(_state): State<ApiState>) -> Json<serde_json::Value> {
+    Json(json!({
+        "enabled": crate::autostart::is_enabled(),
+        "registered_command": crate::autostart::registered_command(),
+    }))
+}
+
+async fn autostart_enable(State(_state): State<ApiState>) -> Json<serde_json::Value> {
+    match crate::autostart::enable() {
+        Ok(cmd) => Json(json!({"ok": true, "registered_command": cmd})),
+        Err(e) => Json(json!({"ok": false, "error": format!("{e:#}")})),
+    }
+}
+
+async fn autostart_disable(State(_state): State<ApiState>) -> Json<serde_json::Value> {
+    match crate::autostart::disable() {
+        Ok(()) => Json(json!({"ok": true})),
+        Err(e) => Json(json!({"ok": false, "error": format!("{e:#}")})),
+    }
+}
 
 // ---------- claude code hook receiver ----------
 

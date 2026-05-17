@@ -1,4 +1,5 @@
 mod api;
+mod autostart;
 mod config;
 mod db;
 mod diagnostics;
@@ -54,6 +55,11 @@ pub fn run() {
 
     let integration_status = integration::ensure_claude_settings();
     tracing::info!(?integration_status, "claude code integration check complete");
+
+    match autostart::ensure_current() {
+        Ok(outcome) => tracing::info!(?outcome, "autostart ensured"),
+        Err(e) => tracing::warn!(error = ?e, "autostart setup failed (non-fatal)"),
+    }
 
     let pool = match db::init(&paths.db_path) {
         Ok(p) => Arc::new(p),
