@@ -10,7 +10,7 @@ use tauri::{
     menu::{Menu, MenuEvent, MenuItem, PredefinedMenuItem},
     tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent},
 };
-use tracing_subscriber::EnvFilter;
+use tracing_subscriber::{EnvFilter, prelude::*};
 
 const MAIN_WINDOW: &str = "main";
 
@@ -20,20 +20,32 @@ struct AppState {
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
-    tracing_subscriber::fmt()
-        .with_env_filter(
-            EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("info")),
-        )
-        .with_target(false)
-        .init();
-
     let paths = match config::Paths::resolve_and_prepare() {
         Ok(p) => p,
         Err(e) => {
-            tracing::error!(error = ?e, "failed to prepare andon data directory");
+            eprintln!("failed to prepare andon data directory: {e:?}");
             std::process::exit(1);
         }
     };
+
+    let file_appender = tracing_appender::rolling::daily(&paths.data_dir, "log.txt");
+    let (file_writer, _file_guard) = tracing_appender::non_blocking(file_appender);
+    // _file_guard must live as long as the process.
+    Box::leak(Box::new(_file_guard));
+
+    let filter = EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("info"));
+    let stderr_layer = tracing_subscriber::fmt::layer().with_target(false);
+    let file_layer = tracing_subscriber::fmt::layer()
+        .with_target(false)
+        .with_ansi(false)
+        .with_writer(file_writer);
+
+    tracing_subscriber::registry()
+        .with(filter)
+        .with(stderr_layer)
+        .with(file_layer)
+        .init();
+
     tracing::info!(data_dir = %paths.data_dir.display(), "andon starting");
 
     let pool = match db::init(&paths.db_path) {

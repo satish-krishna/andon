@@ -29,6 +29,7 @@ pub fn router(state: ApiState) -> Router {
         .route("/api/control/resume", post(resume_ingestion))
         .route("/api/control/status", get(control_status))
         .route("/api/stats", get(db_stats))
+        .route("/api/open-data-folder", post(open_data_folder))
         .with_state(state)
 }
 
@@ -452,6 +453,21 @@ async fn resume_ingestion(State(state): State<ApiState>) -> Json<serde_json::Val
 }
 async fn control_status(State(state): State<ApiState>) -> Json<serde_json::Value> {
     Json(json!({"paused": state.control.is_paused()}))
+}
+
+async fn open_data_folder(State(state): State<ApiState>) -> Json<serde_json::Value> {
+    let dir = state
+        .db_path
+        .parent()
+        .map(|p| p.to_path_buf())
+        .unwrap_or_else(|| state.db_path.clone());
+    let result = std::process::Command::new("explorer")
+        .arg(dir.as_os_str())
+        .spawn();
+    match result {
+        Ok(_) => Json(json!({"opened": true, "path": dir.display().to_string()})),
+        Err(e) => Json(json!({"opened": false, "error": e.to_string()})),
+    }
 }
 
 async fn db_stats(State(state): State<ApiState>) -> Result<Json<serde_json::Value>, ApiError> {

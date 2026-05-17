@@ -54,4 +54,10 @@ export class ApiService {
   resume(): Observable<{ paused: boolean }> {
     return this.http.post<{ paused: boolean }>(`${BASE}/api/control/resume`, {});
   }
+  openDataFolder(): Observable<{ opened: boolean; path?: string; error?: string }> {
+    return this.http.post<{ opened: boolean; path?: string; error?: string }>(
+      `${BASE}/api/open-data-folder`,
+      {},
+    );
+  }
 }

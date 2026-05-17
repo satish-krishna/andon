@@ -29,7 +29,11 @@ import { PanelComponent } from '../../shared/panel.component';
       </app-panel>
 
       <app-panel title="Database">
-        <div class="text-xs font-mono text-muted break-all">{{ stats()?.db_path }}</div>
+        <div class="flex items-center gap-2">
+          <div class="text-xs font-mono text-muted break-all flex-1">{{ stats()?.db_path }}</div>
+          <button class="px-3 py-1 rounded bg-border hover:bg-border/70 text-xs"
+                  (click)="openFolder()">Open data folder</button>
+        </div>
         @if (stats(); as s) {
           <table class="text-sm font-mono mt-2">
             <tbody>
@@ -85,6 +89,10 @@ export class SettingsComponent implements OnInit {
   toggle() {
     const next = !this.paused();
     (next ? this.api.pause() : this.api.resume()).subscribe((r) => this.paused.set(r.paused));
+  }
+
+  openFolder() {
+    this.api.openDataFolder().subscribe();
   }
 
   tableRows(s: DbStats): [string, number][] {
