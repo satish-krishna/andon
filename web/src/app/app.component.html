@@ -1,23 +1,20 @@
 <div class="grid grid-cols-[200px_1fr] h-screen w-screen">
   <aside class="bg-panel border-r border-border flex flex-col">
     <div class="px-4 py-5 border-b border-border">
-      <div class="text-lg font-semibold tracking-tight">andon</div>
-      <div class="text-xs text-muted mt-0.5">claude code dashboard</div>
+      <div class="text-base font-semibold tracking-tight">andon</div>
+      <div class="text-[10px] text-muted mt-0.5 uppercase tracking-wider">claude code · v0.2.0</div>
     </div>
     <nav class="flex flex-col py-2">
-      <a routerLink="/overview" routerLinkActive="bg-border text-accent"
-         class="px-4 py-2 text-sm text-text hover:bg-border">Overview</a>
-      <a routerLink="/sessions" routerLinkActive="bg-border text-accent"
-         class="px-4 py-2 text-sm text-text hover:bg-border">Sessions</a>
-      <a routerLink="/files" routerLinkActive="bg-border text-accent"
-         class="px-4 py-2 text-sm text-text hover:bg-border">Files</a>
-      <a routerLink="/diagnostics" routerLinkActive="bg-border text-accent"
-         class="px-4 py-2 text-sm text-text hover:bg-border">Diagnostics</a>
-      <a routerLink="/settings" routerLinkActive="bg-border text-accent"
-         class="px-4 py-2 text-sm text-text hover:bg-border">Settings</a>
+      <a routerLink="/overview" routerLinkActive="active" class="nav-link">overview</a>
+      <a routerLink="/sessions" routerLinkActive="active" class="nav-link"
+         [routerLinkActiveOptions]="{ exact: false }">sessions</a>
+      <a routerLink="/files" routerLinkActive="active" class="nav-link">files</a>
+      <a routerLink="/diagnostics" routerLinkActive="active" class="nav-link">diagnostics</a>
+      <a routerLink="/settings" routerLinkActive="active" class="nav-link">settings</a>
     </nav>
-    <div class="mt-auto px-4 py-3 text-[11px] text-muted border-t border-border">
-      v0.1.0
+    <div class="mt-auto px-4 py-3 text-[10px] text-muted border-t border-border font-mono">
+      <div><span class="live-dot"></span>listening</div>
+      <div class="text-[9px] mt-1">:4317 grpc · :4318 http</div>
     </div>
   </aside>
   <main class="overflow-auto">

@@ -1,4 +1,4 @@
-import { HttpClient } from '@angular/common/http';
+import { HttpClient, HttpParams } from '@angular/common/http';
 import { Injectable, inject } from '@angular/core';
 import { Observable } from 'rxjs';
 import {
@@ -14,10 +14,140 @@ import {
 
 const BASE = 'http://127.0.0.1:8765';
 
+export interface FilterArgs {
+  fromMs?: number;
+  toMs?: number;
+  models?: string;
+  search?: string;
+  sort?: string;
+  langs?: string;
+  limit?: number;
+}
+
+export interface V2Kpis {
+  window: { from: number; to: number; label: string };
+  cost: {
+    current: number;
+    previous: number;
+    delta_pct: number | null;
+    projected_eom: number;
+    day_of_month: number;
+    days_in_month: number;
+  };
+  sessions: { current: number; previous: number; delta_pct: number | null; pace: number };
+  tokens: {
+    input: { current: number; previous: number; delta_pct: number | null };
+    output: { current: number; previous: number; delta_pct: number | null };
+    cache_read: { current: number };
+    cache_create: { current: number };
+  };
+}
+
+export interface V2Tape {
+  month: string;
+  days_in_month: number;
+  today_day: number | null;
+  current: number[];
+  previous: number[];
+}
+
+export interface V2CostByModel {
+  model: string;
+  cost_usd: number;
+}
+
+export interface V2AcceptLang {
+  language: string;
+  accept_rate: number;
+  total: number;
+}
+
+export interface V2ActiveTime {
+  user_seconds: number;
+  cli_seconds: number;
+  total_seconds: number;
+}
+
+export interface V2Session {
+  session_id: string;
+  started_at: number;
+  ended_at: number | null;
+  service_version: string | null;
+  host_arch: string | null;
+  os_type: string | null;
+  cost_usd: number;
+  tokens_input: number;
+  tokens_output: number;
+  accepts: number;
+  rejects: number;
+  aborts: number;
+  duration_seconds: number;
+  top_model: string | null;
+  api_calls: number;
+  decisions: number;
+}
+
+export interface V2FileRow {
+  file_path: string;
+  edits: number;
+  added: number;
+  removed: number;
+  last_ts: number;
+  accept_rate: number;
+  decision_count: number;
+  lang: string;
+}
+
+export interface V2FilesResponse {
+  files: V2FileRow[];
+  lang_breakdown: { lang: string; edits: number }[];
+  totals: { files: number; edits: number; added: number; removed: number };
+}
+
+function toParams(args?: FilterArgs): HttpParams {
+  let p = new HttpParams();
+  if (!args) return p;
+  if (args.fromMs !== undefined) p = p.set('from', String(args.fromMs));
+  if (args.toMs !== undefined) p = p.set('to', String(args.toMs));
+  if (args.models) p = p.set('models', args.models);
+  if (args.search) p = p.set('search', args.search);
+  if (args.sort) p = p.set('sort', args.sort);
+  if (args.langs) p = p.set('langs', args.langs);
+  if (args.limit !== undefined) p = p.set('limit', String(args.limit));
+  return p;
+}
+
 @Injectable({ providedIn: 'root' })
 export class ApiService {
   private http = inject(HttpClient);
 
+  // ----- v2 (filterable) -----
+  kpis(args?: FilterArgs): Observable<V2Kpis> {
+    return this.http.get<V2Kpis>(`${BASE}/api/v2/kpis`, { params: toParams(args) });
+  }
+  tape(month?: string, models?: string): Observable<V2Tape> {
+    let p = new HttpParams();
+    if (month) p = p.set('month', month);
+    if (models) p = p.set('models', models);
+    return this.http.get<V2Tape>(`${BASE}/api/v2/tape`, { params: p });
+  }
+  costByModel(args?: FilterArgs): Observable<V2CostByModel[]> {
+    return this.http.get<V2CostByModel[]>(`${BASE}/api/v2/cost-by-model`, { params: toParams(args) });
+  }
+  acceptByLanguageV2(args?: FilterArgs): Observable<V2AcceptLang[]> {
+    return this.http.get<V2AcceptLang[]>(`${BASE}/api/v2/accept-by-language`, { params: toParams(args) });
+  }
+  activeTime(args?: FilterArgs): Observable<V2ActiveTime> {
+    return this.http.get<V2ActiveTime>(`${BASE}/api/v2/active-time`, { params: toParams(args) });
+  }
+  sessionsV2(args?: FilterArgs): Observable<V2Session[]> {
+    return this.http.get<V2Session[]>(`${BASE}/api/v2/sessions`, { params: toParams(args) });
+  }
+  files(args?: FilterArgs): Observable<V2FilesResponse> {
+    return this.http.get<V2FilesResponse>(`${BASE}/api/v2/files`, { params: toParams(args) });
+  }
+
+  // ----- legacy + non-filterable -----
   overviewToday(): Observable<OverviewToday> {
     return this.http.get<OverviewToday>(`${BASE}/api/overview/today`);
   }
@@ -65,6 +195,12 @@ export class ApiService {
   }
   reapplyIntegration(): Observable<IntegrationStatus> {
     return this.http.post<IntegrationStatus>(`${BASE}/api/integration/reapply`, {});
+  }
+  unpatchIntegration(): Observable<{ ok: boolean; message?: string; error?: string }> {
+    return this.http.post<any>(`${BASE}/api/integration/unpatch`, {});
+  }
+  restoreIntegrationBackup(): Observable<{ ok: boolean; message?: string; error?: string }> {
+    return this.http.post<any>(`${BASE}/api/integration/restore-backup`, {});
   }
   diagnostics(): Observable<any> {
     return this.http.get<any>(`${BASE}/api/diagnostics`);
