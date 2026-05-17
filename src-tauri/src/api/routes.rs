@@ -7,7 +7,7 @@ use axum::{
     response::IntoResponse,
     routing::{get, post},
 };
-use chrono::{Local, TimeZone};
+use chrono::{Datelike, Days, Local, NaiveDate, TimeZone};
 use rusqlite::params;
 use serde::Deserialize;
 use serde_json::json;
@@ -17,6 +17,7 @@ use super::{ApiState, dto::*};
 pub fn router(state: ApiState) -> Router {
     Router::new()
         .route("/api/health", get(health))
+        // legacy v1 endpoints (kept for compat)
         .route("/api/overview/today", get(overview_today))
         .route("/api/overview/cost-by-day", get(cost_by_day))
         .route("/api/overview/tokens-by-day", get(tokens_by_day))
@@ -25,6 +26,15 @@ pub fn router(state: ApiState) -> Router {
         .route("/api/sessions", get(list_sessions))
         .route("/api/sessions/:id", get(session_detail))
         .route("/api/files/heatmap", get(files_heatmap))
+        // v2 — filterable
+        .route("/api/v2/kpis", get(v2_kpis))
+        .route("/api/v2/tape", get(v2_tape))
+        .route("/api/v2/cost-by-model", get(v2_cost_by_model))
+        .route("/api/v2/accept-by-language", get(v2_accept_by_language))
+        .route("/api/v2/active-time", get(v2_active_time))
+        .route("/api/v2/sessions", get(v2_sessions))
+        .route("/api/v2/files", get(v2_files))
+        // control + system
         .route("/api/control/pause", post(pause_ingestion))
         .route("/api/control/resume", post(resume_ingestion))
         .route("/api/control/status", get(control_status))
@@ -32,6 +42,8 @@ pub fn router(state: ApiState) -> Router {
         .route("/api/open-data-folder", post(open_data_folder))
         .route("/api/integration/status", get(integration_status))
         .route("/api/integration/reapply", post(integration_reapply))
+        .route("/api/integration/unpatch", post(integration_unpatch))
+        .route("/api/integration/restore-backup", post(integration_restore))
         .route("/api/diagnostics", get(diagnostics))
         .route("/api/diagnostics/events", get(recent_events))
         .route("/api/diagnostics/export", get(export_diag))
@@ -698,5 +710,708 @@ impl From<rusqlite::Error> for ApiError {
 impl IntoResponse for ApiError {
     fn into_response(self) -> axum::response::Response {
         (self.status, Json(json!({"error": self.message}))).into_response()
+    }
+}
+
+// ============================================================================
+// v2 — filterable endpoints
+// ============================================================================
+
+#[derive(Deserialize)]
+struct FilterQuery {
+    from: Option<i64>,         // unix ms
+    to: Option<i64>,           // unix ms
+    models: Option<String>,    // comma-separated
+}
+
+impl FilterQuery {
+    fn window(&self) -> (i64, i64) {
+        let (default_from, default_to) = current_month_bounds();
+        (self.from.unwrap_or(default_from), self.to.unwrap_or(default_to))
+    }
+    fn model_list(&self) -> Vec<String> {
+        self.models
+            .as_deref()
+            .map(|s| {
+                s.split(',')
+                    .map(|x| x.trim().to_string())
+                    .filter(|x| !x.is_empty())
+                    .collect()
+            })
+            .unwrap_or_default()
+    }
+    fn model_clause(&self, col: &str) -> (String, Vec<String>) {
+        let models = self.model_list();
+        if models.is_empty() {
+            (String::new(), vec![])
+        } else {
+            let placeholders = models.iter().map(|_| "?").collect::<Vec<_>>().join(",");
+            (format!(" AND {col} IN ({placeholders})"), models)
+        }
+    }
+}
+
+fn current_month_bounds() -> (i64, i64) {
+    let now = Local::now();
+    let start = now
+        .date_naive()
+        .with_day(1)
+        .unwrap_or(now.date_naive())
+        .and_hms_opt(0, 0, 0)
+        .unwrap();
+    let from = Local
+        .from_local_datetime(&start)
+        .single()
+        .map(|d| d.timestamp_millis())
+        .unwrap_or(0);
+    let (_, today_to) = today_bounds();
+    (from, today_to)
+}
+
+fn prev_month_same_day_window(from: i64) -> (i64, i64) {
+    // Compute "the same span, shifted back by ~1 month."
+    let now = Local::now();
+    let day_of_month = now.day();
+    let prev_month_start = now
+        .date_naive()
+        .with_day(1)
+        .and_then(|d| {
+            if d.month() == 1 {
+                NaiveDate::from_ymd_opt(d.year() - 1, 12, 1)
+            } else {
+                NaiveDate::from_ymd_opt(d.year(), d.month() - 1, 1)
+            }
+        })
+        .unwrap_or(now.date_naive());
+    let prev_month_target = prev_month_start
+        .with_day(day_of_month)
+        .unwrap_or(prev_month_start);
+    let prev_from = Local
+        .from_local_datetime(&prev_month_start.and_hms_opt(0, 0, 0).unwrap())
+        .single()
+        .map(|d| d.timestamp_millis())
+        .unwrap_or(0);
+    let prev_to = Local
+        .from_local_datetime(&prev_month_target.and_hms_opt(23, 59, 59).unwrap())
+        .single()
+        .map(|d| d.timestamp_millis())
+        .unwrap_or(0);
+    let _ = from;
+    (prev_from, prev_to)
+}
+
+fn delta_pct(current: f64, previous: f64) -> Option<f64> {
+    if previous == 0.0 {
+        None
+    } else {
+        Some(round4((current - previous) / previous))
+    }
+}
+
+fn sum_cost(conn: &rusqlite::Connection, from: i64, to: i64, models: &FilterQuery) -> f64 {
+    let (m_sql, m_vals) = models.model_clause("model");
+    let sql = format!(
+        "SELECT COALESCE(SUM(cost_usd), 0) FROM cost_entries
+         WHERE timestamp >= ? AND timestamp < ?{m_sql}"
+    );
+    let mut p: Vec<Box<dyn rusqlite::ToSql>> =
+        vec![Box::new(from), Box::new(to)];
+    for v in m_vals {
+        p.push(Box::new(v));
+    }
+    let refs: Vec<&dyn rusqlite::ToSql> = p.iter().map(|b| &**b).collect();
+    conn.query_row(&sql, refs.as_slice(), |r| r.get::<_, f64>(0))
+        .unwrap_or(0.0)
+}
+
+fn count_sessions(conn: &rusqlite::Connection, from: i64, to: i64, models: &FilterQuery) -> i64 {
+    let model_list = models.model_list();
+    if model_list.is_empty() {
+        conn.query_row(
+            "SELECT COUNT(DISTINCT session_id) FROM sessions
+             WHERE started_at >= ?1 AND started_at < ?2",
+            params![from, to],
+            |r| r.get(0),
+        )
+        .unwrap_or(0)
+    } else {
+        let placeholders = model_list.iter().map(|_| "?").collect::<Vec<_>>().join(",");
+        let sql = format!(
+            "SELECT COUNT(DISTINCT s.session_id) FROM sessions s
+             WHERE s.started_at >= ? AND s.started_at < ?
+             AND EXISTS (SELECT 1 FROM cost_entries c
+                         WHERE c.session_id = s.session_id AND c.model IN ({placeholders}))"
+        );
+        let mut p: Vec<Box<dyn rusqlite::ToSql>> = vec![Box::new(from), Box::new(to)];
+        for v in &model_list {
+            p.push(Box::new(v.clone()));
+        }
+        let refs: Vec<&dyn rusqlite::ToSql> = p.iter().map(|b| &**b).collect();
+        conn.query_row(&sql, refs.as_slice(), |r| r.get(0)).unwrap_or(0)
+    }
+}
+
+fn sum_tokens(
+    conn: &rusqlite::Connection,
+    from: i64,
+    to: i64,
+    token_type: &str,
+    models: &FilterQuery,
+) -> i64 {
+    let (m_sql, m_vals) = models.model_clause("model");
+    let sql = format!(
+        "SELECT COALESCE(SUM(count), 0) FROM token_usage
+         WHERE token_type = ? AND timestamp >= ? AND timestamp < ?{m_sql}"
+    );
+    let mut p: Vec<Box<dyn rusqlite::ToSql>> = vec![
+        Box::new(token_type.to_string()),
+        Box::new(from),
+        Box::new(to),
+    ];
+    for v in m_vals {
+        p.push(Box::new(v));
+    }
+    let refs: Vec<&dyn rusqlite::ToSql> = p.iter().map(|b| &**b).collect();
+    conn.query_row(&sql, refs.as_slice(), |r| r.get(0)).unwrap_or(0)
+}
+
+async fn v2_kpis(
+    State(state): State<ApiState>,
+    Query(q): Query<FilterQuery>,
+) -> Result<Json<serde_json::Value>, ApiError> {
+    let (from, to) = q.window();
+    let (prev_from, prev_to) = prev_month_same_day_window(from);
+    let conn = state.pool.get().map_err(ApiError::pool)?;
+
+    let cost = sum_cost(&conn, from, to, &q);
+    let sessions = count_sessions(&conn, from, to, &q);
+    let tok_in = sum_tokens(&conn, from, to, "input", &q);
+    let tok_out = sum_tokens(&conn, from, to, "output", &q);
+    let tok_cache_r = sum_tokens(&conn, from, to, "cacheRead", &q);
+    let tok_cache_c = sum_tokens(&conn, from, to, "cacheCreation", &q);
+
+    let prev_cost = sum_cost(&conn, prev_from, prev_to, &q);
+    let prev_sessions = count_sessions(&conn, prev_from, prev_to, &q);
+    let prev_tok_in = sum_tokens(&conn, prev_from, prev_to, "input", &q);
+    let prev_tok_out = sum_tokens(&conn, prev_from, prev_to, "output", &q);
+
+    // pace + projection (only meaningful for monthly window)
+    let now = Local::now();
+    let day_of_month = now.day() as i64;
+    let days_in_month = days_in_current_month();
+    let projected_eom = if day_of_month > 0 {
+        (cost / day_of_month as f64) * days_in_month as f64
+    } else {
+        cost
+    };
+    let session_pace = if day_of_month > 0 {
+        (sessions as f64 / day_of_month as f64) * days_in_month as f64
+    } else {
+        sessions as f64
+    };
+
+    Ok(Json(json!({
+        "window": { "from": from, "to": to, "label": format!("{:04}-{:02}", now.year(), now.month()) },
+        "cost": {
+            "current": round4(cost),
+            "previous": round4(prev_cost),
+            "delta_pct": delta_pct(cost, prev_cost),
+            "projected_eom": round4(projected_eom),
+            "day_of_month": day_of_month,
+            "days_in_month": days_in_month,
+        },
+        "sessions": {
+            "current": sessions,
+            "previous": prev_sessions,
+            "delta_pct": delta_pct(sessions as f64, prev_sessions as f64),
+            "pace": session_pace.round() as i64,
+        },
+        "tokens": {
+            "input":         { "current": tok_in,       "previous": prev_tok_in,  "delta_pct": delta_pct(tok_in as f64, prev_tok_in as f64) },
+            "output":        { "current": tok_out,      "previous": prev_tok_out, "delta_pct": delta_pct(tok_out as f64, prev_tok_out as f64) },
+            "cache_read":    { "current": tok_cache_r },
+            "cache_create":  { "current": tok_cache_c },
+        },
+    })))
+}
+
+fn days_in_current_month() -> i64 {
+    let now = Local::now().date_naive();
+    let first = now.with_day(1).unwrap();
+    let next = if first.month() == 12 {
+        NaiveDate::from_ymd_opt(first.year() + 1, 1, 1).unwrap()
+    } else {
+        NaiveDate::from_ymd_opt(first.year(), first.month() + 1, 1).unwrap()
+    };
+    (next - first).num_days()
+}
+
+#[derive(Deserialize)]
+struct TapeQuery {
+    month: Option<String>,    // YYYY-MM; defaults to current
+    models: Option<String>,
+}
+
+async fn v2_tape(
+    State(state): State<ApiState>,
+    Query(q): Query<TapeQuery>,
+) -> Result<Json<serde_json::Value>, ApiError> {
+    let now = Local::now();
+    let (year, month) = match q.month.as_deref() {
+        Some(s) if s.len() == 7 => {
+            let y: i32 = s[..4].parse().unwrap_or(now.year());
+            let m: u32 = s[5..].parse().unwrap_or(now.month());
+            (y, m)
+        }
+        _ => (now.year(), now.month()),
+    };
+    let conn = state.pool.get().map_err(ApiError::pool)?;
+    let models = FilterQuery {
+        from: None,
+        to: None,
+        models: q.models.clone(),
+    };
+
+    let current = tape_for_month(&conn, year, month, &models);
+    let (py, pm) = if month == 1 {
+        (year - 1, 12u32)
+    } else {
+        (year, month - 1)
+    };
+    let previous = tape_for_month(&conn, py, pm, &models);
+
+    let today_day = if year == now.year() && month == now.month() {
+        Some(now.day() as i64)
+    } else {
+        None
+    };
+
+    Ok(Json(json!({
+        "month": format!("{year:04}-{month:02}"),
+        "days_in_month": current.len(),
+        "today_day": today_day,
+        "current": current,
+        "previous": previous,
+    })))
+}
+
+fn tape_for_month(
+    conn: &rusqlite::Connection,
+    year: i32,
+    month: u32,
+    models: &FilterQuery,
+) -> Vec<f64> {
+    let first = NaiveDate::from_ymd_opt(year, month, 1).unwrap();
+    let next = if month == 12 {
+        NaiveDate::from_ymd_opt(year + 1, 1, 1).unwrap()
+    } else {
+        NaiveDate::from_ymd_opt(year, month + 1, 1).unwrap()
+    };
+    let days = (next - first).num_days() as usize;
+    let mut bins = vec![0f64; days];
+    let from = Local
+        .from_local_datetime(&first.and_hms_opt(0, 0, 0).unwrap())
+        .single()
+        .map(|d| d.timestamp_millis())
+        .unwrap_or(0);
+    let to = Local
+        .from_local_datetime(&next.and_hms_opt(0, 0, 0).unwrap())
+        .single()
+        .map(|d| d.timestamp_millis())
+        .unwrap_or(i64::MAX);
+    let (m_sql, m_vals) = models.model_clause("model");
+    let sql = format!(
+        "SELECT timestamp, cost_usd FROM cost_entries
+         WHERE timestamp >= ? AND timestamp < ?{m_sql}"
+    );
+    let mut p: Vec<Box<dyn rusqlite::ToSql>> = vec![Box::new(from), Box::new(to)];
+    for v in m_vals {
+        p.push(Box::new(v));
+    }
+    let refs: Vec<&dyn rusqlite::ToSql> = p.iter().map(|b| &**b).collect();
+    if let Ok(mut stmt) = conn.prepare(&sql) {
+        if let Ok(rows) = stmt.query_map(refs.as_slice(), |r| {
+            Ok((r.get::<_, i64>(0)?, r.get::<_, f64>(1)?))
+        }) {
+            for (ts_ms, cost) in rows.flatten() {
+                if let Some(dt) = Local.timestamp_millis_opt(ts_ms).single() {
+                    let d = dt.day() as usize;
+                    if d >= 1 && d <= days {
+                        bins[d - 1] += cost;
+                    }
+                }
+            }
+        }
+    }
+    bins.iter().map(|v| round4(*v)).collect()
+}
+
+async fn v2_cost_by_model(
+    State(state): State<ApiState>,
+    Query(q): Query<FilterQuery>,
+) -> Result<Json<Vec<serde_json::Value>>, ApiError> {
+    let (from, to) = q.window();
+    let (m_sql, m_vals) = q.model_clause("model");
+    let conn = state.pool.get().map_err(ApiError::pool)?;
+    let sql = format!(
+        "SELECT model, SUM(cost_usd) FROM cost_entries
+         WHERE timestamp >= ? AND timestamp < ?{m_sql}
+         GROUP BY model ORDER BY 2 DESC"
+    );
+    let mut p: Vec<Box<dyn rusqlite::ToSql>> = vec![Box::new(from), Box::new(to)];
+    for v in m_vals {
+        p.push(Box::new(v));
+    }
+    let refs: Vec<&dyn rusqlite::ToSql> = p.iter().map(|b| &**b).collect();
+    let mut stmt = conn.prepare(&sql)?;
+    let rows = stmt.query_map(refs.as_slice(), |r| {
+        Ok((r.get::<_, String>(0)?, r.get::<_, f64>(1).unwrap_or(0.0)))
+    })?;
+    let out: Vec<serde_json::Value> = rows
+        .flatten()
+        .map(|(m, c)| json!({ "model": m, "cost_usd": round4(c) }))
+        .collect();
+    Ok(Json(out))
+}
+
+async fn v2_accept_by_language(
+    State(state): State<ApiState>,
+    Query(q): Query<FilterQuery>,
+) -> Result<Json<Vec<serde_json::Value>>, ApiError> {
+    let (from, to) = q.window();
+    let conn = state.pool.get().map_err(ApiError::pool)?;
+    let mut stmt = conn.prepare(
+        "SELECT COALESCE(language, 'unknown') AS lang,
+                SUM(CASE WHEN decision='accept' THEN 1 ELSE 0 END) AS a,
+                SUM(CASE WHEN decision='reject' THEN 1 ELSE 0 END) AS r,
+                SUM(CASE WHEN decision='abort'  THEN 1 ELSE 0 END) AS x,
+                COUNT(*) AS total
+         FROM tool_decisions
+         WHERE timestamp >= ?1 AND timestamp < ?2
+         GROUP BY lang ORDER BY total DESC",
+    )?;
+    let rows = stmt.query_map(params![from, to], |r| {
+        Ok((
+            r.get::<_, String>(0)?,
+            r.get::<_, i64>(1)?,
+            r.get::<_, i64>(2)?,
+            r.get::<_, i64>(3)?,
+            r.get::<_, i64>(4)?,
+        ))
+    })?;
+    let out: Vec<serde_json::Value> = rows
+        .flatten()
+        .map(|(lang, a, r, x, total)| {
+            json!({
+                "language": lang,
+                "accept_rate": accept_rate(a, r, x),
+                "total": total,
+            })
+        })
+        .collect();
+    Ok(Json(out))
+}
+
+async fn v2_active_time(
+    State(state): State<ApiState>,
+    Query(q): Query<FilterQuery>,
+) -> Result<Json<serde_json::Value>, ApiError> {
+    let (from, to) = q.window();
+    let conn = state.pool.get().map_err(ApiError::pool)?;
+    let user: f64 = conn
+        .query_row(
+            "SELECT COALESCE(SUM(seconds), 0) FROM active_time
+             WHERE kind='user' AND timestamp >= ?1 AND timestamp < ?2",
+            params![from, to],
+            |r| r.get(0),
+        )
+        .unwrap_or(0.0);
+    let cli: f64 = conn
+        .query_row(
+            "SELECT COALESCE(SUM(seconds), 0) FROM active_time
+             WHERE kind='cli' AND timestamp >= ?1 AND timestamp < ?2",
+            params![from, to],
+            |r| r.get(0),
+        )
+        .unwrap_or(0.0);
+    Ok(Json(json!({
+        "user_seconds": user,
+        "cli_seconds": cli,
+        "total_seconds": user + cli,
+    })))
+}
+
+#[derive(Deserialize)]
+struct V2SessionsQuery {
+    from: Option<i64>,
+    to: Option<i64>,
+    models: Option<String>,
+    search: Option<String>,
+    sort: Option<String>, // time | cost | duration | decisions
+    #[serde(default = "default_limit")]
+    limit: i64,
+}
+
+async fn v2_sessions(
+    State(state): State<ApiState>,
+    Query(q): Query<V2SessionsQuery>,
+) -> Result<Json<Vec<serde_json::Value>>, ApiError> {
+    let filt = FilterQuery {
+        from: q.from,
+        to: q.to,
+        models: q.models.clone(),
+    };
+    let (from, to) = filt.window();
+    let limit = q.limit.clamp(1, 1000);
+    let conn = state.pool.get().map_err(ApiError::pool)?;
+
+    let model_list = filt.model_list();
+    let model_filter_sql = if model_list.is_empty() {
+        String::new()
+    } else {
+        let placeholders = model_list.iter().map(|_| "?").collect::<Vec<_>>().join(",");
+        format!(
+            " AND EXISTS (SELECT 1 FROM cost_entries c
+                          WHERE c.session_id = s.session_id AND c.model IN ({placeholders}))"
+        )
+    };
+    let search_sql = if let Some(_) = q.search.as_deref() {
+        " AND (s.session_id LIKE ? OR EXISTS (SELECT 1 FROM file_changes f
+            WHERE f.session_id = s.session_id AND f.file_path LIKE ?))"
+    } else {
+        ""
+    };
+    let order = match q.sort.as_deref().unwrap_or("time") {
+        "cost"      => "ORDER BY cost DESC",
+        "duration"  => "ORDER BY duration_seconds DESC",
+        "decisions" => "ORDER BY decisions DESC",
+        _           => "ORDER BY s.started_at DESC",
+    };
+
+    let sql = format!(
+        "SELECT s.session_id, s.started_at, s.ended_at, s.service_version, s.host_arch, s.os_type,
+                COALESCE((SELECT SUM(cost_usd) FROM cost_entries WHERE session_id = s.session_id), 0) AS cost,
+                COALESCE((SELECT SUM(count) FROM token_usage WHERE session_id = s.session_id AND token_type='input'), 0) AS tok_in,
+                COALESCE((SELECT SUM(count) FROM token_usage WHERE session_id = s.session_id AND token_type='output'), 0) AS tok_out,
+                COALESCE((SELECT COUNT(*) FROM tool_decisions WHERE session_id = s.session_id AND decision='accept'), 0) AS accepts,
+                COALESCE((SELECT COUNT(*) FROM tool_decisions WHERE session_id = s.session_id AND decision='reject'), 0) AS rejects,
+                COALESCE((SELECT COUNT(*) FROM tool_decisions WHERE session_id = s.session_id AND decision='abort'), 0) AS aborts,
+                COALESCE((SELECT SUM(seconds) FROM active_time WHERE session_id = s.session_id), 0) AS duration_seconds,
+                (SELECT model FROM cost_entries WHERE session_id = s.session_id ORDER BY cost_usd DESC LIMIT 1) AS top_model,
+                COALESCE((SELECT COUNT(*) FROM cost_entries WHERE session_id = s.session_id), 0) AS api_calls,
+                ((SELECT COUNT(*) FROM tool_decisions WHERE session_id = s.session_id AND decision='accept')
+                 + (SELECT COUNT(*) FROM tool_decisions WHERE session_id = s.session_id AND decision='reject')
+                 + (SELECT COUNT(*) FROM tool_decisions WHERE session_id = s.session_id AND decision='abort')) AS decisions
+         FROM sessions s
+         WHERE s.started_at >= ? AND s.started_at <= ?{model_filter_sql}{search_sql}
+         {order}
+         LIMIT ?"
+    );
+
+    let search_like = q.search.as_deref().map(|s| format!("%{s}%"));
+    let mut p: Vec<Box<dyn rusqlite::ToSql>> = vec![Box::new(from), Box::new(to)];
+    for v in &model_list {
+        p.push(Box::new(v.clone()));
+    }
+    if let Some(s) = &search_like {
+        p.push(Box::new(s.clone()));
+        p.push(Box::new(s.clone()));
+    }
+    p.push(Box::new(limit));
+    let refs: Vec<&dyn rusqlite::ToSql> = p.iter().map(|b| &**b).collect();
+
+    let mut stmt = conn.prepare(&sql)?;
+    let rows = stmt.query_map(refs.as_slice(), |r| {
+        Ok(json!({
+            "session_id":      r.get::<_, String>(0)?,
+            "started_at":      r.get::<_, i64>(1)?,
+            "ended_at":        r.get::<_, Option<i64>>(2)?,
+            "service_version": r.get::<_, Option<String>>(3)?,
+            "host_arch":       r.get::<_, Option<String>>(4)?,
+            "os_type":         r.get::<_, Option<String>>(5)?,
+            "cost_usd":        round4(r.get::<_, f64>(6).unwrap_or(0.0)),
+            "tokens_input":    r.get::<_, i64>(7)?,
+            "tokens_output":   r.get::<_, i64>(8)?,
+            "accepts":         r.get::<_, i64>(9)?,
+            "rejects":         r.get::<_, i64>(10)?,
+            "aborts":          r.get::<_, i64>(11)?,
+            "duration_seconds":r.get::<_, f64>(12).unwrap_or(0.0),
+            "top_model":       r.get::<_, Option<String>>(13)?,
+            "api_calls":       r.get::<_, i64>(14)?,
+            "decisions":       r.get::<_, i64>(15)?,
+        }))
+    })?;
+    Ok(Json(rows.flatten().collect()))
+}
+
+#[derive(Deserialize)]
+struct V2FilesQuery {
+    from: Option<i64>,
+    to: Option<i64>,
+    langs: Option<String>,
+    search: Option<String>,
+    sort: Option<String>, // edits | accept | recent | churn
+}
+
+async fn v2_files(
+    State(state): State<ApiState>,
+    Query(q): Query<V2FilesQuery>,
+) -> Result<Json<serde_json::Value>, ApiError> {
+    let filt = FilterQuery { from: q.from, to: q.to, models: None };
+    let (from, to) = filt.window();
+    let conn = state.pool.get().map_err(ApiError::pool)?;
+
+    // file list: pull edits + accept + churn + last_ts from file_changes & tool_decisions
+    let mut stmt = conn.prepare(
+        "WITH edits AS (
+             SELECT COALESCE(file_path, '?') AS f,
+                    COUNT(*) AS edits,
+                    SUM(lines_added) AS added,
+                    SUM(lines_removed) AS removed,
+                    MAX(timestamp) AS last_ts
+             FROM file_changes WHERE timestamp >= ?1 AND timestamp < ?2
+             GROUP BY f
+         ),
+         decs AS (
+             SELECT COALESCE(file_path, '?') AS f,
+                    SUM(CASE WHEN decision='accept' THEN 1 ELSE 0 END) AS a,
+                    SUM(CASE WHEN decision='reject' THEN 1 ELSE 0 END) AS r,
+                    SUM(CASE WHEN decision='abort'  THEN 1 ELSE 0 END) AS x,
+                    MAX(language) AS lang
+             FROM tool_decisions WHERE timestamp >= ?1 AND timestamp < ?2
+             GROUP BY f
+         )
+         SELECT e.f, e.edits, e.added, e.removed, e.last_ts,
+                COALESCE(d.a, 0), COALESCE(d.r, 0), COALESCE(d.x, 0),
+                COALESCE(d.lang, '?')
+         FROM edits e LEFT JOIN decs d ON d.f = e.f",
+    )?;
+    let langs: Vec<String> = q
+        .langs
+        .as_deref()
+        .map(|s| s.split(',').map(|x| x.trim().to_string()).filter(|x| !x.is_empty()).collect())
+        .unwrap_or_default();
+    let search_like = q.search.as_deref().filter(|s| !s.is_empty()).map(|s| s.to_lowercase());
+
+    let mut rows: Vec<serde_json::Value> = stmt
+        .query_map(params![from, to], |r| {
+            let path: String = r.get(0)?;
+            let edits: i64 = r.get(1)?;
+            let added: i64 = r.get::<_, i64>(2).unwrap_or(0);
+            let removed: i64 = r.get::<_, i64>(3).unwrap_or(0);
+            let last_ts: i64 = r.get(4)?;
+            let a: i64 = r.get(5)?;
+            let rej: i64 = r.get(6)?;
+            let abr: i64 = r.get(7)?;
+            let lang: String = r.get(8)?;
+            let lang = if lang == "?" { lang_from_path(&path).to_string() } else { lang };
+            Ok(json!({
+                "file_path": path,
+                "edits": edits,
+                "added": added,
+                "removed": removed,
+                "last_ts": last_ts,
+                "accept_rate": accept_rate(a, rej, abr),
+                "decision_count": a + rej + abr,
+                "lang": lang,
+            }))
+        })?
+        .flatten()
+        .collect();
+
+    if !langs.is_empty() {
+        rows.retain(|v| {
+            v.get("lang")
+                .and_then(|l| l.as_str())
+                .map(|l| langs.iter().any(|x| x == l))
+                .unwrap_or(false)
+        });
+    }
+    if let Some(s) = &search_like {
+        rows.retain(|v| {
+            v.get("file_path")
+                .and_then(|p| p.as_str())
+                .map(|p| p.to_lowercase().contains(s))
+                .unwrap_or(false)
+        });
+    }
+
+    match q.sort.as_deref().unwrap_or("edits") {
+        "edits"  => rows.sort_by(|a, b| b["edits"].as_i64().unwrap_or(0).cmp(&a["edits"].as_i64().unwrap_or(0))),
+        "accept" => rows.sort_by(|a, b| b["accept_rate"].as_f64().unwrap_or(0.0).partial_cmp(&a["accept_rate"].as_f64().unwrap_or(0.0)).unwrap_or(std::cmp::Ordering::Equal)),
+        "recent" => rows.sort_by(|a, b| b["last_ts"].as_i64().unwrap_or(0).cmp(&a["last_ts"].as_i64().unwrap_or(0))),
+        "churn"  => rows.sort_by(|a, b| {
+            let av = a["added"].as_i64().unwrap_or(0) + a["removed"].as_i64().unwrap_or(0);
+            let bv = b["added"].as_i64().unwrap_or(0) + b["removed"].as_i64().unwrap_or(0);
+            bv.cmp(&av)
+        }),
+        _ => {}
+    }
+
+    // lang breakdown
+    let mut by_lang: BTreeMap<String, i64> = BTreeMap::new();
+    for r in &rows {
+        let l = r["lang"].as_str().unwrap_or("?").to_string();
+        let e = r["edits"].as_i64().unwrap_or(0);
+        *by_lang.entry(l).or_insert(0) += e;
+    }
+    let lang_breakdown: Vec<serde_json::Value> = by_lang
+        .into_iter()
+        .map(|(l, n)| json!({ "lang": l, "edits": n }))
+        .collect();
+
+    let total_edits: i64 = rows.iter().map(|r| r["edits"].as_i64().unwrap_or(0)).sum();
+    let total_added: i64 = rows.iter().map(|r| r["added"].as_i64().unwrap_or(0)).sum();
+    let total_removed: i64 = rows.iter().map(|r| r["removed"].as_i64().unwrap_or(0)).sum();
+
+    Ok(Json(json!({
+        "files": rows,
+        "lang_breakdown": lang_breakdown,
+        "totals": {
+            "files": rows.iter().filter(|_| true).count(),
+            "edits": total_edits,
+            "added": total_added,
+            "removed": total_removed,
+        },
+    })))
+}
+
+fn lang_from_path(path: &str) -> &'static str {
+    let lower = path.to_lowercase();
+    let ext = lower.rsplit('.').next().unwrap_or("");
+    match ext {
+        "rs"                          => "rust",
+        "ts" | "tsx"                  => "typescript",
+        "js" | "jsx" | "mjs" | "cjs"  => "javascript",
+        "py"                          => "python",
+        "go"                          => "go",
+        "java" | "kt"                 => "jvm",
+        "c" | "cc" | "cpp" | "h" | "hpp" => "c++",
+        "cs"                          => "csharp",
+        "rb"                          => "ruby",
+        "html" | "htm"                => "html",
+        "css" | "scss" | "sass"       => "css",
+        "json"                        => "json",
+        "toml"                        => "toml",
+        "yaml" | "yml"                => "yaml",
+        "md" | "markdown"             => "md",
+        "sh" | "bash" | "zsh"         => "shell",
+        _                             => "other",
+    }
+}
+
+// ---------- integration: unpatch + restore ----------
+
+async fn integration_unpatch(State(_state): State<ApiState>) -> Json<serde_json::Value> {
+    match crate::integration::unpatch_claude_settings() {
+        Ok(msg) => Json(json!({"ok": true, "message": msg})),
+        Err(e) => Json(json!({"ok": false, "error": format!("{e:#}")})),
+    }
+}
+
+async fn integration_restore(State(_state): State<ApiState>) -> Json<serde_json::Value> {
+    match crate::integration::restore_backup() {
+        Ok(msg) => Json(json!({"ok": true, "message": msg})),
+        Err(e) => Json(json!({"ok": false, "error": format!("{e:#}")})),
     }
 }

@@ -126,3 +126,63 @@ fn settings_path() -> Result<PathBuf> {
     let home = dirs::home_dir().context("resolve home directory")?;
     Ok(home.join(".claude").join("settings.json"))
 }
+
+/// Remove andon's OTel env vars from claude settings.json, leaving everything
+/// else intact. Backup the current file first.
+pub fn unpatch_claude_settings() -> Result<String> {
+    let path = settings_path()?;
+    if !path.exists() {
+        return Ok("nothing to unpatch — settings.json does not exist".into());
+    }
+    let raw = std::fs::read_to_string(&path)
+        .with_context(|| format!("read {}", path.display()))?;
+    let mut value: Value =
+        serde_json::from_str(&raw).with_context(|| format!("parse {}", path.display()))?;
+
+    let removed_any = match value.get_mut("env") {
+        Some(Value::Object(env)) => {
+            let mut removed = false;
+            for (k, _) in REQUIRED_ENV {
+                if env.remove(*k).is_some() {
+                    removed = true;
+                }
+            }
+            if env.is_empty() {
+                if let Value::Object(top) = &mut value {
+                    top.remove("env");
+                }
+            }
+            removed
+        }
+        _ => false,
+    };
+
+    if !removed_any {
+        return Ok("nothing to unpatch — andon vars not present".into());
+    }
+
+    let bp = path.with_extension("json.andon-unpatch-backup");
+    std::fs::copy(&path, &bp)?;
+    let serialized = serde_json::to_string_pretty(&value)?;
+    std::fs::write(&path, serialized)?;
+    tracing::info!(path = %path.display(), "unpatched claude settings.json");
+    Ok(format!(
+        "unpatched · backup at {}",
+        bp.display()
+    ))
+}
+
+/// Restore the andon-backup created by the original patch.
+pub fn restore_backup() -> Result<String> {
+    let path = settings_path()?;
+    let bp = path.with_extension("json.andon-backup");
+    if !bp.exists() {
+        return Err(anyhow::anyhow!(
+            "no backup found at {}",
+            bp.display()
+        ));
+    }
+    std::fs::copy(&bp, &path)?;
+    tracing::info!(restored_from = %bp.display(), "restored claude settings.json from backup");
+    Ok(format!("restored from {}", bp.display()))
+}
