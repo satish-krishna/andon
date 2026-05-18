@@ -22,6 +22,7 @@ export class SettingsComponent implements OnInit {
   autostart = signal<{ enabled: boolean; registered_command: string | null } | null>(null);
   backfillResult = signal<{ scanned: number; updated: number } | null>(null);
   backfilling = signal(false);
+  version = signal<string | null>(null);
 
   settingsSnippet = `{
   "env": {
@@ -41,6 +42,7 @@ export class SettingsComponent implements OnInit {
     this.api.controlStatus().subscribe((c) => this.paused.set(c.paused));
     this.api.integrationStatus().subscribe((i) => this.integration.set(i));
     this.api.autostartStatus().subscribe((a) => this.autostart.set(a));
+    this.api.health().subscribe((h) => this.version.set(h.version));
   }
 
   toggleAutostart() {

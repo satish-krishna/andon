@@ -183,6 +183,9 @@ export class ApiService {
   overviewToday(): Observable<OverviewToday> {
     return this.http.get<OverviewToday>(`${BASE}/api/overview/today`);
   }
+  health(): Observable<{ status: string; db: string; paused: boolean; version: string }> {
+    return this.http.get<{ status: string; db: string; paused: boolean; version: string }>(`${BASE}/api/health`);
+  }
   costByDay(days = 30): Observable<DailySeries> {
     return this.http.get<DailySeries>(`${BASE}/api/overview/cost-by-day?days=${days}`);
   }

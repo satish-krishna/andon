@@ -70,6 +70,7 @@ async fn health(State(state): State<ApiState>) -> Json<serde_json::Value> {
         "status": "ok",
         "db": state.db_path.display().to_string(),
         "paused": state.control.is_paused(),
+        "version": env!("CARGO_PKG_VERSION"),
     }))
 }
 
