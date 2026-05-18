@@ -1202,11 +1202,15 @@ impl FilterQuery {
     fn model_clause(&self, col: &str) -> (String, Vec<String>) {
         let models = self.model_list();
         if models.is_empty() {
-            (String::new(), vec![])
-        } else {
-            let placeholders = models.iter().map(|_| "?").collect::<Vec<_>>().join(",");
-            (format!(" AND {col} IN ({placeholders})"), models)
+            return (String::new(), vec![]);
         }
+        let likes: Vec<String> = models.iter().map(|m| format!("%{}%", m.to_lowercase())).collect();
+        let ored = likes
+            .iter()
+            .map(|_| format!("LOWER({col}) LIKE ?"))
+            .collect::<Vec<_>>()
+            .join(" OR ");
+        (format!(" AND ({ored})"), likes)
     }
 }
 
@@ -1284,30 +1288,26 @@ fn sum_cost(conn: &rusqlite::Connection, from: i64, to: i64, models: &FilterQuer
 }
 
 fn count_sessions(conn: &rusqlite::Connection, from: i64, to: i64, models: &FilterQuery) -> i64 {
-    let model_list = models.model_list();
-    if model_list.is_empty() {
-        conn.query_row(
-            "SELECT COUNT(DISTINCT session_id) FROM sessions
-             WHERE started_at >= ?1 AND started_at < ?2",
-            params![from, to],
-            |r| r.get(0),
-        )
-        .unwrap_or(0)
+    let (model_inner_sql, model_inner_vals) = models.model_clause("c.model");
+    let model_filter_sql = if model_inner_sql.is_empty() {
+        String::new()
     } else {
-        let placeholders = model_list.iter().map(|_| "?").collect::<Vec<_>>().join(",");
-        let sql = format!(
-            "SELECT COUNT(DISTINCT s.session_id) FROM sessions s
-             WHERE s.started_at >= ? AND s.started_at < ?
-             AND EXISTS (SELECT 1 FROM cost_entries c
-                         WHERE c.session_id = s.session_id AND c.model IN ({placeholders}))"
-        );
-        let mut p: Vec<Box<dyn rusqlite::ToSql>> = vec![Box::new(from), Box::new(to)];
-        for v in &model_list {
-            p.push(Box::new(v.clone()));
-        }
-        let refs: Vec<&dyn rusqlite::ToSql> = p.iter().map(|b| &**b).collect();
-        conn.query_row(&sql, refs.as_slice(), |r| r.get(0)).unwrap_or(0)
+        let inner = model_inner_sql.trim_start_matches(" AND ");
+        format!(
+            " AND EXISTS (SELECT 1 FROM cost_entries c
+                          WHERE c.session_id = s.session_id AND {inner})"
+        )
+    };
+    let sql = format!(
+        "SELECT COUNT(DISTINCT s.session_id) FROM sessions s
+         WHERE s.started_at >= ? AND s.started_at < ?{model_filter_sql}"
+    );
+    let mut p: Vec<Box<dyn rusqlite::ToSql>> = vec![Box::new(from), Box::new(to)];
+    for v in model_inner_vals {
+        p.push(Box::new(v));
     }
+    let refs: Vec<&dyn rusqlite::ToSql> = p.iter().map(|b| &**b).collect();
+    conn.query_row(&sql, refs.as_slice(), |r| r.get(0)).unwrap_or(0)
 }
 
 fn sum_tokens(
@@ -1539,17 +1539,37 @@ async fn v2_accept_by_language(
 ) -> Result<Json<Vec<serde_json::Value>>, ApiError> {
     let (from, to) = q.window();
     let conn = state.pool.get().map_err(ApiError::pool)?;
-    let mut stmt = conn.prepare(
+
+    // tool_decisions has no model column, so filter via EXISTS over cost_entries
+    // joined on session_id — same pattern as count_sessions / v2_sessions.
+    let (model_inner_sql, model_inner_vals) = q.model_clause("c.model");
+    let model_filter_sql = if model_inner_sql.is_empty() {
+        String::new()
+    } else {
+        let inner = model_inner_sql.trim_start_matches(" AND ");
+        format!(
+            " AND EXISTS (SELECT 1 FROM cost_entries c
+                          WHERE c.session_id = tool_decisions.session_id AND {inner})"
+        )
+    };
+
+    let sql = format!(
         "SELECT COALESCE(language, 'unknown') AS lang,
                 SUM(CASE WHEN decision='accept' THEN 1 ELSE 0 END) AS a,
                 SUM(CASE WHEN decision='reject' THEN 1 ELSE 0 END) AS r,
                 SUM(CASE WHEN decision='abort'  THEN 1 ELSE 0 END) AS x,
                 COUNT(*) AS total
          FROM tool_decisions
-         WHERE timestamp >= ?1 AND timestamp < ?2
-         GROUP BY lang ORDER BY total DESC",
-    )?;
-    let rows = stmt.query_map(params![from, to], |r| {
+         WHERE timestamp >= ? AND timestamp < ?{model_filter_sql}
+         GROUP BY lang ORDER BY total DESC"
+    );
+    let mut stmt = conn.prepare(&sql)?;
+    let mut p: Vec<Box<dyn rusqlite::ToSql>> = vec![Box::new(from), Box::new(to)];
+    for v in model_inner_vals {
+        p.push(Box::new(v));
+    }
+    let refs: Vec<&dyn rusqlite::ToSql> = p.iter().map(|b| b.as_ref()).collect();
+    let rows = stmt.query_map(refs.as_slice(), |r| {
         Ok((
             r.get::<_, String>(0)?,
             r.get::<_, i64>(1)?,
@@ -1625,20 +1645,21 @@ async fn v2_sessions(
     let limit = q.limit.clamp(1, 1000);
     let conn = state.pool.get().map_err(ApiError::pool)?;
 
-    let model_list = filt.model_list();
     let repo_list: Vec<String> = q
         .repo
         .as_deref()
         .map(|s| s.split(',').filter(|p| !p.is_empty()).map(str::to_string).collect())
         .unwrap_or_default();
 
-    let model_filter_sql = if model_list.is_empty() {
+    let (model_inner_sql, model_inner_vals) = filt.model_clause("c.model");
+    let model_filter_sql = if model_inner_sql.is_empty() {
         String::new()
     } else {
-        let placeholders = model_list.iter().map(|_| "?").collect::<Vec<_>>().join(",");
+        // model_inner_sql starts with " AND (...)". Strip the leading " AND " for embedding.
+        let inner = model_inner_sql.trim_start_matches(" AND ");
         format!(
             " AND EXISTS (SELECT 1 FROM cost_entries c
-                          WHERE c.session_id = s.session_id AND c.model IN ({placeholders}))"
+                          WHERE c.session_id = s.session_id AND {inner})"
         )
     };
     let repo_filter_sql = if repo_list.is_empty() {
@@ -1683,7 +1704,7 @@ async fn v2_sessions(
 
     let search_like = q.search.as_deref().map(|s| format!("%{s}%"));
     let mut p: Vec<Box<dyn rusqlite::ToSql>> = vec![Box::new(from), Box::new(to)];
-    for v in &model_list {
+    for v in &model_inner_vals {
         p.push(Box::new(v.clone()));
     }
     for r in &repo_list {
