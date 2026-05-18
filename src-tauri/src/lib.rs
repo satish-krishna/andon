@@ -7,7 +7,7 @@ mod git_query;
 pub mod integration;
 pub mod otlp;
 mod repo_inference;
-mod reports;
+pub mod reports;
 pub mod settings;
 
 use std::sync::Mutex;
