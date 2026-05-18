@@ -126,6 +126,15 @@ pub fn test_ingestor(pool: &Arc<DbPool>) -> Ingestor {
     Ingestor::new(Arc::clone(pool), control, diagnostics)
 }
 
+/// Like `test_ingestor` but also returns the `IngestionControl` so tests can
+/// call `control.set_paused(true)` before ingesting.
+pub fn test_ingestor_with_control(pool: &Arc<DbPool>) -> (Ingestor, IngestionControl) {
+    let control = IngestionControl::default();
+    let diagnostics = Diagnostics::default();
+    let ingestor = Ingestor::new(Arc::clone(pool), control.clone(), diagnostics);
+    (ingestor, control)
+}
+
 /// Build a test axum `Router` wired to the given pool.
 /// Returns `(Router, TempDir)` — drop the `TempDir` only after the router is
 /// no longer needed (it backs the settings file and reports directory).
@@ -163,6 +172,7 @@ pub fn test_router(pool: &Arc<DbPool>) -> (Router, TempDir) {
 
 use opentelemetry_proto::tonic::{
     common::v1::{any_value::Value as AnyV, AnyValue, KeyValue},
+    logs::v1::{LogRecord, ResourceLogs, ScopeLogs},
     metrics::v1::{
         metric::Data, number_data_point::Value as NumberValue, Metric, NumberDataPoint,
         ResourceMetrics, ScopeMetrics, Sum,
@@ -178,6 +188,69 @@ pub fn kv(key: &str, val: &str) -> KeyValue {
             value: Some(AnyV::StringValue(val.into())),
         }),
     }
+}
+
+/// Convenience constructor for an integer-valued `KeyValue`.
+pub fn kv_int(key: &str, val: i64) -> KeyValue {
+    KeyValue {
+        key: key.into(),
+        value: Some(AnyValue {
+            value: Some(AnyV::IntValue(val)),
+        }),
+    }
+}
+
+/// Convenience constructor for a double-valued `KeyValue`.
+pub fn kv_f64(key: &str, val: f64) -> KeyValue {
+    KeyValue {
+        key: key.into(),
+        value: Some(AnyValue {
+            value: Some(AnyV::DoubleValue(val)),
+        }),
+    }
+}
+
+/// Build a single `LogRecord` with the given event name and record-level
+/// attributes. The `time_unix_nano` is set to a fixed non-zero value so tests
+/// get a deterministic timestamp.
+pub fn sample_log_record(event_name: &str, record_attrs: Vec<KeyValue>) -> LogRecord {
+    let mut attrs = vec![kv("event.name", event_name)];
+    attrs.extend(record_attrs);
+    LogRecord {
+        time_unix_nano: 1_700_000_000_000_000_000,
+        observed_time_unix_nano: 0,
+        severity_number: 0,
+        severity_text: String::new(),
+        body: None,
+        attributes: attrs,
+        dropped_attributes_count: 0,
+        flags: 0,
+        trace_id: vec![],
+        span_id: vec![],
+    }
+}
+
+/// Build a `Vec<ResourceLogs>` containing one resource with the given
+/// `resource_attrs` and a single log record built with `sample_log_record`.
+///
+/// Mirrors the shape of `sample_sum_metric` for ergonomic test writing.
+pub fn sample_export_logs(
+    resource_attrs: Vec<KeyValue>,
+    event_name: &str,
+    record_attrs: Vec<KeyValue>,
+) -> Vec<ResourceLogs> {
+    vec![ResourceLogs {
+        resource: Some(Resource {
+            attributes: resource_attrs,
+            dropped_attributes_count: 0,
+        }),
+        scope_logs: vec![ScopeLogs {
+            scope: None,
+            log_records: vec![sample_log_record(event_name, record_attrs)],
+            schema_url: String::new(),
+        }],
+        schema_url: String::new(),
+    }]
 }
 
 /// Build a `Vec<ResourceMetrics>` containing one `Sum`-typed metric with a
