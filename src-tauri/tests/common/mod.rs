@@ -135,6 +135,53 @@ pub fn test_ingestor_with_control(pool: &Arc<DbPool>) -> (Ingestor, IngestionCon
     (ingestor, control)
 }
 
+/// Build a test `Ingestor` sharing the provided `Diagnostics` and
+/// `IngestionControl` instances with the caller (and typically the router).
+/// Use together with `test_router_with` so the router and ingestor see the
+/// same diagnostics state.
+pub fn test_ingestor_with(
+    pool: &Arc<DbPool>,
+    diagnostics: Diagnostics,
+    control: IngestionControl,
+) -> Ingestor {
+    Ingestor::new(Arc::clone(pool), control, diagnostics)
+}
+
+/// Like `test_router` but accepts externally-created `Diagnostics` and
+/// `IngestionControl` so the router shares state with an ingestor built via
+/// `test_ingestor_with`.
+pub fn test_router_with(
+    pool: &Arc<DbPool>,
+    diagnostics: Diagnostics,
+    control: IngestionControl,
+) -> (Router, TempDir) {
+    let dir = tempfile::tempdir().expect("create router tempdir");
+
+    let settings_path = dir.path().join("settings.json");
+    let settings = Arc::new(
+        SettingsStore::load(settings_path.clone()).expect("load settings store"),
+    );
+    let forwarder = Arc::new(Forwarder::new(Arc::clone(&settings)));
+    let reports_dir = dir.path().join("reports");
+    std::fs::create_dir_all(&reports_dir).expect("create reports dir");
+
+    let state = ApiState {
+        pool: Arc::clone(pool),
+        db_path: dir.path().join("test.db"),
+        control,
+        integration: Arc::new(Mutex::new(IntegrationStatus::AlreadyConfigured {
+            settings_path: settings_path.display().to_string(),
+        })),
+        diagnostics,
+        settings,
+        forwarder,
+        reports_dir,
+    };
+
+    let router = routes::router(state);
+    (router, dir)
+}
+
 /// Build a test axum `Router` wired to the given pool.
 /// Returns `(Router, TempDir)` — drop the `TempDir` only after the router is
 /// no longer needed (it backs the settings file and reports directory).
