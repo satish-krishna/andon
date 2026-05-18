@@ -59,6 +59,7 @@ pub fn router(state: ApiState) -> Router {
         .route("/api/settings", get(get_settings))
         .route("/api/settings/forwarder", axum::routing::put(put_forwarder))
         .route("/api/settings/forwarder/test", post(test_forwarder))
+        .route("/api/repo/backfill", post(repo_backfill))
         .with_state(state)
 }
 
@@ -1001,6 +1002,52 @@ async fn hook_session_context(
     }
 
     Ok(Json(json!({ "ok": true })))
+}
+
+async fn repo_backfill(
+    State(state): State<ApiState>,
+) -> Json<crate::api::dto::BackfillResult> {
+    // Collect candidate session ids (repo_root still NULL).
+    let pool = state.pool.clone();
+    let ids: Vec<String> = match tokio::task::spawn_blocking({
+        let pool = pool.clone();
+        move || -> rusqlite::Result<Vec<String>> {
+            let conn = pool.get().map_err(|_| rusqlite::Error::InvalidQuery)?;
+            let mut stmt = conn.prepare(
+                "SELECT session_id FROM sessions WHERE repo_root IS NULL ORDER BY started_at DESC"
+            )?;
+            let rows = stmt.query_map([], |r| r.get::<_, String>(0))?;
+            rows.collect::<rusqlite::Result<Vec<_>>>()
+        }
+    }).await {
+        Ok(Ok(v)) => v,
+        _ => return Json(crate::api::dto::BackfillResult { scanned: 0, updated: 0 }),
+    };
+
+    let scanned = ids.len();
+    let mut updated = 0usize;
+    for sid in ids {
+        let Ok(Some(info)) = crate::repo_inference::infer_repo_for_session(
+            pool.clone(), sid.clone()
+        ).await else { continue };
+
+        let pool_inner = pool.clone();
+        let written = tokio::task::spawn_blocking(move || -> rusqlite::Result<usize> {
+            let conn = pool_inner.get().map_err(|_| rusqlite::Error::InvalidQuery)?;
+            let root = info.repo_root.as_ref().map(|p| p.to_string_lossy().into_owned());
+            conn.execute(
+                "UPDATE sessions
+                   SET repo_root   = COALESCE(repo_root,   ?2),
+                       repo_remote = COALESCE(repo_remote, ?3),
+                       repo_branch = COALESCE(repo_branch, ?4),
+                       repo_name   = COALESCE(repo_name,   ?5)
+                 WHERE session_id = ?1",
+                params![sid, root, info.repo_remote, info.repo_branch, info.repo_name],
+            )
+        }).await.unwrap_or(Ok(0)).unwrap_or(0);
+        if written > 0 { updated += 1; }
+    }
+    Json(crate::api::dto::BackfillResult { scanned, updated })
 }
 
 async fn get_report(

@@ -98,3 +98,9 @@ pub struct SessionContextPayload {
     #[serde(default)] pub hook_event_name: Option<String>,
     #[serde(default)] pub model: Option<String>,
 }
+
+#[derive(serde::Serialize)]
+pub struct BackfillResult {
+    pub scanned: usize,
+    pub updated: usize,
+}
