@@ -1,20 +1,9 @@
 // FilterBarComponent tests using bare TestBed.
 //
-// Adaptation from plan: replaced createComponentFactory (Spectator) with
-// TestBed.configureTestingModule + TestBed.createComponent because
-// @ngneat/spectator's factory helpers are incompatible with @analogjs/vitest-angular's
-// zone setup on Angular 21. See spectator-factories.ts for details.
-//
-// Selector adaptations from plan literals:
-//   - Range chip text: "Today" (capital T), not "today" — located via case-insensitive
-//     startsWith on trimmed textContent.
-//   - "Custom…" chip text contains "Custom" (with ellipsis); located via includes().
-//   - Model chips share the same ".filter-chip" class as range chips; distinguished by
-//     matching textContent against filter.allModels() values.
-//   - Clear button: no data-clear attribute or aria-label. Located via button textContent
-//     containing "Clear" inside the component host.
-//   - hasActiveFilters() is a computed signal, not a plain boolean method call — invoked
-//     as filter.hasActiveFilters() per FilterService public API.
+// Note: @ngneat/spectator's createComponentFactory is incompatible with
+// @analogjs/vitest-angular's zone setup on Angular 21 (zone cleanup nulls
+// the compiler between configureTestingModule and inject). Use bare TestBed
+// + TestBed.createComponent instead.
 
 import { importProvidersFrom } from '@angular/core';
 import { TestBed, ComponentFixture } from '@angular/core/testing';
@@ -38,17 +27,24 @@ function setup(): { fixture: ComponentFixture<FilterBarComponent>; filter: Filte
   return { fixture, filter };
 }
 
+function rangeChip(fixture: ComponentFixture<FilterBarComponent>, id: string): HTMLElement | null {
+  return fixture.nativeElement.querySelector(`[data-chip="range"][data-chip-id="${id}"]`);
+}
+
+function modelChip(fixture: ComponentFixture<FilterBarComponent>, id: string): HTMLElement | null {
+  return fixture.nativeElement.querySelector(`[data-chip="model"][data-chip-id="${id}"]`);
+}
+
+function clearButton(fixture: ComponentFixture<FilterBarComponent>): HTMLElement | null {
+  return fixture.nativeElement.querySelector('[data-testid="clear-filters"]');
+}
+
 describe('FilterBarComponent', () => {
   it('clicking a range chip switches the preset', () => {
     const { fixture, filter } = setup();
-    const chips = Array.from(
-      fixture.nativeElement.querySelectorAll('.filter-chip')
-    ) as HTMLElement[];
-    const todayChip = chips.find((b) =>
-      b.textContent?.trim().toLowerCase().startsWith('today')
-    );
-    expect(todayChip).toBeTruthy();
-    todayChip!.click();
+    const today = rangeChip(fixture, 'today');
+    expect(today).toBeTruthy();
+    today!.click();
     fixture.detectChanges();
     expect(filter.range()).toBe('today');
   });
@@ -57,12 +53,7 @@ describe('FilterBarComponent', () => {
     const { fixture } = setup();
     // No date inputs before Custom is selected (default range is "month")
     expect(fixture.nativeElement.querySelectorAll('input[type="date"]').length).toBe(0);
-    const chips = Array.from(
-      fixture.nativeElement.querySelectorAll('.filter-chip')
-    ) as HTMLElement[];
-    const custom = chips.find((b) =>
-      b.textContent?.toLowerCase().includes('custom')
-    );
+    const custom = rangeChip(fixture, 'custom');
     expect(custom).toBeTruthy();
     custom!.click();
     fixture.detectChanges();
@@ -73,10 +64,7 @@ describe('FilterBarComponent', () => {
     const { fixture, filter } = setup();
     // All three models are selected by default; clicking the first removes it.
     const firstModel = filter.allModels()[0];
-    const chips = Array.from(
-      fixture.nativeElement.querySelectorAll('.filter-chip')
-    ) as HTMLElement[];
-    const chip = chips.find((b) => b.textContent?.trim() === firstModel);
+    const chip = modelChip(fixture, firstModel);
     expect(chip).toBeTruthy();
     chip!.click();
     fixture.detectChanges();
@@ -86,16 +74,10 @@ describe('FilterBarComponent', () => {
   it('Clear button is hidden when no active filters and visible when any', () => {
     const { fixture, filter } = setup();
     // Default state: range = "month", all models selected, no search → no active filters
-    const clearBtn = (): HTMLElement | null => {
-      const buttons = Array.from(
-        fixture.nativeElement.querySelectorAll('button')
-      ) as HTMLElement[];
-      return buttons.find((b) => b.textContent?.includes('Clear')) ?? null;
-    };
-    expect(clearBtn()).toBeFalsy();
+    expect(clearButton(fixture)).toBeFalsy();
     // Activating a search filter (does not touch DOM — mutates service signal directly)
     filter.setSearch('foo');
     fixture.detectChanges();
-    expect(clearBtn()).toBeTruthy();
+    expect(clearButton(fixture)).toBeTruthy();
   });
 });

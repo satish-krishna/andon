@@ -14,6 +14,8 @@ import { FilterService, RangePreset } from '../core/filter.service';
         <div class="flex items-center gap-1.5">
           @for (r of ranges; track r.id) {
             <button class="filter-chip"
+                    data-chip="range"
+                    [attr.data-chip-id]="r.id"
                     [attr.data-active]="filter.range() === r.id ? 'true' : null"
                     (click)="onRangeClick(r.id)">{{ r.label }}</button>
           }
@@ -40,6 +42,8 @@ import { FilterService, RangePreset } from '../core/filter.service';
         <div class="flex items-center gap-1.5">
           @for (m of filter.allModels(); track m) {
             <button class="filter-chip"
+                    data-chip="model"
+                    [attr.data-chip-id]="m"
                     [attr.data-active]="filter.models().has(m) ? 'true' : null"
                     [attr.title]="isLastSelected(m) ? 'At least one model must stay selected' : null"
                     (click)="filter.toggleModel(m)">
@@ -49,6 +53,8 @@ import { FilterService, RangePreset } from '../core/filter.service';
         </div>
         @if (filter.hasActiveFilters()) {
           <button class="ml-auto text-muted hover:text-text font-mono text-[11px] flex items-center gap-1"
+                  data-testid="clear-filters"
+                  aria-label="Clear filters"
                   (click)="filter.clearFilters()">
             <lucide-icon name="x" class="w-3 h-3"></lucide-icon>Clear
           </button>
