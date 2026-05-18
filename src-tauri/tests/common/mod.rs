@@ -100,6 +100,64 @@ pub fn seed_session(pool: &Arc<DbPool>, opts: &SeedOpts) {
 }
 
 // ---------------------------------------------------------------------------
+// Test-router and test-ingestor helpers
+// ---------------------------------------------------------------------------
+
+use std::sync::Mutex;
+
+use andon_lib::{
+    api::{routes, ApiState},
+    diagnostics::Diagnostics,
+    integration::IntegrationStatus,
+    otlp::{
+        IngestionControl,
+        forwarder::Forwarder,
+        ingestor::Ingestor,
+    },
+    settings::SettingsStore,
+};
+use axum::Router;
+
+/// Build a test `Ingestor` wired to the given pool.
+/// Returns the ingestor; the caller keeps the pool guard alive via the `TempDir`.
+pub fn test_ingestor(pool: &Arc<DbPool>) -> Ingestor {
+    let control = IngestionControl::default();
+    let diagnostics = Diagnostics::default();
+    Ingestor::new(Arc::clone(pool), control, diagnostics)
+}
+
+/// Build a test axum `Router` wired to the given pool.
+/// Returns `(Router, TempDir)` — drop the `TempDir` only after the router is
+/// no longer needed (it backs the settings file and reports directory).
+pub fn test_router(pool: &Arc<DbPool>) -> (Router, TempDir) {
+    let dir = tempfile::tempdir().expect("create router tempdir");
+
+    let settings_path = dir.path().join("settings.json");
+    let settings = Arc::new(
+        SettingsStore::load(settings_path.clone()).expect("load settings store"),
+    );
+    let forwarder = Arc::new(Forwarder::new(Arc::clone(&settings)));
+    let reports_dir = dir.path().join("reports");
+    std::fs::create_dir_all(&reports_dir).expect("create reports dir");
+
+    let state = ApiState {
+        pool: Arc::clone(pool),
+        db_path: dir.path().join("test.db"),
+        control: IngestionControl::default(),
+        integration: Arc::new(Mutex::new(IntegrationStatus::AlreadyConfigured {
+            settings_path: settings_path.display().to_string(),
+        })),
+        diagnostics: Diagnostics::default(),
+        settings,
+        forwarder,
+        reports_dir,
+    };
+
+    let router = routes::router(state);
+    (router, dir)
+}
+
+// ---------------------------------------------------------------------------
 // OTLP sample-payload builders
 // ---------------------------------------------------------------------------
 

@@ -2,13 +2,13 @@ pub mod api;
 mod autostart;
 mod config;
 pub mod db;
-mod diagnostics;
+pub mod diagnostics;
 mod git_query;
-mod integration;
-mod otlp;
+pub mod integration;
+pub mod otlp;
 mod repo_inference;
 mod reports;
-mod settings;
+pub mod settings;
 
 use std::sync::Mutex;
 
