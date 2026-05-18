@@ -60,6 +60,8 @@ pub fn router(state: ApiState) -> Router {
         .route("/api/settings/forwarder", axum::routing::put(put_forwarder))
         .route("/api/settings/forwarder/test", post(test_forwarder))
         .route("/api/repo/backfill", post(repo_backfill))
+        .route("/api/repos", get(list_repos))
+        .route("/api/overview/top-repos", get(overview_top_repos))
         .with_state(state)
 }
 
@@ -2014,4 +2016,121 @@ async fn integration_restore(State(_state): State<ApiState>) -> Json<serde_json:
         Ok(msg) => Json(json!({"ok": true, "message": msg})),
         Err(e) => Json(json!({"ok": false, "error": format!("{e:#}")})),
     }
+}
+
+// ---------- repos ----------
+
+#[derive(Deserialize)]
+struct ListReposQuery {
+    #[serde(default)] from: Option<i64>,
+    #[serde(default)] to:   Option<i64>,
+    #[serde(default)] limit: Option<usize>,
+}
+
+async fn list_repos(
+    State(state): State<ApiState>,
+    Query(q): Query<ListReposQuery>,
+) -> Json<Vec<crate::api::dto::RepoSummary>> {
+    let limit = q.limit.unwrap_or(50);
+    let from = q.from.unwrap_or(0);
+    let to   = q.to.unwrap_or(i64::MAX);
+    let pool = state.pool.clone();
+    let rows = tokio::task::spawn_blocking(move || -> rusqlite::Result<Vec<crate::api::dto::RepoSummary>> {
+        let conn = pool.get().map_err(|_| rusqlite::Error::InvalidQuery)?;
+        let mut stmt = conn.prepare(
+            "SELECT
+                COALESCE(repo_remote, repo_root, cwd, '—') AS k,
+                COALESCE(repo_name,
+                         CASE WHEN repo_remote IS NOT NULL THEN repo_remote ELSE NULL END,
+                         repo_root, cwd, '—') AS label,
+                CASE WHEN repo_remote IS NOT NULL THEN 1 ELSE 0 END AS has_remote,
+                COUNT(*) AS n
+             FROM sessions
+             WHERE started_at BETWEEN ?1 AND ?2
+             GROUP BY k
+             ORDER BY n DESC
+             LIMIT ?3"
+        )?;
+        let rows = stmt.query_map(params![from, to, limit as i64], |r| {
+            Ok(crate::api::dto::RepoSummary {
+                key: r.get::<_, String>(0)?,
+                label: r.get::<_, String>(1)?,
+                has_remote: r.get::<_, i64>(2)? != 0,
+                session_count: r.get::<_, i64>(3)?,
+            })
+        })?;
+        rows.collect()
+    }).await.unwrap_or(Ok(vec![])).unwrap_or_default();
+    Json(rows)
+}
+
+#[derive(Deserialize)]
+struct TopReposQuery {
+    from: i64,
+    to: i64,
+    #[serde(default)] limit: Option<usize>,
+}
+
+async fn overview_top_repos(
+    State(state): State<ApiState>,
+    Query(q): Query<TopReposQuery>,
+) -> Json<Vec<crate::api::dto::TopRepoEntry>> {
+    let limit = q.limit.unwrap_or(5);
+    let pool = state.pool.clone();
+    let rows = tokio::task::spawn_blocking(move || -> rusqlite::Result<Vec<crate::api::dto::TopRepoEntry>> {
+        let conn = pool.get().map_err(|_| rusqlite::Error::InvalidQuery)?;
+
+        // 1) Top-N repos by cost.
+        let mut stmt = conn.prepare(
+            "SELECT
+                COALESCE(s.repo_remote, s.repo_root, s.cwd, '—') AS k,
+                COALESCE(s.repo_name, s.repo_remote, s.repo_root, s.cwd, '—') AS label,
+                SUM(c.cost_usd) AS cost,
+                COUNT(DISTINCT s.session_id) AS n
+             FROM sessions s
+             JOIN cost_entries c ON c.session_id = s.session_id
+             WHERE s.started_at BETWEEN ?1 AND ?2
+             GROUP BY k
+             ORDER BY cost DESC
+             LIMIT ?3"
+        )?;
+        let summary: Vec<(String, String, f64, i64)> =
+            stmt.query_map(params![q.from, q.to, limit as i64], |r| {
+                Ok((
+                    r.get::<_, String>(0)?,
+                    r.get::<_, String>(1)?,
+                    r.get::<_, f64>(2)?,
+                    r.get::<_, i64>(3)?,
+                ))
+            })?.collect::<rusqlite::Result<_>>()?;
+
+        // 2) Per-day cost per repo for sparklines.
+        let day_ms = 86_400_000i64;
+        let days = ((q.to - q.from) / day_ms).max(1) as usize;
+
+        let mut out = Vec::with_capacity(summary.len());
+        for (k, label, cost, n) in summary {
+            let mut spark = vec![0.0; days];
+            let mut sp = conn.prepare(
+                "SELECT (c.timestamp - ?2) / ?3 AS day_idx, SUM(c.cost_usd)
+                 FROM cost_entries c
+                 JOIN sessions s ON s.session_id = c.session_id
+                 WHERE c.timestamp BETWEEN ?2 AND ?4
+                   AND COALESCE(s.repo_remote, s.repo_root, s.cwd, '—') = ?1
+                 GROUP BY day_idx"
+            )?;
+            let rows = sp.query_map(params![k, q.from, day_ms, q.to], |r| {
+                Ok((r.get::<_, i64>(0)?, r.get::<_, f64>(1)?))
+            })?;
+            for row in rows {
+                let (idx, v) = row?;
+                if (0..spark.len() as i64).contains(&idx) {
+                    spark[idx as usize] = v;
+                }
+            }
+            out.push(crate::api::dto::TopRepoEntry { key: k, label, cost_usd: cost, session_count: n, spark });
+        }
+        Ok(out)
+    }).await.unwrap_or(Ok(vec![])).unwrap_or_default();
+    Json(rows)
 }

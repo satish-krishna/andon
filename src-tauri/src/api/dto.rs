@@ -109,3 +109,24 @@ pub struct BackfillResult {
     pub scanned: usize,
     pub updated: usize,
 }
+
+#[derive(serde::Serialize)]
+pub struct RepoSummary {
+    /// Grouping key: COALESCE(repo_remote, repo_root, cwd, '—').
+    pub key: String,
+    /// Display label: repo_name (preferred), else basename of key.
+    pub label: String,
+    /// `true` when repo_remote is set.
+    pub has_remote: bool,
+    pub session_count: i64,
+}
+
+#[derive(serde::Serialize)]
+pub struct TopRepoEntry {
+    pub key: String,
+    pub label: String,
+    pub cost_usd: f64,
+    pub session_count: i64,
+    /// Daily cost series for the period, oldest-first, same length as the period.
+    pub spark: Vec<f64>,
+}
