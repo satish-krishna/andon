@@ -28,6 +28,7 @@ pub struct ApiState {
     pub diagnostics: Diagnostics,
     pub settings: Arc<SettingsStore>,
     pub forwarder: Arc<Forwarder>,
+    pub reports_dir: PathBuf,
 }
 
 pub async fn serve(state: ApiState) -> Result<()> {

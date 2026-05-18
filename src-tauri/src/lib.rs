@@ -85,6 +85,8 @@ pub fn run() {
     let diagnostics = diagnostics::Diagnostics::new();
     diagnostics.seed_from_db(&pool);
 
+    let reports_dir = paths.data_dir.join("reports");
+
     let api_state = api::ApiState {
         pool: pool.clone(),
         db_path: paths.db_path.clone(),
@@ -93,6 +95,7 @@ pub fn run() {
         diagnostics: diagnostics.clone(),
         settings: settings_store.clone(),
         forwarder: forwarder.clone(),
+        reports_dir: reports_dir.clone(),
     };
 
     let app_state = AppState {
@@ -108,6 +111,7 @@ pub fn run() {
             }
         }))
         .plugin(tauri_plugin_shell::init())
+        .plugin(tauri_plugin_opener::init())
         .manage(app_state)
         .setup(move |app| {
             // API server

@@ -45,6 +45,10 @@ pub fn router(state: ApiState) -> Router {
         .route("/api/integration/unpatch", post(integration_unpatch))
         .route("/api/integration/restore-backup", post(integration_restore))
         .route("/api/hooks/tool-use", post(hook_tool_use))
+        .route("/api/hooks/session-end", post(hook_session_end))
+        .route("/api/sessions/:id/report", get(get_report).post(generate_report_handler))
+        .route("/api/sessions/:id/report/open", post(open_report))
+        .route("/api/sessions/reports/index", get(reports_index))
         .route("/api/autostart/status", get(autostart_status))
         .route("/api/autostart/enable", post(autostart_enable))
         .route("/api/autostart/disable", post(autostart_disable))
@@ -808,6 +812,153 @@ impl IntoResponse for ApiError {
     fn into_response(self) -> axum::response::Response {
         (self.status, Json(json!({"error": self.message}))).into_response()
     }
+}
+
+// ---------- session-end hook + reports ----------
+
+#[derive(Deserialize)]
+struct SessionEndPayload {
+    session_id: Option<String>,
+    #[serde(default)]
+    reason: Option<String>,
+}
+
+async fn hook_session_end(
+    State(state): State<ApiState>,
+    Json(p): Json<SessionEndPayload>,
+) -> Result<Json<serde_json::Value>, ApiError> {
+    let sid = p.session_id.unwrap_or_default();
+    if sid.is_empty() {
+        return Err(ApiError {
+            status: StatusCode::BAD_REQUEST,
+            message: "session_id required".into(),
+        });
+    }
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_millis() as i64)
+        .unwrap_or(0);
+
+    {
+        let conn = state.pool.get().map_err(ApiError::pool)?;
+        let exists: i64 = conn.query_row(
+            "SELECT COUNT(*) FROM sessions WHERE session_id = ?1",
+            params![sid], |r| r.get(0)).unwrap_or(0);
+        if exists == 0 {
+            let _ = conn.execute(
+                "INSERT INTO sessions (session_id, started_at, ended_at) VALUES (?1, ?2, ?2)",
+                params![sid, now]);
+        } else {
+            let _ = conn.execute(
+                "UPDATE sessions SET ended_at = ?2 WHERE session_id = ?1 AND ended_at IS NULL",
+                params![sid, now]);
+        }
+    }
+
+    let pool = state.pool.clone();
+    let reports_dir = state.reports_dir.clone();
+    let sid_for_task = sid.clone();
+    tokio::spawn(async move {
+        let result = tokio::task::spawn_blocking(move || {
+            crate::reports::generate_report(pool, &reports_dir, &sid_for_task)
+        })
+        .await;
+        match result {
+            Ok(Ok(path)) => tracing::info!(path = %path.display(), "report generated"),
+            Ok(Err(e))   => tracing::error!(error = ?e, "report render failed"),
+            Err(e)       => tracing::error!(error = ?e, "report task panicked"),
+        }
+    });
+
+    Ok(Json(json!({ "ok": true, "reason": p.reason })))
+}
+
+async fn get_report(
+    State(state): State<ApiState>,
+    Path(id): Path<String>,
+) -> Json<serde_json::Value> {
+    let path = crate::reports::report_path(&state.reports_dir, &id);
+    let exists = path.exists();
+    let generated_at = if exists {
+        std::fs::metadata(&path)
+            .and_then(|m| m.modified())
+            .ok()
+            .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
+            .map(|d| d.as_millis() as i64)
+    } else { None };
+    Json(json!({
+        "exists": exists,
+        "path": path.display().to_string(),
+        "generated_at": generated_at,
+    }))
+}
+
+async fn generate_report_handler(
+    State(state): State<ApiState>,
+    Path(id): Path<String>,
+) -> Result<Json<serde_json::Value>, ApiError> {
+    let pool = state.pool.clone();
+    let dir = state.reports_dir.clone();
+    let sid = id.clone();
+    let path = tokio::task::spawn_blocking(move || {
+        crate::reports::generate_report(pool, &dir, &sid)
+    })
+    .await
+    .map_err(|e| ApiError {
+        status: StatusCode::INTERNAL_SERVER_ERROR,
+        message: format!("join: {e}"),
+    })?
+    .map_err(|e| ApiError {
+        status: StatusCode::INTERNAL_SERVER_ERROR,
+        message: format!("{e:#}"),
+    })?;
+    let generated_at = std::fs::metadata(&path)
+        .and_then(|m| m.modified())
+        .ok()
+        .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
+        .map(|d| d.as_millis() as i64);
+    Ok(Json(json!({
+        "exists": true,
+        "path": path.display().to_string(),
+        "generated_at": generated_at,
+    })))
+}
+
+async fn open_report(
+    State(state): State<ApiState>,
+    Path(id): Path<String>,
+) -> Json<serde_json::Value> {
+    let path = crate::reports::report_path(&state.reports_dir, &id);
+    if !path.exists() {
+        return Json(json!({ "ok": false, "error": "report not found" }));
+    }
+    #[cfg(target_os = "windows")]
+    let result = std::process::Command::new("cmd")
+        .args(["/C", "start", "", &path.display().to_string()])
+        .spawn();
+    #[cfg(target_os = "macos")]
+    let result = std::process::Command::new("open").arg(&path).spawn();
+    #[cfg(all(unix, not(target_os = "macos")))]
+    let result = std::process::Command::new("xdg-open").arg(&path).spawn();
+
+    match result {
+        Ok(_) => Json(json!({ "ok": true, "path": path.display().to_string() })),
+        Err(e) => Json(json!({ "ok": false, "error": format!("{e}") })),
+    }
+}
+
+async fn reports_index(State(state): State<ApiState>) -> Json<serde_json::Value> {
+    let mut ids: Vec<String> = Vec::new();
+    if let Ok(dir) = std::fs::read_dir(&state.reports_dir) {
+        for entry in dir.flatten() {
+            if let Some(name) = entry.file_name().to_str() {
+                if let Some(stem) = name.strip_suffix(".html") {
+                    ids.push(stem.to_string());
+                }
+            }
+        }
+    }
+    Json(json!({ "session_ids": ids }))
 }
 
 // ============================================================================
