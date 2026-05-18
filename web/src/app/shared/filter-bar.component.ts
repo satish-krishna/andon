@@ -41,6 +41,7 @@ import { FilterService, RangePreset } from '../core/filter.service';
           @for (m of filter.allModels(); track m) {
             <button class="filter-chip"
                     [attr.data-active]="filter.models().has(m) ? 'true' : null"
+                    [attr.title]="isLastSelected(m) ? 'At least one model must stay selected' : null"
                     (click)="filter.toggleModel(m)">
               {{ m }}
             </button>
@@ -89,6 +90,11 @@ export class FilterBarComponent {
   customToIso(): string {
     const cr = this.filter.customRange();
     return cr ? toIsoDate(cr.toMs) : '';
+  }
+
+  isLastSelected(m: string): boolean {
+    const ms = this.filter.models();
+    return ms.size === 1 && ms.has(m);
   }
 }
 

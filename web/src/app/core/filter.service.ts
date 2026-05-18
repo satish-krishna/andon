@@ -117,7 +117,12 @@ export class FilterService {
   }
 
   toggleModel(m: string) {
-    const next = new Set(this.models());
+    const cur = this.models();
+    // Refuse to deselect the last active chip — zero-selected would be
+    // indistinguishable from all-selected (both send no model filter),
+    // so the chip state would lie about what's shown.
+    if (cur.has(m) && cur.size === 1) return;
+    const next = new Set(cur);
     if (next.has(m)) next.delete(m);
     else next.add(m);
     this.models.set(next);
