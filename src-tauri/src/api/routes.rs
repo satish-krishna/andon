@@ -1585,6 +1585,7 @@ struct V2SessionsQuery {
     from: Option<i64>,
     to: Option<i64>,
     models: Option<String>,
+    repo: Option<String>, // comma-separated repo keys
     search: Option<String>,
     sort: Option<String>, // time | cost | duration | decisions
     #[serde(default = "default_limit")]
@@ -1605,6 +1606,12 @@ async fn v2_sessions(
     let conn = state.pool.get().map_err(ApiError::pool)?;
 
     let model_list = filt.model_list();
+    let repo_list: Vec<String> = q
+        .repo
+        .as_deref()
+        .map(|s| s.split(',').filter(|p| !p.is_empty()).map(str::to_string).collect())
+        .unwrap_or_default();
+
     let model_filter_sql = if model_list.is_empty() {
         String::new()
     } else {
@@ -1613,6 +1620,12 @@ async fn v2_sessions(
             " AND EXISTS (SELECT 1 FROM cost_entries c
                           WHERE c.session_id = s.session_id AND c.model IN ({placeholders}))"
         )
+    };
+    let repo_filter_sql = if repo_list.is_empty() {
+        String::new()
+    } else {
+        let placeholders = repo_list.iter().map(|_| "?").collect::<Vec<_>>().join(",");
+        format!(" AND COALESCE(s.repo_remote, s.repo_root, s.cwd, '\u{2014}') IN ({placeholders})")
     };
     let search_sql = if let Some(_) = q.search.as_deref() {
         " AND (s.session_id LIKE ? OR EXISTS (SELECT 1 FROM file_changes f
@@ -1643,7 +1656,7 @@ async fn v2_sessions(
                  + (SELECT COUNT(*) FROM tool_decisions WHERE session_id = s.session_id AND decision='abort')) AS decisions,
                 s.cwd, s.repo_root, s.repo_remote, s.repo_branch, s.repo_name
          FROM sessions s
-         WHERE s.started_at >= ? AND s.started_at <= ?{model_filter_sql}{search_sql}
+         WHERE s.started_at >= ? AND s.started_at <= ?{model_filter_sql}{repo_filter_sql}{search_sql}
          {order}
          LIMIT ?"
     );
@@ -1652,6 +1665,9 @@ async fn v2_sessions(
     let mut p: Vec<Box<dyn rusqlite::ToSql>> = vec![Box::new(from), Box::new(to)];
     for v in &model_list {
         p.push(Box::new(v.clone()));
+    }
+    for r in &repo_list {
+        p.push(Box::new(r.clone()));
     }
     if let Some(s) = &search_like {
         p.push(Box::new(s.clone()));
@@ -1694,6 +1710,7 @@ struct V2FilesQuery {
     from: Option<i64>,
     to: Option<i64>,
     langs: Option<String>,
+    repo: Option<String>, // comma-separated repo keys
     search: Option<String>,
     sort: Option<String>, // edits | accept | recent | churn
 }
@@ -1706,15 +1723,35 @@ async fn v2_files(
     let (from, to) = filt.window();
     let conn = state.pool.get().map_err(ApiError::pool)?;
 
+    let repo_list: Vec<String> = q
+        .repo
+        .as_deref()
+        .map(|s| s.split(',').filter(|p| !p.is_empty()).map(str::to_string).collect())
+        .unwrap_or_default();
+
+    // Build repo subquery filters for file_changes and tool_decisions
+    let (repo_fc_sql, repo_td_sql) = if repo_list.is_empty() {
+        (String::new(), String::new())
+    } else {
+        let placeholders = repo_list.iter().map(|_| "?").collect::<Vec<_>>().join(",");
+        let fc = format!(
+            " AND session_id IN (SELECT session_id FROM sessions WHERE COALESCE(repo_remote, repo_root, cwd, '\u{2014}') IN ({placeholders}))"
+        );
+        let td = format!(
+            " AND session_id IN (SELECT session_id FROM sessions WHERE COALESCE(repo_remote, repo_root, cwd, '\u{2014}') IN ({placeholders}))"
+        );
+        (fc, td)
+    };
+
     // file list: pull edits + accept + churn + last_ts from file_changes & tool_decisions
-    let mut stmt = conn.prepare(
+    let sql = format!(
         "WITH edits AS (
              SELECT COALESCE(file_path, '?') AS f,
                     COUNT(*) AS edits,
                     SUM(lines_added) AS added,
                     SUM(lines_removed) AS removed,
                     MAX(timestamp) AS last_ts
-             FROM file_changes WHERE timestamp >= ?1 AND timestamp < ?2
+             FROM file_changes WHERE timestamp >= ? AND timestamp < ?{repo_fc_sql}
              GROUP BY f
          ),
          decs AS (
@@ -1723,14 +1760,15 @@ async fn v2_files(
                     SUM(CASE WHEN decision='reject' THEN 1 ELSE 0 END) AS r,
                     SUM(CASE WHEN decision='abort'  THEN 1 ELSE 0 END) AS x,
                     MAX(language) AS lang
-             FROM tool_decisions WHERE timestamp >= ?1 AND timestamp < ?2
+             FROM tool_decisions WHERE timestamp >= ? AND timestamp < ?{repo_td_sql}
              GROUP BY f
          )
          SELECT e.f, e.edits, e.added, e.removed, e.last_ts,
                 COALESCE(d.a, 0), COALESCE(d.r, 0), COALESCE(d.x, 0),
                 COALESCE(d.lang, '?')
-         FROM edits e LEFT JOIN decs d ON d.f = e.f",
-    )?;
+         FROM edits e LEFT JOIN decs d ON d.f = e.f"
+    );
+
     let langs: Vec<String> = q
         .langs
         .as_deref()
@@ -1738,8 +1776,23 @@ async fn v2_files(
         .unwrap_or_default();
     let search_like = q.search.as_deref().filter(|s| !s.is_empty()).map(|s| s.to_lowercase());
 
+    // Build bind params: from, to, [repo...], from, to, [repo...]
+    let mut p: Vec<Box<dyn rusqlite::ToSql>> = vec![
+        Box::new(from), Box::new(to),
+    ];
+    for r in &repo_list {
+        p.push(Box::new(r.clone()));
+    }
+    p.push(Box::new(from));
+    p.push(Box::new(to));
+    for r in &repo_list {
+        p.push(Box::new(r.clone()));
+    }
+    let refs: Vec<&dyn rusqlite::ToSql> = p.iter().map(|b| &**b).collect();
+
+    let mut stmt = conn.prepare(&sql)?;
     let mut rows: Vec<serde_json::Value> = stmt
-        .query_map(params![from, to], |r| {
+        .query_map(refs.as_slice(), |r| {
             let path: String = r.get(0)?;
             let edits: i64 = r.get(1)?;
             let added: i64 = r.get::<_, i64>(2).unwrap_or(0);
