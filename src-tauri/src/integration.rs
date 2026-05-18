@@ -24,6 +24,10 @@ const SESSION_END_COMMAND: &str =
     "curl -s -X POST http://127.0.0.1:8765/api/hooks/session-end -H \"Content-Type: application/json\" --data-binary @-";
 const SESSION_END_MARKER: &str = "/api/hooks/session-end";
 
+const SESSION_START_COMMAND: &str =
+    "curl -s -X POST http://127.0.0.1:8765/api/session/context -H \"Content-Type: application/json\" --data-binary @-";
+const SESSION_START_MARKER: &str = "/api/session/context";
+
 #[derive(Debug, Clone, Serialize)]
 #[serde(tag = "state", rename_all = "snake_case")]
 pub enum IntegrationStatus {
@@ -87,7 +91,9 @@ fn try_ensure() -> Result<IntegrationStatus> {
             .map(|s| s == *v)
             .unwrap_or(false)
     });
-    let hook_installed = has_our_hook(&existing) && has_session_end_hook(&existing);
+    let hook_installed = has_our_hook(&existing)
+        && has_session_end_hook(&existing)
+        && has_session_start_hook(&existing);
     if env_set && hook_installed && file_existed {
         return Ok(IntegrationStatus::AlreadyConfigured {
             settings_path: display_path,
@@ -126,6 +132,7 @@ fn try_ensure() -> Result<IntegrationStatus> {
     let mut merged_val = Value::Object(merged);
     install_hook(&mut merged_val);
     install_session_end_hook(&mut merged_val);
+    install_session_start_hook(&mut merged_val);
 
     let serialized = serde_json::to_string_pretty(&merged_val)?;
     std::fs::write(&path, serialized).with_context(|| format!("write {}", path.display()))?;
@@ -286,6 +293,61 @@ fn remove_session_end_hook(value: &mut Value) -> bool {
     removed
 }
 
+/// True if the settings.json already has a SessionStart hook whose command
+/// references our /api/session/context endpoint.
+fn has_session_start_hook(value: &Value) -> bool {
+    let Some(arr) = value
+        .get("hooks").and_then(|h| h.get("SessionStart")).and_then(|a| a.as_array())
+    else { return false };
+    for entry in arr {
+        if let Some(hooks) = entry.get("hooks").and_then(|h| h.as_array()) {
+            for h in hooks {
+                if let Some(cmd) = h.get("command").and_then(|c| c.as_str()) {
+                    if cmd.contains(SESSION_START_MARKER) { return true; }
+                }
+            }
+        }
+    }
+    false
+}
+
+/// Insert our SessionStart hook into `value` (mutates in place).
+/// Won't duplicate if already present. Won't touch other hook entries.
+fn install_session_start_hook(value: &mut Value) {
+    if has_session_start_hook(value) { return; }
+    let Some(obj) = value.as_object_mut() else { return };
+    let hooks = obj.entry("hooks".to_string()).or_insert_with(|| json!({}));
+    if !hooks.is_object() { *hooks = json!({}); }
+    let hooks_obj = hooks.as_object_mut().unwrap();
+    let arr = hooks_obj
+        .entry("SessionStart".to_string())
+        .or_insert_with(|| json!([]));
+    if !arr.is_array() { *arr = json!([]); }
+    arr.as_array_mut().unwrap().push(json!({
+        "matcher": "",
+        "hooks": [{ "type": "command", "command": SESSION_START_COMMAND }]
+    }));
+}
+
+/// Remove our SessionStart hook from settings.json (returns true if removed anything).
+fn remove_session_start_hook(value: &mut Value) -> bool {
+    let Some(obj) = value.as_object_mut() else { return false };
+    let Some(hooks) = obj.get_mut("hooks").and_then(|h| h.as_object_mut()) else { return false };
+    let Some(arr) = hooks.get_mut("SessionStart").and_then(|a| a.as_array_mut()) else { return false };
+    let before = arr.len();
+    arr.retain(|entry| {
+        let has = entry.get("hooks").and_then(|h| h.as_array()).map(|inner| {
+            inner.iter().any(|h| h.get("command").and_then(|c| c.as_str())
+                .map(|s| s.contains(SESSION_START_MARKER)).unwrap_or(false))
+        }).unwrap_or(false);
+        !has
+    });
+    let removed = arr.len() < before;
+    if arr.is_empty() { hooks.remove("SessionStart"); }
+    if hooks.is_empty() { obj.remove("hooks"); }
+    removed
+}
+
 /// Remove andon's OTel env vars from claude settings.json, leaving everything
 /// else intact. Backup the current file first.
 pub fn unpatch_claude_settings() -> Result<String> {
@@ -317,6 +379,9 @@ pub fn unpatch_claude_settings() -> Result<String> {
     if remove_session_end_hook(&mut value) {
         removed_any = true;
     }
+    if remove_session_start_hook(&mut value) {
+        removed_any = true;
+    }
 
     if !removed_any {
         return Ok("nothing to unpatch — andon vars not present".into());
@@ -346,4 +411,65 @@ pub fn restore_backup() -> Result<String> {
     std::fs::copy(&bp, &path)?;
     tracing::info!(restored_from = %bp.display(), "restored claude settings.json from backup");
     Ok(format!("restored from {}", bp.display()))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+
+    #[test]
+    fn install_into_empty_settings() {
+        let mut v = json!({});
+        install_session_start_hook(&mut v);
+        assert!(has_session_start_hook(&v));
+    }
+
+    #[test]
+    fn install_is_idempotent() {
+        let mut v = json!({});
+        install_session_start_hook(&mut v);
+        install_session_start_hook(&mut v);
+        let arr = v["hooks"]["SessionStart"].as_array().unwrap();
+        assert_eq!(arr.len(), 1);
+    }
+
+    #[test]
+    fn install_preserves_unrelated_session_start_hook() {
+        let mut v = json!({
+            "hooks": {
+                "SessionStart": [{
+                    "matcher": "",
+                    "hooks": [{ "type": "command", "command": "echo someone-elses-hook" }]
+                }]
+            }
+        });
+        install_session_start_hook(&mut v);
+        let arr = v["hooks"]["SessionStart"].as_array().unwrap();
+        assert_eq!(arr.len(), 2);
+    }
+
+    #[test]
+    fn remove_only_ours() {
+        let mut v = json!({
+            "hooks": {
+                "SessionStart": [
+                    { "matcher": "", "hooks": [{ "type": "command", "command": "echo theirs" }] }
+                ]
+            }
+        });
+        install_session_start_hook(&mut v);
+        assert!(remove_session_start_hook(&mut v));
+        let arr = v["hooks"]["SessionStart"].as_array().unwrap();
+        assert_eq!(arr.len(), 1);
+        assert!(arr[0]["hooks"][0]["command"].as_str().unwrap().contains("theirs"));
+    }
+
+    #[test]
+    fn remove_cleans_up_empty_containers() {
+        let mut v = json!({});
+        install_session_start_hook(&mut v);
+        assert!(remove_session_start_hook(&mut v));
+        assert!(v.get("hooks").is_none());
+    }
 }
