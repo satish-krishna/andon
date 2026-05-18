@@ -51,6 +51,9 @@ pub fn router(state: ApiState) -> Router {
         .route("/api/diagnostics", get(diagnostics))
         .route("/api/diagnostics/events", get(recent_events))
         .route("/api/diagnostics/export", get(export_diag))
+        .route("/api/settings", get(get_settings))
+        .route("/api/settings/forwarder", axum::routing::put(put_forwarder))
+        .route("/api/settings/forwarder/test", post(test_forwarder))
         .with_state(state)
 }
 
@@ -678,6 +681,96 @@ fn key_value_query(conn: &rusqlite::Connection, sql: &str, sid: &str) -> Vec<Key
     })
     .map(|it| it.flatten().collect())
     .unwrap_or_default()
+}
+
+// ---------- settings (forwarder) ----------
+
+async fn get_settings(State(state): State<ApiState>) -> Json<serde_json::Value> {
+    Json(serde_json::to_value(state.settings.snapshot()).unwrap_or_else(|_| json!({})))
+}
+
+#[derive(Deserialize)]
+struct ForwarderPayload {
+    enabled: bool,
+    endpoint: String,
+    timeout_ms: u64,
+    #[serde(default)]
+    headers: std::collections::BTreeMap<String, String>,
+}
+
+fn validate_forwarder(p: &ForwarderPayload) -> Result<(), String> {
+    if p.timeout_ms < 100 || p.timeout_ms > 30_000 {
+        return Err("timeout_ms must be between 100 and 30000".into());
+    }
+    if p.enabled {
+        if p.endpoint.is_empty() {
+            return Err("endpoint is required when enabled=true".into());
+        }
+        if !(p.endpoint.starts_with("http://") || p.endpoint.starts_with("https://")) {
+            return Err("endpoint must start with http:// or https://".into());
+        }
+    }
+    for k in p.headers.keys() {
+        if axum::http::HeaderName::from_bytes(k.as_bytes()).is_err() {
+            return Err(format!("invalid header name: {k}"));
+        }
+    }
+    Ok(())
+}
+
+async fn put_forwarder(
+    State(state): State<ApiState>,
+    Json(p): Json<ForwarderPayload>,
+) -> Result<Json<serde_json::Value>, ApiError> {
+    if let Err(msg) = validate_forwarder(&p) {
+        return Err(ApiError { status: StatusCode::BAD_REQUEST, message: msg });
+    }
+    let new = crate::settings::ForwarderSettings {
+        enabled: p.enabled,
+        endpoint: p.endpoint,
+        timeout_ms: p.timeout_ms,
+        headers: p.headers,
+    };
+    let saved = state
+        .settings
+        .save_forwarder(new)
+        .map_err(|e| ApiError {
+            status: StatusCode::INTERNAL_SERVER_ERROR,
+            message: format!("{e:#}"),
+        })?;
+    Ok(Json(serde_json::to_value(saved).unwrap_or_else(|_| json!({}))))
+}
+
+async fn test_forwarder(
+    State(_state): State<ApiState>,
+    Json(p): Json<ForwarderPayload>,
+) -> Json<serde_json::Value> {
+    if let Err(msg) = validate_forwarder(&p) {
+        return Json(json!({ "ok": false, "error": msg }));
+    }
+    let client = crate::otlp::forwarder::build_client(p.timeout_ms);
+    let url = crate::otlp::forwarder::join_url(&p.endpoint, "/v1/metrics");
+    use opentelemetry_proto::tonic::collector::metrics::v1::ExportMetricsServiceRequest;
+    use prost::Message;
+    let body = ExportMetricsServiceRequest::default().encode_to_vec();
+
+    let mut req_headers = reqwest::header::HeaderMap::new();
+    req_headers.insert(
+        reqwest::header::CONTENT_TYPE,
+        reqwest::header::HeaderValue::from_static("application/x-protobuf"),
+    );
+    for (k, v) in &p.headers {
+        if let (Ok(name), Ok(val)) = (
+            reqwest::header::HeaderName::try_from(k.as_str()),
+            reqwest::header::HeaderValue::from_str(v),
+        ) {
+            req_headers.insert(name, val);
+        }
+    }
+    match client.post(&url).headers(req_headers).body(body).send().await {
+        Ok(resp) => Json(json!({ "ok": resp.status().is_success(), "status": resp.status().as_u16() })),
+        Err(e) => Json(json!({ "ok": false, "error": format!("{e}") })),
+    }
 }
 
 // ---------- error ----------
