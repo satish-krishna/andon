@@ -15,7 +15,17 @@ fn window_defaults_to_current_month_when_unset() {
     let q = fq(None, None, None);
     let (from, to) = q.window();
     assert!(from < to);
-    assert!(to - from > 24 * 3600 * 1000, "window should span >= 1 day");
+    // `current_month_bounds()` returns (start_of_month, end_of_today). On the
+    // 1st of a month the span is exactly one calendar day (≈ 86_399_999 ms,
+    // the millisecond-rounded end-of-day), which a strict `>` against
+    // 24 * 3600 * 1000 would flake on. Use `>=` against the one-day span,
+    // and upper-bound it at 32 days to confirm the helper isn't returning
+    // a multi-month range.
+    let one_day_ms = 24 * 3600 * 1000;
+    let thirty_two_days_ms = 32 * one_day_ms;
+    let span = to - from;
+    assert!(span >= one_day_ms - 1, "span should be at least one day (got {span} ms)");
+    assert!(span <= thirty_two_days_ms, "span should fit in 32 days (got {span} ms)");
 }
 
 #[test]
