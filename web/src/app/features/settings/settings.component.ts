@@ -4,11 +4,12 @@ import { LucideAngularModule } from 'lucide-angular';
 
 import { ApiService, IntegrationStatus } from '../../core/api.service';
 import { DbStats } from '../../core/models';
+import { ForwarderCardComponent } from './forwarder-card.component';
 
 @Component({
   selector: 'app-settings',
   standalone: true,
-  imports: [CommonModule, DecimalPipe, LucideAngularModule],
+  imports: [CommonModule, DecimalPipe, LucideAngularModule, ForwarderCardComponent],
   templateUrl: './settings.component.html',
 })
 export class SettingsComponent implements OnInit {

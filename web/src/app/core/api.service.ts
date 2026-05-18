@@ -104,6 +104,18 @@ export interface V2FilesResponse {
   totals: { files: number; edits: number; added: number; removed: number };
 }
 
+export interface ForwarderSettings {
+  enabled: boolean;
+  endpoint: string;
+  timeout_ms: number;
+  headers: Record<string, string>;
+}
+
+export interface AppSettings {
+  version: number;
+  forwarder: ForwarderSettings;
+}
+
 function toParams(args?: FilterArgs): HttpParams {
   let p = new HttpParams();
   if (!args) return p;
@@ -177,6 +189,15 @@ export class ApiService {
   }
   controlStatus(): Observable<{ paused: boolean }> {
     return this.http.get<{ paused: boolean }>(`${BASE}/api/control/status`);
+  }
+  getSettings(): Observable<AppSettings> {
+    return this.http.get<AppSettings>(`${BASE}/api/settings`);
+  }
+  saveForwarder(f: ForwarderSettings): Observable<ForwarderSettings> {
+    return this.http.put<ForwarderSettings>(`${BASE}/api/settings/forwarder`, f);
+  }
+  testForwarder(f: ForwarderSettings): Observable<{ ok: boolean; status?: number; error?: string }> {
+    return this.http.post<any>(`${BASE}/api/settings/forwarder/test`, f);
   }
   pause(): Observable<{ paused: boolean }> {
     return this.http.post<{ paused: boolean }>(`${BASE}/api/control/pause`, {});
