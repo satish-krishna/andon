@@ -31,6 +31,7 @@ async fn run_git(cwd: &Path, args: &[&str]) -> Option<String> {
             .stdin(Stdio::null())
             .stdout(Stdio::piped())
             .stderr(Stdio::null())
+            .kill_on_drop(true)
             .output()
             .await
             .ok()?;
@@ -51,10 +52,12 @@ async fn run_git(cwd: &Path, args: &[&str]) -> Option<String> {
 }
 
 pub async fn query_repo(cwd: &Path) -> RepoInfo {
-    let toplevel = run_git(cwd, &["rev-parse", "--show-toplevel"]).await
-        .map(PathBuf::from);
-    let remote_raw = run_git(cwd, &["config", "--get", "remote.origin.url"]).await;
-    let branch = run_git(cwd, &["branch", "--show-current"]).await;
+    let (toplevel_raw, remote_raw, branch) = tokio::join!(
+        run_git(cwd, &["rev-parse", "--show-toplevel"]),
+        run_git(cwd, &["config", "--get", "remote.origin.url"]),
+        run_git(cwd, &["branch", "--show-current"]),
+    );
+    let toplevel = toplevel_raw.map(PathBuf::from);
     let remote = remote_raw.as_deref().map(normalize_remote);
     let name = compute_repo_name(remote.as_deref(), toplevel.as_deref(), cwd);
     RepoInfo {
@@ -72,24 +75,27 @@ pub async fn query_repo(cwd: &Path) -> RepoInfo {
 ///   ssh://git@github.com/Foo/Bar   -> github.com/Foo/Bar
 pub fn normalize_remote(raw: &str) -> String {
     let raw = raw.trim();
-    // Strip leading scheme + auth.
     let no_scheme = raw
         .strip_prefix("https://").or_else(|| raw.strip_prefix("http://"))
         .or_else(|| raw.strip_prefix("ssh://"))
         .unwrap_or(raw);
-    let no_auth = no_scheme
-        .strip_prefix("git@")
-        .unwrap_or(no_scheme);
+
+    // Strip userinfo: any "user@" or "user:pass@" segment before the first '/'.
+    // We only strip when the '@' appears before any '/', so paths like
+    // `host/org/some@thing` are preserved.
+    let no_userinfo = match no_scheme.find('@') {
+        Some(at) if !no_scheme[..at].contains('/') => &no_scheme[at + 1..],
+        _ => no_scheme,
+    };
+
     // SCP form: host:org/repo -> host/org/repo (only the first colon).
-    let slashed = if let Some(idx) = no_auth.find(':') {
-        let (host, rest) = no_auth.split_at(idx);
+    let slashed = if let Some(idx) = no_userinfo.find(':') {
+        let (host, rest) = no_userinfo.split_at(idx);
         format!("{}/{}", host, &rest[1..])
     } else {
-        no_auth.to_string()
+        no_userinfo.to_string()
     };
-    // Strip trailing .git.
     let no_git = slashed.strip_suffix(".git").unwrap_or(&slashed).to_string();
-    // Lowercase host portion only (first segment).
     if let Some(first_slash) = no_git.find('/') {
         let (host, rest) = no_git.split_at(first_slash);
         format!("{}{}", host.to_lowercase(), rest)
@@ -183,6 +189,18 @@ mod tests {
         let info = query_repo(&tmp).await;
         assert!(info.repo_root.is_none(), "expected None for non-git dir, got {:?}", info.repo_root);
         std::fs::remove_dir_all(&tmp).ok();
+    }
+
+    #[test]
+    fn normalize_strips_embedded_credentials() {
+        assert_eq!(
+            normalize_remote("https://user:pat@github.com/Foo/Bar.git"),
+            "github.com/Foo/Bar"
+        );
+        assert_eq!(
+            normalize_remote("https://token@gitlab.com/team/proj"),
+            "gitlab.com/team/proj"
+        );
     }
 
     fn uuid_like() -> String {
