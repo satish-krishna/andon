@@ -1595,7 +1595,7 @@ struct V2SessionsQuery {
 async fn v2_sessions(
     State(state): State<ApiState>,
     Query(q): Query<V2SessionsQuery>,
-) -> Result<Json<Vec<serde_json::Value>>, ApiError> {
+) -> Result<Json<SessionListResponse>, ApiError> {
     let filt = FilterQuery {
         from: q.from,
         to: q.to,
@@ -1702,7 +1702,24 @@ async fn v2_sessions(
             "repo_name":       r.get::<_, Option<String>>(20)?,
         }))
     })?;
-    Ok(Json(rows.flatten().collect()))
+    let sessions: Vec<serde_json::Value> = rows.flatten().collect();
+
+    // Coverage query: unfiltered by repo/model so the banner is meaningful even with chips active.
+    let (total, with_repo): (i64, i64) = {
+        let mut cov_stmt = conn.prepare(
+            "SELECT COUNT(*),
+                    SUM(CASE WHEN repo_root IS NOT NULL OR repo_remote IS NOT NULL THEN 1 ELSE 0 END)
+             FROM sessions WHERE started_at BETWEEN ?1 AND ?2",
+        )?;
+        cov_stmt.query_row(params![from, to], |r| {
+            Ok((r.get::<_, i64>(0)?, r.get::<_, Option<i64>>(1)?.unwrap_or(0)))
+        })?
+    };
+
+    Ok(Json(SessionListResponse {
+        sessions,
+        coverage: CoverageHint { total, with_repo },
+    }))
 }
 
 #[derive(Deserialize)]

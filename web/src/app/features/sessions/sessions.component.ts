@@ -1,10 +1,10 @@
 import { CommonModule, DatePipe, DecimalPipe } from '@angular/common';
-import { Component, OnInit, effect, inject, signal } from '@angular/core';
+import { Component, OnInit, computed, effect, inject, signal } from '@angular/core';
 import { FormsModule } from '@angular/forms';
 import { RouterLink } from '@angular/router';
 import { LucideAngularModule } from 'lucide-angular';
 
-import { ApiService, V2Session, V2FileRow } from '../../core/api.service';
+import { ApiService, CoverageHint, V2Session, V2FileRow } from '../../core/api.service';
 import { FilterService } from '../../core/filter.service';
 import { FilterBarComponent } from '../../shared/filter-bar.component';
 import { RepoSummary, SessionDetail } from '../../core/models';
@@ -27,6 +27,13 @@ export class SessionsComponent implements OnInit {
   expanded = signal<string | null>(null);
   detailById = signal<Record<string, SessionDetail | null>>({});
   repoOptions = signal<RepoSummary[]>([]);
+  coverage = signal<CoverageHint | null>(null);
+
+  readonly missingRepoPct = computed(() => {
+    const c = this.coverage();
+    if (!c || c.total === 0) return 0;
+    return 1 - c.with_repo / c.total;
+  });
 
   searchInput = '';
 
@@ -36,8 +43,9 @@ export class SessionsComponent implements OnInit {
       const models = this.filter.modelsCsv();
       const repo = this.filter.reposCsv();
       const args = { fromMs: w.fromMs, toMs: w.toMs, models, repo, sort: this.sort(), limit: 200 };
-      this.api.sessionsV2({ ...args, search: this.searchInput || undefined }).subscribe((v) => {
-        this.rows.set(v);
+      this.api.sessionsV2({ ...args, search: this.searchInput || undefined }).subscribe((resp) => {
+        this.rows.set(resp.sessions);
+        this.coverage.set(resp.coverage);
         this.loaded.set(true);
       });
       this.api.listRepos({ from: w.fromMs, to: w.toMs, limit: 20 }).subscribe((r) => {
@@ -55,7 +63,23 @@ export class SessionsComponent implements OnInit {
     const repo = this.filter.reposCsv();
     this.api
       .sessionsV2({ fromMs: w.fromMs, toMs: w.toMs, models, repo, sort: this.sort(), limit: 200, search: v || undefined })
-      .subscribe((r) => this.rows.set(r));
+      .subscribe((resp) => {
+        this.rows.set(resp.sessions);
+        this.coverage.set(resp.coverage);
+      });
+  }
+
+  runBackfill() {
+    const w = this.filter.window();
+    const models = this.filter.modelsCsv();
+    const repo = this.filter.reposCsv();
+    this.api.backfillRepos().subscribe(() => {
+      const args = { fromMs: w.fromMs, toMs: w.toMs, models, repo, sort: this.sort(), limit: 200 };
+      this.api.sessionsV2({ ...args, search: this.searchInput || undefined }).subscribe((resp) => {
+        this.rows.set(resp.sessions);
+        this.coverage.set(resp.coverage);
+      });
+    });
   }
 
   toggleRepo(key: string) {

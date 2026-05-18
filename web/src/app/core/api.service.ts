@@ -95,6 +95,16 @@ export interface V2Session {
   cwd: string | null;
 }
 
+export interface CoverageHint {
+  total: number;
+  with_repo: number;
+}
+
+export interface SessionListResponse {
+  sessions: V2Session[];
+  coverage: CoverageHint;
+}
+
 export interface V2FileRow {
   file_path: string;
   edits: number;
@@ -161,8 +171,8 @@ export class ApiService {
   activeTime(args?: FilterArgs): Observable<V2ActiveTime> {
     return this.http.get<V2ActiveTime>(`${BASE}/api/v2/active-time`, { params: toParams(args) });
   }
-  sessionsV2(args?: FilterArgs): Observable<V2Session[]> {
-    return this.http.get<V2Session[]>(`${BASE}/api/v2/sessions`, { params: toParams(args) });
+  sessionsV2(args?: FilterArgs): Observable<SessionListResponse> {
+    return this.http.get<SessionListResponse>(`${BASE}/api/v2/sessions`, { params: toParams(args) });
   }
   files(args?: FilterArgs): Observable<V2FilesResponse> {
     return this.http.get<V2FilesResponse>(`${BASE}/api/v2/files`, { params: toParams(args) });

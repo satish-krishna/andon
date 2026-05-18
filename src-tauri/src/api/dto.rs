@@ -130,3 +130,15 @@ pub struct TopRepoEntry {
     /// Daily cost series for the period, oldest-first, same length as the period.
     pub spark: Vec<f64>,
 }
+
+#[derive(serde::Serialize)]
+pub struct CoverageHint {
+    pub total: i64,
+    pub with_repo: i64,
+}
+
+#[derive(serde::Serialize)]
+pub struct SessionListResponse {
+    pub sessions: Vec<serde_json::Value>,
+    pub coverage: CoverageHint,
+}

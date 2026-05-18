@@ -92,7 +92,7 @@ export class OverviewComponent implements OnInit {
       this.api.costByModel(args).subscribe((v) => this.costByModel.set(v));
       this.api.acceptByLanguageV2(args).subscribe((v) => this.acceptLang.set(v));
       this.api.activeTime(args).subscribe((v) => this.activeTime.set(v));
-      this.api.sessionsV2({ ...args, sort: 'time', limit: 6 }).subscribe((v) => this.recent.set(v));
+      this.api.sessionsV2({ ...args, sort: 'time', limit: 6 }).subscribe((v) => this.recent.set(v.sessions));
     });
   }
 
