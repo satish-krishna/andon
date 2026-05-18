@@ -45,8 +45,13 @@ export class FilesComponent implements OnInit {
     const repos = this.filter.repos();
     if (repos.length !== 1) return null;
     const key = repos[0];
-    // V2FileRow doesn't carry repo_root/repo_remote, so fall back to key if it looks like an abs path
-    return key.startsWith('/') || /^[A-Z]:\\/i.test(key) ? key : null;
+    // Prefer repo_root looked up from RepoSummary (covers the common case
+    // where the key is a normalized remote URL like github.com/org/repo).
+    const summary = this.repoOptions().find(r => r.key === key);
+    if (summary?.repo_root) return summary.repo_root;
+    // Fallback: the key itself when it looks like an absolute path.
+    if (key.startsWith('/') || /^[A-Z]:\\/.test(key)) return key;
+    return null;
   });
 
   constructor() {

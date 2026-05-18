@@ -90,6 +90,7 @@ export interface RepoSummary {
   label: string;
   has_remote: boolean;
   session_count: number;
+  repo_root?: string | null;
 }
 
 export interface TopRepoEntry {

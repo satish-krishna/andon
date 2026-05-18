@@ -20,7 +20,7 @@ import { EmptyComponent } from '../../shared/empty.component';
             <h1 class="text-xl font-semibold font-mono">{{ d.session.session_id }}</h1>
             @if (d.session.repo_name) {
               <div class="text-sm text-zinc-400 font-mono">
-                @if (d.session.repo_remote) {
+                @if (hasBrowsableRemote(d.session.repo_remote)) {
                   <a [href]="'https://' + d.session.repo_remote" target="_blank" rel="noopener"
                      class="hover:text-text underline underline-offset-2">{{ d.session.repo_name }}</a>
                 } @else {
@@ -168,6 +168,11 @@ export class SessionDetailComponent implements OnInit {
       next: () => this.reportBusy.set(false),
       error: () => this.reportBusy.set(false),
     });
+  }
+
+  hasBrowsableRemote(remote: string | null | undefined): boolean {
+    if (!remote) return false;
+    return /^(github\.com|gitlab\.com|bitbucket\.org|codeberg\.org|gitea\.com)\//.test(remote);
   }
 
   fmtDuration(secs: number): string {
