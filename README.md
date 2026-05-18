@@ -6,15 +6,29 @@ A local, single-binary desktop app that ingests Claude Code OpenTelemetry data, 
 
 Works with **any Claude Code subscription** (Pro, Max, Team, Enterprise, API key) — telemetry is emitted client-side regardless of plan.
 
-## What you get
+![Overview](docs/images/overview.png)
 
-- **Today's cost / sessions / accept-rate** at a glance
-- **Cost by model** (last 30 days, stacked bar)
-- **Token usage by type** (input / output / cache, line chart)
-- **Accept rate by language**
-- **Active time** split user vs CLI
-- Per-session detail (cost, tokens, files touched, decision timeline)
-- File edit heatmap colored by accept rate
+## What it does
+
+Claude Code already emits a rich stream of OpenTelemetry metrics and logs — cost, token usage, tool decisions, file edits, session lifecycle. Most engineers never see it because there's nowhere for it to go. Andon is the place for it to go.
+
+- A bundled OTLP receiver (gRPC `:4317` + HTTP/protobuf `:4318`) accepts the telemetry directly from the Claude Code CLI.
+- An embedded SQLite database persists every metric and log event, denormalised by session.
+- An Angular dashboard, served by a localhost API on `:8765`, renders the data as charts, tables, and a file heatmap.
+- A system tray icon keeps the process alive in the background; the window opens on demand.
+
+No collector, no Docker, no daemon to install. One executable.
+
+## At a glance
+
+| | |
+|---|---|
+| ![Sessions](docs/images/sessions.png) | ![Files](docs/images/files.png) |
+| **Sessions** — every Claude Code session with cost, duration, tokens, accept rate. | **Files** — what got touched, how often, accepted vs rejected, by language. |
+| ![Session detail](docs/images/session-detail.png) | ![Diagnostics](docs/images/diagnostics.png) |
+| **Session detail** — per-session timeline of tool decisions, files, and token spend. | **Diagnostics** — live OTLP event feed, listener health, event-type counters. |
+
+More detail and per-page screenshots: [`docs/features.md`](docs/features.md). Architecture, ports, and data model: [`docs/architecture.md`](docs/architecture.md).
 
 ## Requirements
 
@@ -23,7 +37,7 @@ Works with **any Claude Code subscription** (Pro, Max, Team, Enterprise, API key
 
 ## Install
 
-1. Download the latest `andon.exe` from the [releases page](https://github.com/satish-krishna/andon/releases) (once built).
+1. Download the latest `andon.exe` from the [releases page](https://github.com/satish-krishna/andon/releases).
 2. Double-click to launch. A tray icon appears (yellow disc).
 3. Left-click the tray icon → window opens.
 
@@ -52,6 +66,8 @@ Then restart any open Claude Code sessions. Within ~10 seconds of finishing a se
 }
 ```
 
+The **Settings → Danger zone** panel exposes "Unpatch" and "Restore from andon-backup" buttons if you want to roll back.
+
 ## Data location
 
 All data lives in `%USERPROFILE%\.andon\`:
@@ -61,7 +77,7 @@ All data lives in `%USERPROFILE%\.andon\`:
 | `data.db`      | SQLite database (WAL mode)           |
 | `log.txt`      | Rotating daily log                   |
 
-Open from the **Settings → Database** panel via the "Open data folder" button.
+Open from the **Settings → Data** panel via the "Open folder" button.
 
 ## Ports
 
@@ -77,28 +93,27 @@ All bind to loopback only. If any port is already in use (e.g., another OTLP col
 
 Tray menu → **Pause Ingestion** drops incoming metrics on the floor without closing the listeners. Tray menu → **Resume Ingestion** re-enables. Also toggleable from the Settings page.
 
+## Optional: forward to another collector
+
+Andon can re-emit everything it receives to a second OTLP HTTP/protobuf endpoint (your own collector, Honeycomb, Grafana Cloud, etc.). Off by default. Configure under **Settings → OTel Forwarder**.
+
 ## Build from source
 
+See [`docs/building.md`](docs/building.md) for the full setup. Quick version:
+
 ```powershell
-# One-time setup
-rustup default stable-x86_64-pc-windows-msvc
-# Visual Studio Build Tools 2022 with "Desktop development with C++" workload required.
-cargo install tauri-cli --version "^2.0" --locked
-
-# Frontend
-cd web
-npm install
-npm run build
-
-# Run dev
-cd ..
-cargo tauri dev
-
-# Production build
-cargo tauri build
+# One-time setup: Rust + Visual Studio Build Tools 2022 + tauri-cli
+cd web && npm install && npm run build && cd ..
+cargo tauri dev          # development
+cargo tauri build        # release binary in src-tauri/target/release/bundle/
 ```
 
-The release binary lands in `src-tauri/target/release/bundle/`.
+## Privacy
+
+- All ports bind to `127.0.0.1`. Nothing is exposed to the network.
+- No outbound calls. Andon never phones home.
+- Raw user prompts are never persisted even if `OTEL_LOG_USER_PROMPTS=1` upstream.
+- SQLite DB is user-only read/write.
 
 ## License
 
