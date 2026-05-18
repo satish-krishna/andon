@@ -1,7 +1,7 @@
-mod api;
+pub mod api;
 mod autostart;
 mod config;
-mod db;
+pub mod db;
 mod diagnostics;
 mod git_query;
 mod integration;

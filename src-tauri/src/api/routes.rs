@@ -7,12 +7,12 @@ use axum::{
     response::IntoResponse,
     routing::{get, post},
 };
-use chrono::{Datelike, Days, Local, NaiveDate, TimeZone};
+use chrono::{Datelike, Local, NaiveDate, TimeZone};
 use rusqlite::params;
 use serde::Deserialize;
 use serde_json::json;
 
-use super::{ApiState, dto::*, hook_response::HookOutput};
+use super::{ApiState, dto::*, filter::{FilterQuery, today_bounds}, hook_response::HookOutput};
 
 pub fn router(state: ApiState) -> Router {
     Router::new()
@@ -646,18 +646,6 @@ fn accept_rate(accepts: i64, rejects: i64, aborts: i64) -> f64 {
     }
 }
 
-fn today_bounds() -> (i64, i64) {
-    let now = Local::now();
-    let start = now.date_naive().and_hms_opt(0, 0, 0).unwrap();
-    let from = Local
-        .from_local_datetime(&start)
-        .single()
-        .map(|dt| dt.timestamp_millis())
-        .unwrap_or(0);
-    let to = from + 24 * 60 * 60 * 1000;
-    (from, to)
-}
-
 fn last_n_days_bounds(days: i64) -> (i64, i64) {
     let (today_from, today_to) = today_bounds();
     let from = today_from - (days - 1) * 24 * 60 * 60 * 1000;
@@ -1186,61 +1174,6 @@ async fn reports_index(State(state): State<ApiState>) -> Json<serde_json::Value>
 // ============================================================================
 // v2 — filterable endpoints
 // ============================================================================
-
-#[derive(Deserialize)]
-struct FilterQuery {
-    from: Option<i64>,         // unix ms
-    to: Option<i64>,           // unix ms
-    models: Option<String>,    // comma-separated
-}
-
-impl FilterQuery {
-    fn window(&self) -> (i64, i64) {
-        let (default_from, default_to) = current_month_bounds();
-        (self.from.unwrap_or(default_from), self.to.unwrap_or(default_to))
-    }
-    fn model_list(&self) -> Vec<String> {
-        self.models
-            .as_deref()
-            .map(|s| {
-                s.split(',')
-                    .map(|x| x.trim().to_string())
-                    .filter(|x| !x.is_empty())
-                    .collect()
-            })
-            .unwrap_or_default()
-    }
-    fn model_clause(&self, col: &str) -> (String, Vec<String>) {
-        let models = self.model_list();
-        if models.is_empty() {
-            return (String::new(), vec![]);
-        }
-        let likes: Vec<String> = models.iter().map(|m| format!("%{}%", m.to_lowercase())).collect();
-        let ored = likes
-            .iter()
-            .map(|_| format!("LOWER({col}) LIKE ?"))
-            .collect::<Vec<_>>()
-            .join(" OR ");
-        (format!(" AND ({ored})"), likes)
-    }
-}
-
-fn current_month_bounds() -> (i64, i64) {
-    let now = Local::now();
-    let start = now
-        .date_naive()
-        .with_day(1)
-        .unwrap_or(now.date_naive())
-        .and_hms_opt(0, 0, 0)
-        .unwrap();
-    let from = Local
-        .from_local_datetime(&start)
-        .single()
-        .map(|d| d.timestamp_millis())
-        .unwrap_or(0);
-    let (_, today_to) = today_bounds();
-    (from, today_to)
-}
 
 fn prev_month_same_day_window(from: i64) -> (i64, i64) {
     // Compute "the same span, shifted back by ~1 month."

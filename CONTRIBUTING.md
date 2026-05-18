@@ -219,7 +219,7 @@ Rules:
 ## Testing
 
 - **Rust**: `cd src-tauri; cargo test` for unit + integration tests (the crate lives in `src-tauri/`, not at the repo root). Integration tests run against the real SQLite (file-backed under `tempfile`) — do not mock the DB.
-- **Angular**: `cd web; npm test -- --watch=false` for Karma + Jasmine.
+- **Angular**: `cd web; npm test` for Vitest (`vitest run`, CI mode by default). `npm run test:watch` for watch mode, `npm run test:coverage` for coverage.
 - **Smoke**: `node scripts/smoke_grpc.js` and `python scripts/smoke_otlp.py` exercise the live OTLP receivers. Run these before merging anything that touches `otlp/` or the `Ingestor`.
 - **TDD is non-negotiable** — write the failing test first.
 
@@ -261,7 +261,7 @@ Before opening a PR, all of these must pass:
 
 **Tests**
 - [ ] `cd src-tauri; cargo test` passes
-- [ ] `cd web; npm test -- --watch=false` passes
+- [ ] `cd web; npm test` passes
 - [ ] New code has tests driving it (TDD)
 - [ ] If `otlp/` or `Ingestor` changed: relevant smoke script run locally
 
