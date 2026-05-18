@@ -3,10 +3,10 @@ mod autostart;
 mod config;
 pub mod db;
 pub mod diagnostics;
-mod git_query;
+pub mod git_query;
 pub mod integration;
 pub mod otlp;
-mod repo_inference;
+pub mod repo_inference;
 pub mod reports;
 pub mod settings;
 
