@@ -84,3 +84,23 @@ export interface DbStats {
   db_path: string;
   tables: Record<string, number>;
 }
+
+export interface RepoSummary {
+  key: string;
+  label: string;
+  has_remote: boolean;
+  session_count: number;
+}
+
+export interface TopRepoEntry {
+  key: string;
+  label: string;
+  cost_usd: number;
+  session_count: number;
+  spark: number[];
+}
+
+export interface BackfillResult {
+  scanned: number;
+  updated: number;
+}

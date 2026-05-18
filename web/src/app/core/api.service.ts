@@ -4,12 +4,15 @@ import { Observable } from 'rxjs';
 import {
   AcceptByLanguage,
   ActiveTimeToday,
+  BackfillResult,
   DailySeries,
   DbStats,
   FileHeatmapRow,
   OverviewToday,
+  RepoSummary,
   SessionDetail,
   SessionSummary,
+  TopRepoEntry,
 } from './models';
 
 const BASE = 'http://127.0.0.1:8765';
@@ -253,6 +256,23 @@ export class ApiService {
   }
   reportsIndex(): Observable<{ session_ids: string[] }> {
     return this.http.get<any>(`${BASE}/api/sessions/reports/index`);
+  }
+  listRepos(args: { from?: number; to?: number; limit?: number }): Observable<RepoSummary[]> {
+    let p = new HttpParams();
+    if (args.from !== undefined) p = p.set('from', String(args.from));
+    if (args.to !== undefined) p = p.set('to', String(args.to));
+    if (args.limit !== undefined) p = p.set('limit', String(args.limit));
+    return this.http.get<RepoSummary[]>(`${BASE}/api/repos`, { params: p });
+  }
+  topRepos(args: { from: number; to: number; limit?: number }): Observable<TopRepoEntry[]> {
+    let p = new HttpParams();
+    p = p.set('from', String(args.from));
+    p = p.set('to', String(args.to));
+    if (args.limit !== undefined) p = p.set('limit', String(args.limit));
+    return this.http.get<TopRepoEntry[]>(`${BASE}/api/overview/top-repos`, { params: p });
+  }
+  backfillRepos(): Observable<BackfillResult> {
+    return this.http.post<BackfillResult>(`${BASE}/api/repo/backfill`, {});
   }
 }
 
