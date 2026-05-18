@@ -119,6 +119,9 @@ pub struct RepoSummary {
     /// `true` when repo_remote is set.
     pub has_remote: bool,
     pub session_count: i64,
+    /// Any one repo_root observed for this group (MAX). Used by the Files page
+    /// to derive relative paths when the user selects a remote-keyed repo chip.
+    pub repo_root: Option<String>,
 }
 
 #[derive(serde::Serialize)]

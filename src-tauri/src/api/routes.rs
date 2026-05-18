@@ -1018,19 +1018,26 @@ async fn hook_session_context(
     Ok(Json(json!({ "ok": true })))
 }
 
+#[derive(serde::Deserialize)]
+struct BackfillQuery {
+    #[serde(default)] limit: Option<usize>,
+}
+
 async fn repo_backfill(
     State(state): State<ApiState>,
+    Query(q): Query<BackfillQuery>,
 ) -> Json<crate::api::dto::BackfillResult> {
-    // Collect candidate session ids (repo_root still NULL).
+    let limit = q.limit.unwrap_or(50);
+    // Collect candidate session ids (repo_root still NULL), capped at limit.
     let pool = state.pool.clone();
     let ids: Vec<String> = match tokio::task::spawn_blocking({
         let pool = pool.clone();
         move || -> rusqlite::Result<Vec<String>> {
             let conn = pool.get().map_err(|_| rusqlite::Error::InvalidQuery)?;
             let mut stmt = conn.prepare(
-                "SELECT session_id FROM sessions WHERE repo_root IS NULL ORDER BY started_at DESC"
+                "SELECT session_id FROM sessions WHERE repo_root IS NULL ORDER BY started_at DESC LIMIT ?1"
             )?;
-            let rows = stmt.query_map([], |r| r.get::<_, String>(0))?;
+            let rows = stmt.query_map(params![limit as i64], |r| r.get::<_, String>(0))?;
             rows.collect::<rusqlite::Result<Vec<_>>>()
         }
     }).await {
@@ -1039,27 +1046,39 @@ async fn repo_backfill(
     };
 
     let scanned = ids.len();
-    let mut updated = 0usize;
+    let concurrency = 4;
+    let sem = std::sync::Arc::new(tokio::sync::Semaphore::new(concurrency));
+    let mut handles = Vec::new();
     for sid in ids {
-        let Ok(Some(info)) = crate::repo_inference::infer_repo_for_session(
-            pool.clone(), sid.clone()
-        ).await else { continue };
-
+        let permit = sem.clone().acquire_owned().await.unwrap();
         let pool_inner = pool.clone();
-        let written = tokio::task::spawn_blocking(move || -> rusqlite::Result<usize> {
-            let conn = pool_inner.get().map_err(|_| rusqlite::Error::InvalidQuery)?;
-            let root = info.repo_root.as_ref().map(|p| p.to_string_lossy().into_owned());
-            conn.execute(
-                "UPDATE sessions
-                   SET repo_root   = COALESCE(repo_root,   ?2),
-                       repo_remote = COALESCE(repo_remote, ?3),
-                       repo_branch = COALESCE(repo_branch, ?4),
-                       repo_name   = COALESCE(repo_name,   ?5)
-                 WHERE session_id = ?1",
-                params![sid, root, info.repo_remote, info.repo_branch, info.repo_name],
-            )
-        }).await.unwrap_or(Ok(0)).unwrap_or(0);
-        if written > 0 { updated += 1; }
+        handles.push(tokio::spawn(async move {
+            let _permit = permit;
+            let Ok(Some(info)) = crate::repo_inference::infer_repo_for_session(
+                pool_inner.clone(), sid.clone()
+            ).await else { return 0usize };
+
+            let pool2 = pool_inner.clone();
+            let sid2  = sid.clone();
+            let written = tokio::task::spawn_blocking(move || -> rusqlite::Result<usize> {
+                let conn = pool2.get().map_err(|_| rusqlite::Error::InvalidQuery)?;
+                let root = info.repo_root.as_ref().map(|p| p.to_string_lossy().into_owned());
+                conn.execute(
+                    "UPDATE sessions
+                       SET repo_root   = COALESCE(repo_root,   ?2),
+                           repo_remote = COALESCE(repo_remote, ?3),
+                           repo_branch = COALESCE(repo_branch, ?4),
+                           repo_name   = COALESCE(repo_name,   ?5)
+                     WHERE session_id = ?1",
+                    params![sid2, root, info.repo_remote, info.repo_branch, info.repo_name],
+                )
+            }).await.unwrap_or(Ok(0)).unwrap_or(0);
+            if written > 0 { 1 } else { 0 }
+        }));
+    }
+    let mut updated = 0usize;
+    for h in handles {
+        updated += h.await.unwrap_or(0);
     }
     Json(crate::api::dto::BackfillResult { scanned, updated })
 }
@@ -2114,7 +2133,8 @@ async fn list_repos(
                          CASE WHEN repo_remote IS NOT NULL THEN repo_remote ELSE NULL END,
                          repo_root, cwd, '—') AS label,
                 CASE WHEN repo_remote IS NOT NULL THEN 1 ELSE 0 END AS has_remote,
-                COUNT(*) AS n
+                COUNT(*) AS n,
+                MAX(repo_root) AS rr
              FROM sessions
              WHERE started_at BETWEEN ?1 AND ?2
              GROUP BY k
@@ -2127,6 +2147,7 @@ async fn list_repos(
                 label: r.get::<_, String>(1)?,
                 has_remote: r.get::<_, i64>(2)? != 0,
                 session_count: r.get::<_, i64>(3)?,
+                repo_root: r.get::<_, Option<String>>(4)?,
             })
         })?;
         rows.collect()
@@ -2151,6 +2172,8 @@ async fn overview_top_repos(
         let conn = pool.get().map_err(|_| rusqlite::Error::InvalidQuery)?;
 
         // 1) Top-N repos by cost.
+        // Filter by c.timestamp (cost timestamp) so totals align with the
+        // per-day sparkline query which also filters on c.timestamp.
         let mut stmt = conn.prepare(
             "SELECT
                 COALESCE(s.repo_remote, s.repo_root, s.cwd, '—') AS k,
@@ -2159,7 +2182,7 @@ async fn overview_top_repos(
                 COUNT(DISTINCT s.session_id) AS n
              FROM sessions s
              JOIN cost_entries c ON c.session_id = s.session_id
-             WHERE s.started_at BETWEEN ?1 AND ?2
+             WHERE c.timestamp BETWEEN ?1 AND ?2
              GROUP BY k
              ORDER BY cost DESC
              LIMIT ?3"

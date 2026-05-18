@@ -12,6 +12,19 @@ use rusqlite::params;
 use crate::db::DbPool;
 use crate::git_query::{RepoInfo, query_repo};
 
+/// Returns true when `p` has at least one named component beyond the root
+/// prefix. This rejects bare roots like `/` (Unix) or `C:\` (Windows) which
+/// are not meaningful repository roots.
+pub fn is_meaningful_root(p: &Path) -> bool {
+    let mut named = 0usize;
+    for c in p.components() {
+        if matches!(c, std::path::Component::Normal(_)) {
+            named += 1;
+        }
+    }
+    named >= 1
+}
+
 /// Longest path that is an ancestor of every input path. Returns None when
 /// the input is empty or the paths share no common root.
 pub fn longest_common_ancestor(paths: &[PathBuf]) -> Option<PathBuf> {
@@ -79,6 +92,12 @@ pub async fn infer_repo_for_session(
         None => return Ok(None),
     };
 
+    // Reject bare filesystem roots (e.g. `/` or `C:\`) — they are not
+    // meaningful repo roots and walking up from them finds nothing useful.
+    if !is_meaningful_root(&lca) {
+        return Ok(None);
+    }
+
     let start = if lca.is_dir() {
         lca.clone()
     } else {
@@ -94,6 +113,11 @@ pub async fn infer_repo_for_session(
     };
 
     let git_root = find_git_ancestor(&start).unwrap_or(start);
+
+    // Guard again after walking up — in case the walk landed on a root.
+    if !is_meaningful_root(&git_root) {
+        return Ok(None);
+    }
     let info = query_repo(&git_root).await;
     if info.repo_root.is_some() || info.repo_remote.is_some() {
         Ok(Some(info))
@@ -102,7 +126,7 @@ pub async fn infer_repo_for_session(
         // is non-NULL after inference.
         Ok(Some(RepoInfo {
             repo_root: Some(git_root.clone()),
-            repo_name: Some(crate::git_query::compute_repo_name(None, Some(&git_root), &git_root)),
+            repo_name: crate::git_query::compute_repo_name(None, Some(&git_root), &git_root),
             ..Default::default()
         }))
     }
@@ -153,5 +177,13 @@ mod tests {
         std::fs::create_dir_all(tmp.join(".git")).unwrap();
         assert_eq!(find_git_ancestor(&sub), Some(tmp.clone()));
         std::fs::remove_dir_all(&tmp).ok();
+    }
+
+    #[test]
+    fn infer_returns_none_when_lca_is_root_only() {
+        // LCA of /a/x and /b/y is "/", which should not be persisted.
+        let paths = vec![PathBuf::from("/a/x"), PathBuf::from("/b/y")];
+        let lca = longest_common_ancestor(&paths).unwrap();
+        assert!(!is_meaningful_root(&lca));
     }
 }

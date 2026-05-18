@@ -64,7 +64,7 @@ pub async fn query_repo(cwd: &Path) -> RepoInfo {
         repo_root: toplevel,
         repo_remote: remote,
         repo_branch: branch,
-        repo_name: Some(name),
+        repo_name: name,
     }
 }
 
@@ -106,24 +106,27 @@ pub fn normalize_remote(raw: &str) -> String {
 
 /// Derive a display name for the repo. Prefers org/repo from the remote;
 /// otherwise basename of repo_root; otherwise basename of cwd.
-pub fn compute_repo_name(remote: Option<&str>, repo_root: Option<&Path>, cwd: &Path) -> String {
+/// Returns None when all candidates produce an empty basename (e.g. the path
+/// is the filesystem root `/` or `C:\`).
+pub fn compute_repo_name(remote: Option<&str>, repo_root: Option<&Path>, cwd: &Path) -> Option<String> {
     if let Some(r) = remote {
         // Take the last two segments, e.g. github.com/foo/bar -> foo/bar.
         let parts: Vec<&str> = r.split('/').collect();
         if parts.len() >= 3 {
-            return format!("{}/{}", parts[parts.len() - 2], parts[parts.len() - 1]);
+            return Some(format!("{}/{}", parts[parts.len() - 2], parts[parts.len() - 1]));
         }
-        return r.to_string();
+        return Some(r.to_string());
     }
-    let base = |p: &Path| {
+    let base = |p: &Path| -> Option<String> {
         p.file_name()
             .and_then(|s| s.to_str())
+            .filter(|s| !s.is_empty())
             .map(|s| s.to_string())
-            .unwrap_or_default()
     };
     if let Some(rr) = repo_root {
-        let b = base(rr);
-        if !b.is_empty() { return b; }
+        if let Some(b) = base(rr) {
+            return Some(b);
+        }
     }
     base(cwd)
 }
@@ -162,7 +165,7 @@ mod tests {
     fn name_from_remote() {
         assert_eq!(
             compute_repo_name(Some("github.com/satish-krishna/andon"), None, &PathBuf::from("/tmp")),
-            "satish-krishna/andon"
+            Some("satish-krishna/andon".to_string())
         );
     }
 
@@ -170,7 +173,7 @@ mod tests {
     fn name_from_root_when_no_remote() {
         assert_eq!(
             compute_repo_name(None, Some(&PathBuf::from("/tmp/andon")), &PathBuf::from("/tmp/andon/sub")),
-            "andon"
+            Some("andon".to_string())
         );
     }
 
@@ -178,8 +181,14 @@ mod tests {
     fn name_from_cwd_when_no_root() {
         assert_eq!(
             compute_repo_name(None, None, &PathBuf::from("/tmp/scratch")),
-            "scratch"
+            Some("scratch".to_string())
         );
+    }
+
+    #[test]
+    fn name_is_none_when_everything_is_empty() {
+        let root = PathBuf::from("/");
+        assert_eq!(compute_repo_name(None, Some(&root), &root), None);
     }
 
     #[tokio::test]
