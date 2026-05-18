@@ -1,3 +1,7 @@
+// Reserved for Phase 2/3 specs. Not yet consumed on this branch — the
+// FilterService spec constructs the service directly. See
+// docs/superpowers/plans/2026-05-18-test-harness-phase-2.md for the planned
+// component / route tests that will compose preset filters via this builder.
 import { FilterService, RangePreset } from '../app/core/filter.service';
 
 export interface FilterFixtureOpts {

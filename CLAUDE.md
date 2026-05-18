@@ -34,7 +34,7 @@ cargo tauri build
 
 # Tests
 cd src-tauri; cargo test              # Rust unit + integration tests
-cd web; npm test -- --watch=false     # Angular tests (CI mode)
+cd web; npm test                      # Angular tests (Vitest, CI mode by default)
 
 # Smoke-test the OTLP receivers against a running app
 # (start `cargo tauri dev` first — these need the listeners bound on :4317 / :4318)
