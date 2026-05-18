@@ -1,0 +1,11 @@
+---
+source: tests/api_overview.rs
+expression: "&body"
+---
+{
+  "accept_rate": "[rate]",
+  "cost_usd": "[cost]",
+  "sessions": "[sessions]",
+  "tokens_input": "[tokens_input]",
+  "tokens_output": "[tokens_output]"
+}

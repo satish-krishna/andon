@@ -1,0 +1,17 @@
+---
+source: tests/api_overview.rs
+expression: "&body"
+---
+{
+  "days": "[days]",
+  "series": [
+    {
+      "name": "input",
+      "values": "[values]"
+    },
+    {
+      "name": "output",
+      "values": "[values]"
+    }
+  ]
+}

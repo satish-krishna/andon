@@ -51,7 +51,7 @@ winreg = "0.55"
 
 [dev-dependencies]
 tempfile = "3"
-insta = { version = "1", features = ["json"] }
+insta = { version = "1", features = ["json", "redactions"] }
 tower = { version = "0.5", features = ["util"] }
 http-body-util = "0.1"
 

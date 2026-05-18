@@ -1,0 +1,5 @@
+---
+source: tests/api_overview.rs
+expression: "&body[\"series\"][0][\"name\"]"
+---
+"model-a"
