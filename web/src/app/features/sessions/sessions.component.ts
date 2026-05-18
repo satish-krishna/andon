@@ -1,13 +1,13 @@
 import { CommonModule, DatePipe, DecimalPipe } from '@angular/common';
-import { Component, effect, inject, signal } from '@angular/core';
+import { Component, OnInit, computed, effect, inject, signal } from '@angular/core';
 import { FormsModule } from '@angular/forms';
-import { RouterLink } from '@angular/router';
+import { ActivatedRoute, RouterLink } from '@angular/router';
 import { LucideAngularModule } from 'lucide-angular';
 
-import { ApiService, V2Session, V2FileRow } from '../../core/api.service';
+import { ApiService, CoverageHint, V2Session, V2FileRow } from '../../core/api.service';
 import { FilterService } from '../../core/filter.service';
 import { FilterBarComponent } from '../../shared/filter-bar.component';
-import { SessionDetail } from '../../core/models';
+import { RepoSummary, SessionDetail } from '../../core/models';
 
 type SortKey = 'time' | 'cost' | 'duration' | 'decisions';
 
@@ -17,15 +17,24 @@ type SortKey = 'time' | 'cost' | 'duration' | 'decisions';
   templateUrl: './sessions.component.html',
   standalone: true,
 })
-export class SessionsComponent {
+export class SessionsComponent implements OnInit {
   filter = inject(FilterService);
   private api = inject(ApiService);
+  private route = inject(ActivatedRoute);
 
   rows = signal<V2Session[]>([]);
   loaded = signal(false);
   sort = signal<SortKey>('time');
   expanded = signal<string | null>(null);
   detailById = signal<Record<string, SessionDetail | null>>({});
+  repoOptions = signal<RepoSummary[]>([]);
+  coverage = signal<CoverageHint | null>(null);
+
+  readonly missingRepoPct = computed(() => {
+    const c = this.coverage();
+    if (!c || c.total === 0) return 0;
+    return 1 - c.with_repo / c.total;
+  });
 
   searchInput = '';
 
@@ -33,21 +42,61 @@ export class SessionsComponent {
     effect(() => {
       const w = this.filter.window();
       const models = this.filter.modelsCsv();
-      const args = { fromMs: w.fromMs, toMs: w.toMs, models, sort: this.sort(), limit: 200 };
-      this.api.sessionsV2({ ...args, search: this.searchInput || undefined }).subscribe((v) => {
-        this.rows.set(v);
+      const repo = this.filter.reposCsv();
+      const args = { fromMs: w.fromMs, toMs: w.toMs, models, repo, sort: this.sort(), limit: 200 };
+      this.api.sessionsV2({ ...args, search: this.searchInput || undefined }).subscribe((resp) => {
+        this.rows.set(resp.sessions);
+        this.coverage.set(resp.coverage);
         this.loaded.set(true);
       });
+      this.api.listRepos({ from: w.fromMs, to: w.toMs, limit: 20 }).subscribe((r) => {
+        this.repoOptions.set(r);
+      });
     });
+  }
+
+  ngOnInit(): void {
+    const repoParam = this.route.snapshot.queryParamMap.get('repo');
+    if (repoParam) {
+      const repos = repoParam.split(',').filter(s => s.length > 0);
+      if (repos.length) this.filter.repos.set(repos);
+    }
   }
 
   onSearch(v: string) {
     this.searchInput = v;
     const w = this.filter.window();
     const models = this.filter.modelsCsv();
+    const repo = this.filter.reposCsv();
     this.api
-      .sessionsV2({ fromMs: w.fromMs, toMs: w.toMs, models, sort: this.sort(), limit: 200, search: v || undefined })
-      .subscribe((r) => this.rows.set(r));
+      .sessionsV2({ fromMs: w.fromMs, toMs: w.toMs, models, repo, sort: this.sort(), limit: 200, search: v || undefined })
+      .subscribe((resp) => {
+        this.rows.set(resp.sessions);
+        this.coverage.set(resp.coverage);
+      });
+  }
+
+  runBackfill() {
+    const w = this.filter.window();
+    const models = this.filter.modelsCsv();
+    const repo = this.filter.reposCsv();
+    this.api.backfillRepos().subscribe(() => {
+      const args = { fromMs: w.fromMs, toMs: w.toMs, models, repo, sort: this.sort(), limit: 200 };
+      this.api.sessionsV2({ ...args, search: this.searchInput || undefined }).subscribe((resp) => {
+        this.rows.set(resp.sessions);
+        this.coverage.set(resp.coverage);
+      });
+    });
+  }
+
+  toggleRepo(key: string) {
+    const current = this.filter.repos();
+    const idx = current.indexOf(key);
+    if (idx >= 0) {
+      this.filter.repos.set(current.filter((k) => k !== key));
+    } else {
+      this.filter.repos.set([...current, key]);
+    }
   }
 
   setSort(k: SortKey) {

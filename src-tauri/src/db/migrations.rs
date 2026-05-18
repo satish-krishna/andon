@@ -96,7 +96,17 @@ CREATE INDEX idx_log_events_name    ON log_events(event_name, timestamp);
 CREATE INDEX idx_log_events_ts      ON log_events(timestamp DESC);
 "#;
 
-const MIGRATIONS: &[(i32, &str)] = &[(1, MIGRATION_V1), (2, MIGRATION_V2)];
+const MIGRATION_V3: &str = r#"
+ALTER TABLE sessions ADD COLUMN cwd TEXT;
+ALTER TABLE sessions ADD COLUMN repo_root TEXT;
+ALTER TABLE sessions ADD COLUMN repo_remote TEXT;
+ALTER TABLE sessions ADD COLUMN repo_branch TEXT;
+ALTER TABLE sessions ADD COLUMN repo_name TEXT;
+CREATE INDEX idx_sessions_repo_remote ON sessions(repo_remote);
+CREATE INDEX idx_sessions_repo_root   ON sessions(repo_root);
+"#;
+
+const MIGRATIONS: &[(i32, &str)] = &[(1, MIGRATION_V1), (2, MIGRATION_V2), (3, MIGRATION_V3)];
 
 pub fn apply(conn: &mut Connection) -> Result<()> {
     conn.execute_batch(
@@ -133,4 +143,47 @@ pub fn apply(conn: &mut Connection) -> Result<()> {
     }
 
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use rusqlite::Connection;
+
+    #[test]
+    fn v3_adds_repo_columns_and_indexes() {
+        let mut conn = Connection::open_in_memory().unwrap();
+        apply(&mut conn).unwrap();
+
+        let cols: Vec<String> = conn
+            .prepare("PRAGMA table_info(sessions)").unwrap()
+            .query_map([], |r| r.get::<_, String>(1)).unwrap()
+            .map(|r| r.unwrap()).collect();
+        for expected in ["cwd", "repo_root", "repo_remote", "repo_branch", "repo_name"] {
+            assert!(cols.contains(&expected.to_string()), "missing column {expected}");
+        }
+
+        let idxs: Vec<String> = conn
+            .prepare("SELECT name FROM sqlite_master WHERE type='index' AND tbl_name='sessions'").unwrap()
+            .query_map([], |r| r.get::<_, String>(0)).unwrap()
+            .map(|r| r.unwrap()).collect();
+        assert!(idxs.contains(&"idx_sessions_repo_remote".to_string()));
+        assert!(idxs.contains(&"idx_sessions_repo_root".to_string()));
+
+        let v: i32 = conn.query_row(
+            "SELECT MAX(version) FROM schema_version", [], |r| r.get(0)
+        ).unwrap();
+        assert_eq!(v, 3);
+    }
+
+    #[test]
+    fn migrations_are_idempotent_across_runs() {
+        let mut conn = Connection::open_in_memory().unwrap();
+        apply(&mut conn).unwrap();
+        apply(&mut conn).unwrap(); // second call must be a no-op
+        let v: i32 = conn.query_row(
+            "SELECT MAX(version) FROM schema_version", [], |r| r.get(0)
+        ).unwrap();
+        assert_eq!(v, 3);
+    }
 }

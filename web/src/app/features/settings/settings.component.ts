@@ -20,6 +20,8 @@ export class SettingsComponent implements OnInit {
   integration = signal<IntegrationStatus | null>(null);
   actionMsg = signal<string>('');
   autostart = signal<{ enabled: boolean; registered_command: string | null } | null>(null);
+  backfillResult = signal<{ scanned: number; updated: number } | null>(null);
+  backfilling = signal(false);
 
   settingsSnippet = `{
   "env": {
@@ -80,6 +82,14 @@ export class SettingsComponent implements OnInit {
 
   openFolder() {
     this.api.openDataFolder().subscribe();
+  }
+
+  runBackfill() {
+    this.backfilling.set(true);
+    this.api.backfillRepos().subscribe({
+      next: r => { this.backfillResult.set(r); this.backfilling.set(false); },
+      error: () => this.backfilling.set(false),
+    });
   }
 
   copySnippet() {

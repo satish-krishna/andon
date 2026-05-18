@@ -46,6 +46,7 @@ pub fn router(state: ApiState) -> Router {
         .route("/api/integration/restore-backup", post(integration_restore))
         .route("/api/hooks/tool-use", post(hook_tool_use))
         .route("/api/hooks/session-end", post(hook_session_end))
+        .route("/api/session/context", post(hook_session_context))
         .route("/api/sessions/:id/report", get(get_report).post(generate_report_handler))
         .route("/api/sessions/:id/report/open", post(open_report))
         .route("/api/sessions/reports/index", get(reports_index))
@@ -58,6 +59,9 @@ pub fn router(state: ApiState) -> Router {
         .route("/api/settings", get(get_settings))
         .route("/api/settings/forwarder", axum::routing::put(put_forwarder))
         .route("/api/settings/forwarder/test", post(test_forwarder))
+        .route("/api/repo/backfill", post(repo_backfill))
+        .route("/api/repos", get(list_repos))
+        .route("/api/overview/top-repos", get(overview_top_repos))
         .with_state(state)
 }
 
@@ -302,7 +306,8 @@ async fn list_sessions(
                 COALESCE((SELECT SUM(count) FROM token_usage WHERE session_id = s.session_id AND token_type='input'), 0),
                 COALESCE((SELECT SUM(count) FROM token_usage WHERE session_id = s.session_id AND token_type='output'), 0),
                 COALESCE((SELECT COUNT(*) FROM tool_decisions WHERE session_id = s.session_id AND decision='accept'), 0),
-                COALESCE((SELECT COUNT(*) FROM tool_decisions WHERE session_id = s.session_id AND decision='reject'), 0)
+                COALESCE((SELECT COUNT(*) FROM tool_decisions WHERE session_id = s.session_id AND decision='reject'), 0),
+                s.cwd, s.repo_root, s.repo_remote, s.repo_branch, s.repo_name
          FROM sessions s
          WHERE s.started_at >= ?1 AND s.started_at <= ?2
          ORDER BY s.started_at DESC
@@ -321,6 +326,11 @@ async fn list_sessions(
             tokens_output: r.get(8).unwrap_or(0),
             accepts: r.get(9).unwrap_or(0),
             rejects: r.get(10).unwrap_or(0),
+            cwd: r.get(11)?,
+            repo_root: r.get(12)?,
+            repo_remote: r.get(13)?,
+            repo_branch: r.get(14)?,
+            repo_name: r.get(15)?,
         })
     })?;
     Ok(Json(rows.flatten().collect()))
@@ -339,7 +349,8 @@ async fn session_detail(
                     COALESCE((SELECT SUM(count) FROM token_usage WHERE session_id = s.session_id AND token_type='input'), 0),
                     COALESCE((SELECT SUM(count) FROM token_usage WHERE session_id = s.session_id AND token_type='output'), 0),
                     COALESCE((SELECT COUNT(*) FROM tool_decisions WHERE session_id = s.session_id AND decision='accept'), 0),
-                    COALESCE((SELECT COUNT(*) FROM tool_decisions WHERE session_id = s.session_id AND decision='reject'), 0)
+                    COALESCE((SELECT COUNT(*) FROM tool_decisions WHERE session_id = s.session_id AND decision='reject'), 0),
+                    s.cwd, s.repo_root, s.repo_remote, s.repo_branch, s.repo_name
              FROM sessions s WHERE s.session_id = ?1",
             params![id],
             |r| {
@@ -355,6 +366,11 @@ async fn session_detail(
                     tokens_output: r.get(8).unwrap_or(0),
                     accepts: r.get(9).unwrap_or(0),
                     rejects: r.get(10).unwrap_or(0),
+                    cwd: r.get(11)?,
+                    repo_root: r.get(12)?,
+                    repo_remote: r.get(13)?,
+                    repo_branch: r.get(14)?,
+                    repo_name: r.get(15)?,
                 })
             },
         )
@@ -880,7 +896,191 @@ async fn hook_session_end(
         }
     });
 
+    // Best-effort repo inference for sessions the hook didn't cover.
+    let pool_for_inf = state.pool.clone();
+    let sid_for_inf = sid.clone();
+    tokio::spawn(async move {
+        // Skip if repo_root is already populated.
+        let needs = {
+            let pool = pool_for_inf.clone();
+            let sid = sid_for_inf.clone();
+            tokio::task::spawn_blocking(move || -> bool {
+                let Ok(conn) = pool.get() else { return false };
+                conn.query_row(
+                    "SELECT repo_root IS NULL FROM sessions WHERE session_id = ?1",
+                    params![sid], |r| r.get::<_, i64>(0)
+                ).map(|n| n != 0).unwrap_or(false)
+            }).await.unwrap_or(false)
+        };
+        if !needs { return; }
+
+        let Ok(Some(info)) = crate::repo_inference::infer_repo_for_session(
+            pool_for_inf.clone(), sid_for_inf.clone()
+        ).await else { return };
+
+        let pool = pool_for_inf.clone();
+        let sid  = sid_for_inf.clone();
+        let _ = tokio::task::spawn_blocking(move || {
+            let Ok(conn) = pool.get() else { return };
+            let root = info.repo_root.as_ref().map(|p| p.to_string_lossy().into_owned());
+            let _ = conn.execute(
+                "UPDATE sessions
+                   SET repo_root   = COALESCE(repo_root,   ?2),
+                       repo_remote = COALESCE(repo_remote, ?3),
+                       repo_branch = COALESCE(repo_branch, ?4),
+                       repo_name   = COALESCE(repo_name,   ?5)
+                 WHERE session_id = ?1",
+                params![sid, root, info.repo_remote, info.repo_branch, info.repo_name],
+            );
+        }).await;
+    });
+
     Ok(Json(json!({ "ok": true, "reason": p.reason })))
+}
+
+async fn hook_session_context(
+    State(state): State<ApiState>,
+    Json(p): Json<crate::api::dto::SessionContextPayload>,
+) -> Result<Json<serde_json::Value>, ApiError> {
+    let sid = p.session_id.trim().to_string();
+    if sid.is_empty() {
+        return Err(ApiError {
+            status: StatusCode::BAD_REQUEST,
+            message: "session_id required".into(),
+        });
+    }
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_millis() as i64)
+        .unwrap_or(0);
+    let cwd_str = p.cwd.clone().unwrap_or_default();
+
+    // 1) Persist cwd synchronously. Never overwrite an existing non-NULL value.
+    {
+        let pool = state.pool.clone();
+        let sid = sid.clone();
+        let cwd_str = cwd_str.clone();
+        tokio::task::spawn_blocking(move || -> rusqlite::Result<()> {
+            let conn = pool.get().map_err(|_| rusqlite::Error::InvalidQuery)?;
+            let exists: i64 = conn
+                .query_row(
+                    "SELECT COUNT(*) FROM sessions WHERE session_id = ?1",
+                    params![sid],
+                    |r| r.get(0),
+                )
+                .unwrap_or(0);
+            if exists == 0 {
+                conn.execute(
+                    "INSERT INTO sessions (session_id, started_at, cwd) VALUES (?1, ?2, ?3)",
+                    params![sid, now, &cwd_str],
+                )?;
+            } else {
+                conn.execute(
+                    "UPDATE sessions SET cwd = COALESCE(cwd, ?2) WHERE session_id = ?1",
+                    params![sid, &cwd_str],
+                )?;
+            }
+            Ok(())
+        })
+        .await
+        .ok();
+    }
+
+    // 2) Enrich asynchronously — git queries don't block the hook.
+    if !cwd_str.is_empty() {
+        let pool = state.pool.clone();
+        let sid_for_task = sid.clone();
+        let cwd_path = std::path::PathBuf::from(&cwd_str);
+        tokio::spawn(async move {
+            let info = crate::git_query::query_repo(&cwd_path).await;
+            let pool_inner = pool.clone();
+            let sid_inner = sid_for_task.clone();
+            let _ = tokio::task::spawn_blocking(move || {
+                let Ok(conn) = pool_inner.get() else { return };
+                let root = info.repo_root.as_ref().map(|p| p.to_string_lossy().into_owned());
+                let rem = info.repo_remote.clone();
+                let brn = info.repo_branch.clone();
+                let name = info.repo_name.clone();
+                let _ = conn.execute(
+                    "UPDATE sessions
+                       SET repo_root   = COALESCE(repo_root,   ?2),
+                           repo_remote = COALESCE(repo_remote, ?3),
+                           repo_branch = COALESCE(repo_branch, ?4),
+                           repo_name   = COALESCE(repo_name,   ?5)
+                     WHERE session_id = ?1",
+                    params![sid_inner, root, rem, brn, name],
+                );
+            })
+            .await;
+        });
+    }
+
+    Ok(Json(json!({ "ok": true })))
+}
+
+#[derive(serde::Deserialize)]
+struct BackfillQuery {
+    #[serde(default)] limit: Option<usize>,
+}
+
+async fn repo_backfill(
+    State(state): State<ApiState>,
+    Query(q): Query<BackfillQuery>,
+) -> Json<crate::api::dto::BackfillResult> {
+    let limit = q.limit.unwrap_or(50);
+    // Collect candidate session ids (repo_root still NULL), capped at limit.
+    let pool = state.pool.clone();
+    let ids: Vec<String> = match tokio::task::spawn_blocking({
+        let pool = pool.clone();
+        move || -> rusqlite::Result<Vec<String>> {
+            let conn = pool.get().map_err(|_| rusqlite::Error::InvalidQuery)?;
+            let mut stmt = conn.prepare(
+                "SELECT session_id FROM sessions WHERE repo_root IS NULL ORDER BY started_at DESC LIMIT ?1"
+            )?;
+            let rows = stmt.query_map(params![limit as i64], |r| r.get::<_, String>(0))?;
+            rows.collect::<rusqlite::Result<Vec<_>>>()
+        }
+    }).await {
+        Ok(Ok(v)) => v,
+        _ => return Json(crate::api::dto::BackfillResult { scanned: 0, updated: 0 }),
+    };
+
+    let scanned = ids.len();
+    let concurrency = 4;
+    let sem = std::sync::Arc::new(tokio::sync::Semaphore::new(concurrency));
+    let mut handles = Vec::new();
+    for sid in ids {
+        let permit = sem.clone().acquire_owned().await.unwrap();
+        let pool_inner = pool.clone();
+        handles.push(tokio::spawn(async move {
+            let _permit = permit;
+            let Ok(Some(info)) = crate::repo_inference::infer_repo_for_session(
+                pool_inner.clone(), sid.clone()
+            ).await else { return 0usize };
+
+            let pool2 = pool_inner.clone();
+            let sid2  = sid.clone();
+            let written = tokio::task::spawn_blocking(move || -> rusqlite::Result<usize> {
+                let conn = pool2.get().map_err(|_| rusqlite::Error::InvalidQuery)?;
+                let root = info.repo_root.as_ref().map(|p| p.to_string_lossy().into_owned());
+                conn.execute(
+                    "UPDATE sessions
+                       SET repo_root   = COALESCE(repo_root,   ?2),
+                           repo_remote = COALESCE(repo_remote, ?3),
+                           repo_branch = COALESCE(repo_branch, ?4),
+                           repo_name   = COALESCE(repo_name,   ?5)
+                     WHERE session_id = ?1",
+                    params![sid2, root, info.repo_remote, info.repo_branch, info.repo_name],
+                )
+            }).await.unwrap_or(Ok(0)).unwrap_or(0);
+            if written > 0 { 1 } else { 0 }
+        }));
+    }
+    let mut updated = 0usize;
+    for h in handles {
+        updated += h.await.unwrap_or(0);
+    }
+    Json(crate::api::dto::BackfillResult { scanned, updated })
 }
 
 async fn get_report(
@@ -1404,6 +1604,7 @@ struct V2SessionsQuery {
     from: Option<i64>,
     to: Option<i64>,
     models: Option<String>,
+    repo: Option<String>, // comma-separated repo keys
     search: Option<String>,
     sort: Option<String>, // time | cost | duration | decisions
     #[serde(default = "default_limit")]
@@ -1413,7 +1614,7 @@ struct V2SessionsQuery {
 async fn v2_sessions(
     State(state): State<ApiState>,
     Query(q): Query<V2SessionsQuery>,
-) -> Result<Json<Vec<serde_json::Value>>, ApiError> {
+) -> Result<Json<SessionListResponse>, ApiError> {
     let filt = FilterQuery {
         from: q.from,
         to: q.to,
@@ -1424,6 +1625,12 @@ async fn v2_sessions(
     let conn = state.pool.get().map_err(ApiError::pool)?;
 
     let model_list = filt.model_list();
+    let repo_list: Vec<String> = q
+        .repo
+        .as_deref()
+        .map(|s| s.split(',').filter(|p| !p.is_empty()).map(str::to_string).collect())
+        .unwrap_or_default();
+
     let model_filter_sql = if model_list.is_empty() {
         String::new()
     } else {
@@ -1432,6 +1639,12 @@ async fn v2_sessions(
             " AND EXISTS (SELECT 1 FROM cost_entries c
                           WHERE c.session_id = s.session_id AND c.model IN ({placeholders}))"
         )
+    };
+    let repo_filter_sql = if repo_list.is_empty() {
+        String::new()
+    } else {
+        let placeholders = repo_list.iter().map(|_| "?").collect::<Vec<_>>().join(",");
+        format!(" AND COALESCE(s.repo_remote, s.repo_root, s.cwd, '\u{2014}') IN ({placeholders})")
     };
     let search_sql = if let Some(_) = q.search.as_deref() {
         " AND (s.session_id LIKE ? OR EXISTS (SELECT 1 FROM file_changes f
@@ -1459,9 +1672,10 @@ async fn v2_sessions(
                 COALESCE((SELECT COUNT(*) FROM cost_entries WHERE session_id = s.session_id), 0) AS api_calls,
                 ((SELECT COUNT(*) FROM tool_decisions WHERE session_id = s.session_id AND decision='accept')
                  + (SELECT COUNT(*) FROM tool_decisions WHERE session_id = s.session_id AND decision='reject')
-                 + (SELECT COUNT(*) FROM tool_decisions WHERE session_id = s.session_id AND decision='abort')) AS decisions
+                 + (SELECT COUNT(*) FROM tool_decisions WHERE session_id = s.session_id AND decision='abort')) AS decisions,
+                s.cwd, s.repo_root, s.repo_remote, s.repo_branch, s.repo_name
          FROM sessions s
-         WHERE s.started_at >= ? AND s.started_at <= ?{model_filter_sql}{search_sql}
+         WHERE s.started_at >= ? AND s.started_at <= ?{model_filter_sql}{repo_filter_sql}{search_sql}
          {order}
          LIMIT ?"
     );
@@ -1470,6 +1684,9 @@ async fn v2_sessions(
     let mut p: Vec<Box<dyn rusqlite::ToSql>> = vec![Box::new(from), Box::new(to)];
     for v in &model_list {
         p.push(Box::new(v.clone()));
+    }
+    for r in &repo_list {
+        p.push(Box::new(r.clone()));
     }
     if let Some(s) = &search_like {
         p.push(Box::new(s.clone()));
@@ -1497,9 +1714,31 @@ async fn v2_sessions(
             "top_model":       r.get::<_, Option<String>>(13)?,
             "api_calls":       r.get::<_, i64>(14)?,
             "decisions":       r.get::<_, i64>(15)?,
+            "cwd":             r.get::<_, Option<String>>(16)?,
+            "repo_root":       r.get::<_, Option<String>>(17)?,
+            "repo_remote":     r.get::<_, Option<String>>(18)?,
+            "repo_branch":     r.get::<_, Option<String>>(19)?,
+            "repo_name":       r.get::<_, Option<String>>(20)?,
         }))
     })?;
-    Ok(Json(rows.flatten().collect()))
+    let sessions: Vec<serde_json::Value> = rows.flatten().collect();
+
+    // Coverage query: unfiltered by repo/model so the banner is meaningful even with chips active.
+    let (total, with_repo): (i64, i64) = {
+        let mut cov_stmt = conn.prepare(
+            "SELECT COUNT(*),
+                    SUM(CASE WHEN repo_root IS NOT NULL OR repo_remote IS NOT NULL THEN 1 ELSE 0 END)
+             FROM sessions WHERE started_at BETWEEN ?1 AND ?2",
+        )?;
+        cov_stmt.query_row(params![from, to], |r| {
+            Ok((r.get::<_, i64>(0)?, r.get::<_, Option<i64>>(1)?.unwrap_or(0)))
+        })?
+    };
+
+    Ok(Json(SessionListResponse {
+        sessions,
+        coverage: CoverageHint { total, with_repo },
+    }))
 }
 
 #[derive(Deserialize)]
@@ -1507,6 +1746,7 @@ struct V2FilesQuery {
     from: Option<i64>,
     to: Option<i64>,
     langs: Option<String>,
+    repo: Option<String>, // comma-separated repo keys
     search: Option<String>,
     sort: Option<String>, // edits | accept | recent | churn
 }
@@ -1519,15 +1759,35 @@ async fn v2_files(
     let (from, to) = filt.window();
     let conn = state.pool.get().map_err(ApiError::pool)?;
 
+    let repo_list: Vec<String> = q
+        .repo
+        .as_deref()
+        .map(|s| s.split(',').filter(|p| !p.is_empty()).map(str::to_string).collect())
+        .unwrap_or_default();
+
+    // Build repo subquery filters for file_changes and tool_decisions
+    let (repo_fc_sql, repo_td_sql) = if repo_list.is_empty() {
+        (String::new(), String::new())
+    } else {
+        let placeholders = repo_list.iter().map(|_| "?").collect::<Vec<_>>().join(",");
+        let fc = format!(
+            " AND session_id IN (SELECT session_id FROM sessions WHERE COALESCE(repo_remote, repo_root, cwd, '\u{2014}') IN ({placeholders}))"
+        );
+        let td = format!(
+            " AND session_id IN (SELECT session_id FROM sessions WHERE COALESCE(repo_remote, repo_root, cwd, '\u{2014}') IN ({placeholders}))"
+        );
+        (fc, td)
+    };
+
     // file list: pull edits + accept + churn + last_ts from file_changes & tool_decisions
-    let mut stmt = conn.prepare(
+    let sql = format!(
         "WITH edits AS (
              SELECT COALESCE(file_path, '?') AS f,
                     COUNT(*) AS edits,
                     SUM(lines_added) AS added,
                     SUM(lines_removed) AS removed,
                     MAX(timestamp) AS last_ts
-             FROM file_changes WHERE timestamp >= ?1 AND timestamp < ?2
+             FROM file_changes WHERE timestamp >= ? AND timestamp < ?{repo_fc_sql}
              GROUP BY f
          ),
          decs AS (
@@ -1536,14 +1796,15 @@ async fn v2_files(
                     SUM(CASE WHEN decision='reject' THEN 1 ELSE 0 END) AS r,
                     SUM(CASE WHEN decision='abort'  THEN 1 ELSE 0 END) AS x,
                     MAX(language) AS lang
-             FROM tool_decisions WHERE timestamp >= ?1 AND timestamp < ?2
+             FROM tool_decisions WHERE timestamp >= ? AND timestamp < ?{repo_td_sql}
              GROUP BY f
          )
          SELECT e.f, e.edits, e.added, e.removed, e.last_ts,
                 COALESCE(d.a, 0), COALESCE(d.r, 0), COALESCE(d.x, 0),
                 COALESCE(d.lang, '?')
-         FROM edits e LEFT JOIN decs d ON d.f = e.f",
-    )?;
+         FROM edits e LEFT JOIN decs d ON d.f = e.f"
+    );
+
     let langs: Vec<String> = q
         .langs
         .as_deref()
@@ -1551,8 +1812,23 @@ async fn v2_files(
         .unwrap_or_default();
     let search_like = q.search.as_deref().filter(|s| !s.is_empty()).map(|s| s.to_lowercase());
 
+    // Build bind params: from, to, [repo...], from, to, [repo...]
+    let mut p: Vec<Box<dyn rusqlite::ToSql>> = vec![
+        Box::new(from), Box::new(to),
+    ];
+    for r in &repo_list {
+        p.push(Box::new(r.clone()));
+    }
+    p.push(Box::new(from));
+    p.push(Box::new(to));
+    for r in &repo_list {
+        p.push(Box::new(r.clone()));
+    }
+    let refs: Vec<&dyn rusqlite::ToSql> = p.iter().map(|b| &**b).collect();
+
+    let mut stmt = conn.prepare(&sql)?;
     let mut rows: Vec<serde_json::Value> = stmt
-        .query_map(params![from, to], |r| {
+        .query_map(refs.as_slice(), |r| {
             let path: String = r.get(0)?;
             let edits: i64 = r.get(1)?;
             let added: i64 = r.get::<_, i64>(2).unwrap_or(0);
@@ -1829,4 +2105,125 @@ async fn integration_restore(State(_state): State<ApiState>) -> Json<serde_json:
         Ok(msg) => Json(json!({"ok": true, "message": msg})),
         Err(e) => Json(json!({"ok": false, "error": format!("{e:#}")})),
     }
+}
+
+// ---------- repos ----------
+
+#[derive(Deserialize)]
+struct ListReposQuery {
+    #[serde(default)] from: Option<i64>,
+    #[serde(default)] to:   Option<i64>,
+    #[serde(default)] limit: Option<usize>,
+}
+
+async fn list_repos(
+    State(state): State<ApiState>,
+    Query(q): Query<ListReposQuery>,
+) -> Json<Vec<crate::api::dto::RepoSummary>> {
+    let limit = q.limit.unwrap_or(50);
+    let from = q.from.unwrap_or(0);
+    let to   = q.to.unwrap_or(i64::MAX);
+    let pool = state.pool.clone();
+    let rows = tokio::task::spawn_blocking(move || -> rusqlite::Result<Vec<crate::api::dto::RepoSummary>> {
+        let conn = pool.get().map_err(|_| rusqlite::Error::InvalidQuery)?;
+        let mut stmt = conn.prepare(
+            "SELECT
+                COALESCE(repo_remote, repo_root, cwd, '—') AS k,
+                COALESCE(repo_name,
+                         CASE WHEN repo_remote IS NOT NULL THEN repo_remote ELSE NULL END,
+                         repo_root, cwd, '—') AS label,
+                CASE WHEN repo_remote IS NOT NULL THEN 1 ELSE 0 END AS has_remote,
+                COUNT(*) AS n,
+                MAX(repo_root) AS rr
+             FROM sessions
+             WHERE started_at BETWEEN ?1 AND ?2
+             GROUP BY k
+             ORDER BY n DESC
+             LIMIT ?3"
+        )?;
+        let rows = stmt.query_map(params![from, to, limit as i64], |r| {
+            Ok(crate::api::dto::RepoSummary {
+                key: r.get::<_, String>(0)?,
+                label: r.get::<_, String>(1)?,
+                has_remote: r.get::<_, i64>(2)? != 0,
+                session_count: r.get::<_, i64>(3)?,
+                repo_root: r.get::<_, Option<String>>(4)?,
+            })
+        })?;
+        rows.collect()
+    }).await.unwrap_or(Ok(vec![])).unwrap_or_default();
+    Json(rows)
+}
+
+#[derive(Deserialize)]
+struct TopReposQuery {
+    from: i64,
+    to: i64,
+    #[serde(default)] limit: Option<usize>,
+}
+
+async fn overview_top_repos(
+    State(state): State<ApiState>,
+    Query(q): Query<TopReposQuery>,
+) -> Json<Vec<crate::api::dto::TopRepoEntry>> {
+    let limit = q.limit.unwrap_or(5);
+    let pool = state.pool.clone();
+    let rows = tokio::task::spawn_blocking(move || -> rusqlite::Result<Vec<crate::api::dto::TopRepoEntry>> {
+        let conn = pool.get().map_err(|_| rusqlite::Error::InvalidQuery)?;
+
+        // 1) Top-N repos by cost.
+        // Filter by c.timestamp (cost timestamp) so totals align with the
+        // per-day sparkline query which also filters on c.timestamp.
+        let mut stmt = conn.prepare(
+            "SELECT
+                COALESCE(s.repo_remote, s.repo_root, s.cwd, '—') AS k,
+                COALESCE(s.repo_name, s.repo_remote, s.repo_root, s.cwd, '—') AS label,
+                SUM(c.cost_usd) AS cost,
+                COUNT(DISTINCT s.session_id) AS n
+             FROM sessions s
+             JOIN cost_entries c ON c.session_id = s.session_id
+             WHERE c.timestamp BETWEEN ?1 AND ?2
+             GROUP BY k
+             ORDER BY cost DESC
+             LIMIT ?3"
+        )?;
+        let summary: Vec<(String, String, f64, i64)> =
+            stmt.query_map(params![q.from, q.to, limit as i64], |r| {
+                Ok((
+                    r.get::<_, String>(0)?,
+                    r.get::<_, String>(1)?,
+                    r.get::<_, f64>(2)?,
+                    r.get::<_, i64>(3)?,
+                ))
+            })?.collect::<rusqlite::Result<_>>()?;
+
+        // 2) Per-day cost per repo for sparklines.
+        let day_ms = 86_400_000i64;
+        let days = ((q.to - q.from) / day_ms).max(1) as usize;
+
+        let mut out = Vec::with_capacity(summary.len());
+        for (k, label, cost, n) in summary {
+            let mut spark = vec![0.0; days];
+            let mut sp = conn.prepare(
+                "SELECT (c.timestamp - ?2) / ?3 AS day_idx, SUM(c.cost_usd)
+                 FROM cost_entries c
+                 JOIN sessions s ON s.session_id = c.session_id
+                 WHERE c.timestamp BETWEEN ?2 AND ?4
+                   AND COALESCE(s.repo_remote, s.repo_root, s.cwd, '—') = ?1
+                 GROUP BY day_idx"
+            )?;
+            let rows = sp.query_map(params![k, q.from, day_ms, q.to], |r| {
+                Ok((r.get::<_, i64>(0)?, r.get::<_, f64>(1)?))
+            })?;
+            for row in rows {
+                let (idx, v) = row?;
+                if (0..spark.len() as i64).contains(&idx) {
+                    spark[idx as usize] = v;
+                }
+            }
+            out.push(crate::api::dto::TopRepoEntry { key: k, label, cost_usd: cost, session_count: n, spark });
+        }
+        Ok(out)
+    }).await.unwrap_or(Ok(vec![])).unwrap_or_default();
+    Json(rows)
 }

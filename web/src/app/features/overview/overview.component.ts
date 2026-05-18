@@ -14,6 +14,7 @@ import {
 } from '../../core/api.service';
 import { FilterService } from '../../core/filter.service';
 import { FilterBarComponent } from '../../shared/filter-bar.component';
+import { TopReposTileComponent } from './top-repos-tile.component';
 
 // Model names come in like "claude-opus-4-7" or "claude-haiku-4-5-20251001".
 // Substring match keeps it forward-compatible with new versions.
@@ -34,6 +35,7 @@ const FALLBACK_COLORS = ['#a78bfa', '#f472b6', '#fb923c', '#22d3ee'];
     RouterLink,
     FilterBarComponent,
     LucideAngularModule,
+    TopReposTileComponent,
   ],
   templateUrl: './overview.component.html',
 })
@@ -47,6 +49,10 @@ export class OverviewComponent implements OnInit {
   acceptLang = signal<V2AcceptLang[]>([]);
   activeTime = signal<V2ActiveTime | null>(null);
   recent = signal<V2Session[]>([]);
+
+  // range signals for child tiles
+  rangeFrom = computed(() => this.filter.window().fromMs);
+  rangeTo   = computed(() => this.filter.window().toMs);
 
   // tape max for scaling
   tapeMax = computed(() => {
@@ -86,7 +92,7 @@ export class OverviewComponent implements OnInit {
       this.api.costByModel(args).subscribe((v) => this.costByModel.set(v));
       this.api.acceptByLanguageV2(args).subscribe((v) => this.acceptLang.set(v));
       this.api.activeTime(args).subscribe((v) => this.activeTime.set(v));
-      this.api.sessionsV2({ ...args, sort: 'time', limit: 6 }).subscribe((v) => this.recent.set(v));
+      this.api.sessionsV2({ ...args, sort: 'time', limit: 6 }).subscribe((v) => this.recent.set(v.sessions));
     });
   }
 

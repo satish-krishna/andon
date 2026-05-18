@@ -16,6 +16,7 @@ export class FilterService {
   readonly customRange = signal<CustomRange | null>(null);
   readonly models = signal<Set<string>>(new Set(ALL_MODELS));
   readonly search = signal<string>('');
+  readonly repos = signal<string[]>([]);
 
   // ----- derived -----
   readonly window = computed<{ fromMs: number; toMs: number }>(() => {
@@ -51,8 +52,13 @@ export class FilterService {
     return s.size === ALL_MODELS.length ? '' : [...s].join(',');
   });
 
+  readonly reposCsv = computed(() => {
+    const r = this.repos();
+    return r.length ? r.join(',') : '';
+  });
+
   readonly hasActiveFilters = computed(() => {
-    return this.models().size !== ALL_MODELS.length || this.search() !== '';
+    return this.models().size !== ALL_MODELS.length || this.search() !== '' || this.repos().length > 0;
   });
 
   readonly rangeLabel = computed(() => {
@@ -98,6 +104,7 @@ export class FilterService {
   clearFilters() {
     this.models.set(new Set(ALL_MODELS));
     this.search.set('');
+    this.repos.set([]);
   }
 
   allModels(): readonly string[] {

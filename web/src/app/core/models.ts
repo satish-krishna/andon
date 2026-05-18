@@ -39,6 +39,11 @@ export interface SessionSummary {
   service_version: string | null;
   host_arch: string | null;
   os_type: string | null;
+  cwd?: string | null;
+  repo_root?: string | null;
+  repo_remote?: string | null;
+  repo_branch?: string | null;
+  repo_name?: string | null;
 }
 
 export interface KeyValueNum {
@@ -78,4 +83,25 @@ export interface FileHeatmapRow {
 export interface DbStats {
   db_path: string;
   tables: Record<string, number>;
+}
+
+export interface RepoSummary {
+  key: string;
+  label: string;
+  has_remote: boolean;
+  session_count: number;
+  repo_root?: string | null;
+}
+
+export interface TopRepoEntry {
+  key: string;
+  label: string;
+  cost_usd: number;
+  session_count: number;
+  spark: number[];
+}
+
+export interface BackfillResult {
+  scanned: number;
+  updated: number;
 }

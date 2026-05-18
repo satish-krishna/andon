@@ -4,12 +4,15 @@ import { Observable } from 'rxjs';
 import {
   AcceptByLanguage,
   ActiveTimeToday,
+  BackfillResult,
   DailySeries,
   DbStats,
   FileHeatmapRow,
   OverviewToday,
+  RepoSummary,
   SessionDetail,
   SessionSummary,
+  TopRepoEntry,
 } from './models';
 
 const BASE = 'http://127.0.0.1:8765';
@@ -21,6 +24,7 @@ export interface FilterArgs {
   search?: string;
   sort?: string;
   langs?: string;
+  repo?: string;
   limit?: number;
 }
 
@@ -85,6 +89,21 @@ export interface V2Session {
   top_model: string | null;
   api_calls: number;
   decisions: number;
+  repo_name: string | null;
+  repo_root: string | null;
+  repo_remote: string | null;
+  repo_branch: string | null;
+  cwd: string | null;
+}
+
+export interface CoverageHint {
+  total: number;
+  with_repo: number;
+}
+
+export interface SessionListResponse {
+  sessions: V2Session[];
+  coverage: CoverageHint;
 }
 
 export interface V2FileRow {
@@ -125,6 +144,7 @@ function toParams(args?: FilterArgs): HttpParams {
   if (args.search) p = p.set('search', args.search);
   if (args.sort) p = p.set('sort', args.sort);
   if (args.langs) p = p.set('langs', args.langs);
+  if (args.repo) p = p.set('repo', args.repo);
   if (args.limit !== undefined) p = p.set('limit', String(args.limit));
   return p;
 }
@@ -152,8 +172,8 @@ export class ApiService {
   activeTime(args?: FilterArgs): Observable<V2ActiveTime> {
     return this.http.get<V2ActiveTime>(`${BASE}/api/v2/active-time`, { params: toParams(args) });
   }
-  sessionsV2(args?: FilterArgs): Observable<V2Session[]> {
-    return this.http.get<V2Session[]>(`${BASE}/api/v2/sessions`, { params: toParams(args) });
+  sessionsV2(args?: FilterArgs): Observable<SessionListResponse> {
+    return this.http.get<SessionListResponse>(`${BASE}/api/v2/sessions`, { params: toParams(args) });
   }
   files(args?: FilterArgs): Observable<V2FilesResponse> {
     return this.http.get<V2FilesResponse>(`${BASE}/api/v2/files`, { params: toParams(args) });
@@ -253,6 +273,23 @@ export class ApiService {
   }
   reportsIndex(): Observable<{ session_ids: string[] }> {
     return this.http.get<any>(`${BASE}/api/sessions/reports/index`);
+  }
+  listRepos(args: { from?: number; to?: number; limit?: number }): Observable<RepoSummary[]> {
+    let p = new HttpParams();
+    if (args.from !== undefined) p = p.set('from', String(args.from));
+    if (args.to !== undefined) p = p.set('to', String(args.to));
+    if (args.limit !== undefined) p = p.set('limit', String(args.limit));
+    return this.http.get<RepoSummary[]>(`${BASE}/api/repos`, { params: p });
+  }
+  topRepos(args: { from: number; to: number; limit?: number }): Observable<TopRepoEntry[]> {
+    let p = new HttpParams();
+    p = p.set('from', String(args.from));
+    p = p.set('to', String(args.to));
+    if (args.limit !== undefined) p = p.set('limit', String(args.limit));
+    return this.http.get<TopRepoEntry[]>(`${BASE}/api/overview/top-repos`, { params: p });
+  }
+  backfillRepos(): Observable<BackfillResult> {
+    return this.http.post<BackfillResult>(`${BASE}/api/repo/backfill`, {});
   }
 }
 
