@@ -843,13 +843,11 @@ struct SessionEndPayload {
 async fn hook_session_end(
     State(state): State<ApiState>,
     Json(p): Json<SessionEndPayload>,
-) -> Result<Json<serde_json::Value>, ApiError> {
+) -> Json<HookOutput> {
     let sid = p.session_id.unwrap_or_default();
     if sid.is_empty() {
-        return Err(ApiError {
-            status: StatusCode::BAD_REQUEST,
-            message: "session_id required".into(),
-        });
+        tracing::warn!("hook_session_end: missing session_id; skipping persist");
+        return Json(HookOutput::ok());
     }
     let now = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
@@ -936,7 +934,8 @@ async fn hook_session_end(
         }).await;
     });
 
-    Ok(Json(json!({ "ok": true, "reason": p.reason })))
+    let _ = p.reason; // diagnostic field; intentionally dropped from wire
+    Json(HookOutput::ok())
 }
 
 async fn hook_session_context(
