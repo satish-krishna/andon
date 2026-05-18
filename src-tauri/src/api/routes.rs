@@ -2,7 +2,7 @@ use std::collections::BTreeMap;
 
 use axum::{
     Json, Router,
-    extract::{Path, Query, State},
+    extract::{Path, Query, State, rejection::JsonRejection},
     http::StatusCode,
     response::IntoResponse,
     routing::{get, post},
@@ -842,8 +842,15 @@ struct SessionEndPayload {
 
 async fn hook_session_end(
     State(state): State<ApiState>,
-    Json(p): Json<SessionEndPayload>,
+    payload: Result<Json<SessionEndPayload>, JsonRejection>,
 ) -> Json<HookOutput> {
+    let Json(p) = match payload {
+        Ok(j) => j,
+        Err(e) => {
+            tracing::warn!(error = %e, "hook_session_end: invalid payload; skipping persist");
+            return Json(HookOutput::ok());
+        }
+    };
     let sid = p.session_id.unwrap_or_default();
     if sid.is_empty() {
         tracing::warn!("hook_session_end: missing session_id; skipping persist");
@@ -940,8 +947,15 @@ async fn hook_session_end(
 
 async fn hook_session_context(
     State(state): State<ApiState>,
-    Json(p): Json<crate::api::dto::SessionContextPayload>,
+    payload: Result<Json<crate::api::dto::SessionContextPayload>, JsonRejection>,
 ) -> Json<HookOutput> {
+    let Json(p) = match payload {
+        Ok(j) => j,
+        Err(e) => {
+            tracing::warn!(error = %e, "hook_session_context: invalid payload; skipping persist");
+            return Json(HookOutput::ok());
+        }
+    };
     let sid = p.session_id.trim().to_string();
     if sid.is_empty() {
         tracing::warn!("hook_session_context: missing session_id; skipping persist");
@@ -1982,8 +1996,15 @@ async fn autostart_disable(State(_state): State<ApiState>) -> Json<serde_json::V
 
 async fn hook_tool_use(
     State(state): State<ApiState>,
-    Json(payload): Json<serde_json::Value>,
+    body: Result<Json<serde_json::Value>, JsonRejection>,
 ) -> Json<HookOutput> {
+    let Json(payload) = match body {
+        Ok(j) => j,
+        Err(e) => {
+            tracing::warn!(error = %e, "hook_tool_use: invalid payload; skipping persist");
+            return Json(HookOutput::ok());
+        }
+    };
     let now = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .map(|d| d.as_millis() as i64)
