@@ -46,6 +46,7 @@ pub fn router(state: ApiState) -> Router {
         .route("/api/integration/restore-backup", post(integration_restore))
         .route("/api/hooks/tool-use", post(hook_tool_use))
         .route("/api/hooks/session-end", post(hook_session_end))
+        .route("/api/session/context", post(hook_session_context))
         .route("/api/sessions/:id/report", get(get_report).post(generate_report_handler))
         .route("/api/sessions/:id/report/open", post(open_report))
         .route("/api/sessions/reports/index", get(reports_index))
@@ -881,6 +882,86 @@ async fn hook_session_end(
     });
 
     Ok(Json(json!({ "ok": true, "reason": p.reason })))
+}
+
+async fn hook_session_context(
+    State(state): State<ApiState>,
+    Json(p): Json<crate::api::dto::SessionContextPayload>,
+) -> Result<Json<serde_json::Value>, ApiError> {
+    let sid = p.session_id.trim().to_string();
+    if sid.is_empty() {
+        return Err(ApiError {
+            status: StatusCode::BAD_REQUEST,
+            message: "session_id required".into(),
+        });
+    }
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_millis() as i64)
+        .unwrap_or(0);
+    let cwd_str = p.cwd.clone().unwrap_or_default();
+
+    // 1) Persist cwd synchronously. Never overwrite an existing non-NULL value.
+    {
+        let pool = state.pool.clone();
+        let sid = sid.clone();
+        let cwd_str = cwd_str.clone();
+        tokio::task::spawn_blocking(move || -> rusqlite::Result<()> {
+            let conn = pool.get().map_err(|_| rusqlite::Error::InvalidQuery)?;
+            let exists: i64 = conn
+                .query_row(
+                    "SELECT COUNT(*) FROM sessions WHERE session_id = ?1",
+                    params![sid],
+                    |r| r.get(0),
+                )
+                .unwrap_or(0);
+            if exists == 0 {
+                conn.execute(
+                    "INSERT INTO sessions (session_id, started_at, cwd) VALUES (?1, ?2, ?3)",
+                    params![sid, now, &cwd_str],
+                )?;
+            } else {
+                conn.execute(
+                    "UPDATE sessions SET cwd = COALESCE(cwd, ?2) WHERE session_id = ?1",
+                    params![sid, &cwd_str],
+                )?;
+            }
+            Ok(())
+        })
+        .await
+        .ok();
+    }
+
+    // 2) Enrich asynchronously — git queries don't block the hook.
+    if !cwd_str.is_empty() {
+        let pool = state.pool.clone();
+        let sid_for_task = sid.clone();
+        let cwd_path = std::path::PathBuf::from(&cwd_str);
+        tokio::spawn(async move {
+            let info = crate::git_query::query_repo(&cwd_path).await;
+            let pool_inner = pool.clone();
+            let sid_inner = sid_for_task.clone();
+            let _ = tokio::task::spawn_blocking(move || {
+                let Ok(conn) = pool_inner.get() else { return };
+                let root = info.repo_root.as_ref().map(|p| p.to_string_lossy().into_owned());
+                let rem = info.repo_remote.clone();
+                let brn = info.repo_branch.clone();
+                let name = info.repo_name.clone();
+                let _ = conn.execute(
+                    "UPDATE sessions
+                       SET repo_root   = COALESCE(repo_root,   ?2),
+                           repo_remote = COALESCE(repo_remote, ?3),
+                           repo_branch = COALESCE(repo_branch, ?4),
+                           repo_name   = COALESCE(repo_name,   ?5)
+                     WHERE session_id = ?1",
+                    params![sid_inner, root, rem, brn, name],
+                );
+            })
+            .await;
+        });
+    }
+
+    Ok(Json(json!({ "ok": true })))
 }
 
 async fn get_report(

@@ -87,3 +87,14 @@ pub struct FileHeatmapRow {
     pub edit_count: i64,
     pub accept_rate: f64,
 }
+
+#[derive(serde::Deserialize, Debug)]
+pub struct SessionContextPayload {
+    pub session_id: String,
+    pub cwd: Option<String>,
+    // Tolerated and ignored:
+    #[serde(default)] pub source: Option<String>,
+    #[serde(default)] pub transcript_path: Option<String>,
+    #[serde(default)] pub hook_event_name: Option<String>,
+    #[serde(default)] pub model: Option<String>,
+}
