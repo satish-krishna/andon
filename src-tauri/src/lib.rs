@@ -3,6 +3,7 @@ mod autostart;
 mod config;
 mod db;
 mod diagnostics;
+mod git_query;
 mod integration;
 mod otlp;
 mod reports;
