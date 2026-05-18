@@ -1,0 +1,10 @@
+---
+source: tests/api_reports.rs
+expression: "&body"
+---
+{
+  "session_ids": [
+    "idx-session-1",
+    "idx-session-2"
+  ]
+}

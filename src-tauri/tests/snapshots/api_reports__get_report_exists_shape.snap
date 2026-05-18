@@ -1,0 +1,9 @@
+---
+source: tests/api_reports.rs
+expression: "&after"
+---
+{
+  "exists": true,
+  "generated_at": "[ts]",
+  "path": "[path]"
+}

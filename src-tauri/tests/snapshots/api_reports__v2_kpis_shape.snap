@@ -1,0 +1,43 @@
+---
+source: tests/api_reports.rs
+expression: "&body"
+---
+{
+  "cost": {
+    "current": "[cost]",
+    "day_of_month": "[day]",
+    "days_in_month": "[days]",
+    "delta_pct": "[pct]",
+    "previous": "[cost]",
+    "projected_eom": "[cost]"
+  },
+  "sessions": {
+    "current": "[n]",
+    "delta_pct": "[pct]",
+    "pace": "[n]",
+    "previous": "[n]"
+  },
+  "tokens": {
+    "cache_create": {
+      "current": "[n]"
+    },
+    "cache_read": {
+      "current": "[n]"
+    },
+    "input": {
+      "current": "[n]",
+      "delta_pct": "[pct]",
+      "previous": "[n]"
+    },
+    "output": {
+      "current": "[n]",
+      "delta_pct": "[pct]",
+      "previous": "[n]"
+    }
+  },
+  "window": {
+    "from": "[ts]",
+    "label": "[label]",
+    "to": "[ts]"
+  }
+}
