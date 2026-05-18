@@ -89,9 +89,19 @@ pub fn normalize_remote(raw: &str) -> String {
     };
 
     // SCP form: host:org/repo -> host/org/repo (only the first colon).
+    // Preserve host:port — if the segment between the colon and the next '/'
+    // is all digits, it's a port number, not an SCP path separator.
     let slashed = if let Some(idx) = no_userinfo.find(':') {
-        let (host, rest) = no_userinfo.split_at(idx);
-        format!("{}/{}", host, &rest[1..])
+        let after = &no_userinfo[idx + 1..];
+        let seg_end = after.find('/').unwrap_or(after.len());
+        let candidate = &after[..seg_end];
+        let is_port = !candidate.is_empty() && candidate.chars().all(|c| c.is_ascii_digit());
+        if is_port {
+            no_userinfo.to_string()
+        } else {
+            let (host, rest) = no_userinfo.split_at(idx);
+            format!("{}/{}", host, &rest[1..])
+        }
     } else {
         no_userinfo.to_string()
     };
@@ -209,6 +219,31 @@ mod tests {
         assert_eq!(
             normalize_remote("https://token@gitlab.com/team/proj"),
             "gitlab.com/team/proj"
+        );
+    }
+
+    #[test]
+    fn normalize_preserves_https_port() {
+        assert_eq!(
+            normalize_remote("https://github.com:8080/Foo/Bar.git"),
+            "github.com:8080/Foo/Bar"
+        );
+    }
+
+    #[test]
+    fn normalize_preserves_ssh_port() {
+        assert_eq!(
+            normalize_remote("ssh://git@host:2222/foo/bar"),
+            "host:2222/foo/bar"
+        );
+    }
+
+    #[test]
+    fn normalize_scp_still_converts_colon() {
+        // Sanity check: SCP form (path after colon, not all digits) still becomes slash.
+        assert_eq!(
+            normalize_remote("git@github.com:Foo/Bar.git"),
+            "github.com/Foo/Bar"
         );
     }
 

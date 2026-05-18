@@ -172,7 +172,10 @@ export class SessionDetailComponent implements OnInit {
 
   hasBrowsableRemote(remote: string | null | undefined): boolean {
     if (!remote) return false;
-    return /^(github\.com|gitlab\.com|bitbucket\.org|codeberg\.org|gitea\.com)\//.test(remote);
+    // Accept any normalized host[:port]/path... shape — covers public providers,
+    // GitHub Enterprise vanity URLs, self-hosted GitLab/Gitea, etc.
+    // normalize_remote() already strips schemes, credentials, and trailing .git.
+    return /^[a-z0-9.-]+(:\d+)?\/.+/.test(remote);
   }
 
   fmtDuration(secs: number): string {
