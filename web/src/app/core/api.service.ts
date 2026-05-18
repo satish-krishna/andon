@@ -242,6 +242,18 @@ export class ApiService {
   exportDiagnostics(): Observable<any> {
     return this.http.get<any>(`${BASE}/api/diagnostics/export`);
   }
+  getReport(id: string): Observable<{ exists: boolean; path: string; generated_at: number | null }> {
+    return this.http.get<any>(`${BASE}/api/sessions/${encodeURIComponent(id)}/report`);
+  }
+  generateReport(id: string): Observable<{ exists: boolean; path: string; generated_at: number | null }> {
+    return this.http.post<any>(`${BASE}/api/sessions/${encodeURIComponent(id)}/report`, {});
+  }
+  openReport(id: string): Observable<{ ok: boolean; path?: string; error?: string }> {
+    return this.http.post<any>(`${BASE}/api/sessions/${encodeURIComponent(id)}/report/open`, {});
+  }
+  reportsIndex(): Observable<{ session_ids: string[] }> {
+    return this.http.get<any>(`${BASE}/api/sessions/reports/index`);
+  }
 }
 
 export type IntegrationStatus =

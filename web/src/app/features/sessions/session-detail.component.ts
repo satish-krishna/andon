@@ -1,6 +1,7 @@
 import { CommonModule, DatePipe, DecimalPipe } from '@angular/common';
 import { Component, OnInit, signal } from '@angular/core';
 import { ActivatedRoute, RouterLink } from '@angular/router';
+import { switchMap } from 'rxjs';
 
 import { ApiService } from '../../core/api.service';
 import { SessionDetail } from '../../core/models';
@@ -16,6 +17,11 @@ import { EmptyComponent } from '../../shared/empty.component';
         <a routerLink="/sessions" class="text-muted text-xs hover:text-text">← Sessions</a>
         @if (detail(); as d) {
           <h1 class="text-xl font-semibold font-mono">{{ d.session.session_id }}</h1>
+          <button class="ml-auto text-[11px] px-3 py-1.5 rounded border border-border hover:bg-panel disabled:opacity-50"
+                  [disabled]="reportBusy()"
+                  (click)="openOrGenerateReport(d.session.session_id)">
+            {{ reportExists() ? 'Open report' : 'Generate report' }}
+          </button>
         }
       </div>
 
@@ -118,6 +124,8 @@ import { EmptyComponent } from '../../shared/empty.component';
 })
 export class SessionDetailComponent implements OnInit {
   detail = signal<SessionDetail | null>(null);
+  reportExists = signal(false);
+  reportBusy   = signal(false);
 
   constructor(private route: ActivatedRoute, private api: ApiService) {}
 
@@ -125,7 +133,24 @@ export class SessionDetailComponent implements OnInit {
     const id = this.route.snapshot.paramMap.get('id');
     if (id) {
       this.api.session(id).subscribe((d) => this.detail.set(d));
+      this.api.getReport(id).subscribe((r) => this.reportExists.set(r.exists));
     }
+  }
+
+  openOrGenerateReport(id: string) {
+    this.reportBusy.set(true);
+    const action$ = this.reportExists()
+      ? this.api.openReport(id)
+      : this.api.generateReport(id).pipe(
+          switchMap(() => {
+            this.reportExists.set(true);
+            return this.api.openReport(id);
+          }),
+        );
+    action$.subscribe({
+      next: () => this.reportBusy.set(false),
+      error: () => this.reportBusy.set(false),
+    });
   }
 
   fmtDuration(secs: number): string {
