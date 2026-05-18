@@ -5,6 +5,7 @@ mod db;
 mod diagnostics;
 mod integration;
 mod otlp;
+mod reports;
 mod settings;
 
 use std::sync::Mutex;

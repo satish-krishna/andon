@@ -1,0 +1,79 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<title>Andon session report — {{ data.session_id }}</title>
+<style>{{ css|safe }}</style>
+</head>
+<body>
+<div class="wrap">
+  <h1>Session {{ data.session_id }}</h1>
+  <div class="muted">
+    {{ data.service_version or "unknown version" }} ·
+    {{ data.os_type or "?" }}/{{ data.host_arch or "?" }} ·
+    {{ data.terminal_type or "?" }}
+  </div>
+
+  <div class="kpis">
+    <div class="kpi"><div class="label">Total cost</div><div class="value">${{ "%.4f"|format(data.cost_usd) }}</div></div>
+    <div class="kpi"><div class="label">Accept rate</div><div class="value">{{ "%.1f"|format(data.accept_rate * 100) }}%</div></div>
+    <div class="kpi"><div class="label">Duration</div><div class="value">{{ "%.0f"|format(data.duration_seconds) }}s</div></div>
+    <div class="kpi"><div class="label">Active (user+cli)</div><div class="value">{{ "%.0f"|format(data.active_user_seconds + data.active_cli_seconds) }}s</div></div>
+  </div>
+
+  <h2>Charts</h2>
+  <div class="chart-row">
+    <div><canvas id="costChart" height="220"></canvas></div>
+    <div><canvas id="tokenChart" height="220"></canvas></div>
+  </div>
+
+  <h2>Files</h2>
+  <table>
+    <thead><tr><th>Path</th><th>+lines</th><th>-lines</th><th>Accept rate</th></tr></thead>
+    <tbody>
+    {% for f in data.files %}
+      <tr><td>{{ f.file_path }}</td><td>{{ f.added }}</td><td>{{ f.removed }}</td><td>{{ "%.1f"|format(f.accept_rate * 100) }}%</td></tr>
+    {% endfor %}
+    </tbody>
+  </table>
+
+  <h2>Tool decisions</h2>
+  <table>
+    <thead><tr><th>Time (ms)</th><th>Tool</th><th>Decision</th><th>Lang</th><th>File</th></tr></thead>
+    <tbody>
+    {% for d in data.decisions %}
+      <tr>
+        <td>{{ d.timestamp }}</td>
+        <td>{{ d.tool_name }}</td>
+        <td>{{ d.decision }}</td>
+        <td>{{ d.language or "" }}</td>
+        <td>{{ d.file_path or "" }}</td>
+      </tr>
+    {% endfor %}
+    </tbody>
+  </table>
+</div>
+
+<script type="application/json" id="report-data">{{ report_data_json|safe }}</script>
+<script>{{ chart_js|safe }}</script>
+<script>
+(function () {
+  const data = JSON.parse(document.getElementById('report-data').textContent);
+
+  const cost = data.cost_by_model || [];
+  new Chart(document.getElementById('costChart'), {
+    type: 'bar',
+    data: { labels: cost.map(c => c.key), datasets: [{ label: 'USD', data: cost.map(c => c.value), backgroundColor: '#2563eb' }] },
+    options: { plugins: { title: { display: true, text: 'Cost by model (USD)' } } }
+  });
+
+  const tok = data.tokens_by_type || [];
+  new Chart(document.getElementById('tokenChart'), {
+    type: 'bar',
+    data: { labels: tok.map(t => t.key), datasets: [{ label: 'tokens', data: tok.map(t => t.value), backgroundColor: '#16a34a' }] },
+    options: { plugins: { title: { display: true, text: 'Tokens by type' } } }
+  });
+})();
+</script>
+</body>
+</html>
