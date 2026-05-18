@@ -14,6 +14,8 @@ use crate::db::DbPool;
 use crate::diagnostics::Diagnostics;
 use crate::integration::IntegrationStatus;
 use crate::otlp::IngestionControl;
+use crate::otlp::forwarder::Forwarder;
+use crate::settings::SettingsStore;
 
 const BIND_ADDR: &str = "127.0.0.1:8765";
 
@@ -24,6 +26,8 @@ pub struct ApiState {
     pub control: IngestionControl,
     pub integration: Arc<Mutex<IntegrationStatus>>,
     pub diagnostics: Diagnostics,
+    pub settings: Arc<SettingsStore>,
+    pub forwarder: Arc<Forwarder>,
 }
 
 pub async fn serve(state: ApiState) -> Result<()> {

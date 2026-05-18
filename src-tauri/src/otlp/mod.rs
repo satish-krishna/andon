@@ -44,11 +44,20 @@ pub async fn serve(
     pool: Arc<DbPool>,
     control: IngestionControl,
     diagnostics: Diagnostics,
+    forwarder: Arc<forwarder::Forwarder>,
 ) -> Result<()> {
     let ingestor = Arc::new(Ingestor::new(pool, control, diagnostics.clone()));
 
-    let grpc = tokio::spawn(grpc_server::serve(ingestor.clone(), diagnostics.clone()));
-    let http = tokio::spawn(http_server::serve(ingestor.clone(), diagnostics.clone()));
+    let grpc = tokio::spawn(grpc_server::serve(
+        ingestor.clone(),
+        diagnostics.clone(),
+        forwarder.clone(),
+    ));
+    let http = tokio::spawn(http_server::serve(
+        ingestor.clone(),
+        diagnostics.clone(),
+        forwarder,
+    ));
 
     let (g, h) = tokio::join!(grpc, http);
     if let Err(e) = g {

@@ -70,6 +70,16 @@ pub fn run() {
         }
     };
 
+    let settings_path = paths.data_dir.join("settings.json");
+    let settings_store = match settings::SettingsStore::load(settings_path) {
+        Ok(s) => Arc::new(s),
+        Err(e) => {
+            tracing::error!(error = ?e, "failed to load settings.json");
+            std::process::exit(1);
+        }
+    };
+    let forwarder = Arc::new(otlp::forwarder::Forwarder::new(settings_store.clone()));
+
     let control = otlp::IngestionControl::new();
     let diagnostics = diagnostics::Diagnostics::new();
     diagnostics.seed_from_db(&pool);
@@ -80,6 +90,8 @@ pub fn run() {
         control: control.clone(),
         integration: std::sync::Arc::new(Mutex::new(integration_status)),
         diagnostics: diagnostics.clone(),
+        settings: settings_store.clone(),
+        forwarder: forwarder.clone(),
     };
 
     let app_state = AppState {
@@ -114,8 +126,9 @@ pub fn run() {
             let pool = pool.clone();
             let control_for_otlp = control.clone();
             let diag_for_otlp = diagnostics.clone();
+            let forwarder_for_otlp = forwarder.clone();
             tauri::async_runtime::spawn(async move {
-                if let Err(e) = otlp::serve(pool, control_for_otlp, diag_for_otlp).await {
+                if let Err(e) = otlp::serve(pool, control_for_otlp, diag_for_otlp, forwarder_for_otlp).await {
                     tracing::error!(error = ?e, "otlp server exited with error");
                 }
             });

@@ -15,16 +15,19 @@ use tonic::{Request, Response, Status, transport::Server};
 
 use crate::diagnostics::Diagnostics;
 
+use super::forwarder::Forwarder;
 use super::{GRPC_ADDR, ingestor::Ingestor};
 
-pub async fn serve(ingestor: Arc<Ingestor>, diagnostics: Diagnostics) {
+pub async fn serve(ingestor: Arc<Ingestor>, diagnostics: Diagnostics, forwarder: Arc<Forwarder>) {
     let addr: SocketAddr = GRPC_ADDR.parse().expect("hardcoded grpc bind address valid");
 
     let metrics_svc = MetricsServiceImpl {
         ingestor: ingestor.clone(),
+        forwarder: forwarder.clone(),
     };
     let logs_svc = LogsServiceImpl {
         ingestor: ingestor.clone(),
+        forwarder,
     };
 
     tracing::info!(%addr, "otlp gRPC listening");
@@ -42,6 +45,7 @@ pub async fn serve(ingestor: Arc<Ingestor>, diagnostics: Diagnostics) {
 
 struct MetricsServiceImpl {
     ingestor: Arc<Ingestor>,
+    forwarder: Arc<Forwarder>,
 }
 
 #[tonic::async_trait]
@@ -51,10 +55,12 @@ impl MetricsService for MetricsServiceImpl {
         request: Request<ExportMetricsServiceRequest>,
     ) -> Result<Response<ExportMetricsServiceResponse>, Status> {
         let req = request.into_inner();
+        self.forwarder.forward_metrics(&req);
         let ingestor = self.ingestor.clone();
+        let resource_metrics = req.resource_metrics;
         // Run blocking SQLite work off the async runtime.
         tokio::task::spawn_blocking(move || {
-            if let Err(e) = ingestor.ingest_metrics_v2(req.resource_metrics, "grpc") {
+            if let Err(e) = ingestor.ingest_metrics_v2(resource_metrics, "grpc") {
                 tracing::warn!(error = ?e, "metrics ingestion error");
             }
         })
@@ -66,6 +72,7 @@ impl MetricsService for MetricsServiceImpl {
 
 struct LogsServiceImpl {
     ingestor: Arc<Ingestor>,
+    forwarder: Arc<Forwarder>,
 }
 
 #[tonic::async_trait]
@@ -75,9 +82,11 @@ impl LogsService for LogsServiceImpl {
         request: Request<ExportLogsServiceRequest>,
     ) -> Result<Response<ExportLogsServiceResponse>, Status> {
         let req = request.into_inner();
+        self.forwarder.forward_logs(&req);
         let ingestor = self.ingestor.clone();
+        let resource_logs = req.resource_logs;
         tokio::task::spawn_blocking(move || {
-            if let Err(e) = ingestor.ingest_logs_v2(req.resource_logs, "grpc") {
+            if let Err(e) = ingestor.ingest_logs_v2(resource_logs, "grpc") {
                 tracing::warn!(error = ?e, "logs ingestion error");
             }
         })

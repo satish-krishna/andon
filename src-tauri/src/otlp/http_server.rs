@@ -17,16 +17,18 @@ use tokio::net::TcpListener;
 
 use crate::diagnostics::Diagnostics;
 
+use super::forwarder::Forwarder;
 use super::{HTTP_ADDR, ingestor::Ingestor};
 
 #[derive(Clone)]
 struct HttpState {
     ingestor: Arc<Ingestor>,
+    forwarder: Arc<Forwarder>,
 }
 
-pub async fn serve(ingestor: Arc<Ingestor>, diagnostics: Diagnostics) {
+pub async fn serve(ingestor: Arc<Ingestor>, diagnostics: Diagnostics, forwarder: Arc<Forwarder>) {
     let addr: SocketAddr = HTTP_ADDR.parse().expect("hardcoded otlp http bind valid");
-    let state = HttpState { ingestor };
+    let state = HttpState { ingestor, forwarder };
 
     let app = Router::new()
         .route("/v1/metrics", post(metrics))
@@ -53,9 +55,11 @@ pub async fn serve(ingestor: Arc<Ingestor>, diagnostics: Diagnostics) {
 async fn metrics(State(state): State<HttpState>, body: Bytes) -> impl IntoResponse {
     match ExportMetricsServiceRequest::decode(body) {
         Ok(req) => {
+            state.forwarder.forward_metrics(&req);
             let ingestor = state.ingestor.clone();
+            let resource_metrics = req.resource_metrics;
             tokio::task::spawn_blocking(move || {
-                if let Err(e) = ingestor.ingest_metrics_v2(req.resource_metrics, "http") {
+                if let Err(e) = ingestor.ingest_metrics_v2(resource_metrics, "http") {
                     tracing::warn!(error = ?e, "metrics ingestion error (http)");
                 }
             })
@@ -73,9 +77,11 @@ async fn metrics(State(state): State<HttpState>, body: Bytes) -> impl IntoRespon
 async fn logs(State(state): State<HttpState>, body: Bytes) -> impl IntoResponse {
     match ExportLogsServiceRequest::decode(body) {
         Ok(req) => {
+            state.forwarder.forward_logs(&req);
             let ingestor = state.ingestor.clone();
+            let resource_logs = req.resource_logs;
             tokio::task::spawn_blocking(move || {
-                if let Err(e) = ingestor.ingest_logs_v2(req.resource_logs, "http") {
+                if let Err(e) = ingestor.ingest_logs_v2(resource_logs, "http") {
                     tracing::warn!(error = ?e, "logs ingestion error (http)");
                 }
             })
