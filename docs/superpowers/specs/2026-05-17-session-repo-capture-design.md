@@ -49,23 +49,41 @@ Repo identity (the grouping key used by the UI) is computed at read time as `COA
 
 ### 1. SessionStart hook (primary)
 
+Claude Code delivers hook input as a JSON document on stdin (verified against the official hooks docs). The SessionStart payload includes `session_id`, `cwd`, `source` (`startup` / `resume` / `clear` / `compact`), `transcript_path`, `hook_event_name`, and `model`. The hook env also exposes `CLAUDE_PROJECT_DIR`. Our script reads the JSON payload, not env vars, and gets `cwd` directly from Claude Code rather than calling `Get-Location`.
+
 Andon writes a PowerShell script to `~/.andon/hooks/session_start.ps1` on first launch:
 
 ```powershell
 $ErrorActionPreference = 'SilentlyContinue'
-$sid  = $env:CLAUDE_SESSION_ID
+
+# Claude Code delivers the hook payload as JSON on stdin.
+$raw = [Console]::In.ReadToEnd()
+if (-not $raw) { exit 0 }
+try { $payload = $raw | ConvertFrom-Json } catch { exit 0 }
+
+$sid = $payload.session_id
 if (-not $sid) { exit 0 }
-$cwd  = (Get-Location).Path
-$top  = (git rev-parse --show-toplevel 2>$null)
-$rem  = (git config --get remote.origin.url 2>$null)
-$brn  = (git branch --show-current 2>$null)
+$cwd    = $payload.cwd
+$source = $payload.source
+$projectDir = $env:CLAUDE_PROJECT_DIR
+
+# git queries run from the session's cwd so they describe the right repo.
+Push-Location -LiteralPath $cwd
+$top = (git rev-parse --show-toplevel 2>$null)
+$rem = (git config --get remote.origin.url 2>$null)
+$brn = (git branch --show-current 2>$null)
+Pop-Location
+
 $body = @{
     session_id  = $sid
     cwd         = $cwd
+    project_dir = $projectDir
     repo_root   = $top
     repo_remote = $rem
     repo_branch = $brn
+    source      = $source
 } | ConvertTo-Json -Compress
+
 try {
     Invoke-RestMethod -Uri 'http://127.0.0.1:8765/api/session/context' `
         -Method Post -ContentType 'application/json' -Body $body -TimeoutSec 2 | Out-Null
@@ -74,9 +92,12 @@ exit 0
 ```
 
 Design constraints on the script:
+- **Read input from stdin only.** The `session_id` env var (`CLAUDE_CODE_SESSION_ID`) is documented for Bash/PowerShell *tool* subprocesses, not for hooks. Hooks get the session ID via the stdin JSON payload.
 - **Never block Claude Code.** 2-second timeout, swallow all errors, always exit 0.
 - **Never write to stdout/stderr.** Claude Code may surface hook output.
 - **Be self-contained.** No PowerShell modules beyond what ships with Windows.
+
+`source` is captured in the POST body for future use (e.g. distinguishing a fresh startup from a `/clear`-driven new session) but is not part of the v1 data model.
 
 `~/.claude/settings.json` gets a hook entry pointing at the script:
 
@@ -110,11 +131,15 @@ Request body:
 {
   "session_id": "uuid",
   "cwd": "E:\\Repos\\andon",
+  "project_dir": "E:\\Repos\\andon",
   "repo_root": "E:\\Repos\\andon",
   "repo_remote": "https://github.com/satish-krishna/andon.git",
-  "repo_branch": "main"
+  "repo_branch": "main",
+  "source": "startup"
 }
 ```
+
+`project_dir` and `source` are accepted by the endpoint but not persisted in v1 (forward compatibility — they may be useful when we add per-source aggregation later).
 
 Behaviour:
 - Idempotent upsert on `session_id`. If the session row doesn't exist yet, insert a stub row with the context fields; the ingestor will fill in the rest when telemetry arrives (the existing `INSERT OR IGNORE` pattern on the sessions table needs to become an upsert that doesn't clobber repo columns).
@@ -191,6 +216,6 @@ No backfill is performed by the migration itself. Existing sessions get repo inf
 
 ## Open risks
 
-- **Claude Code hook envelope changes.** The injected env var name (`CLAUDE_SESSION_ID`) and the `SessionStart` hook event must match what Claude Code actually emits. Verify against current CLI before implementation — if the name differs (`CLAUDE_CODE_SESSION_ID`, etc.), update the script.
-- **Multiple Andon-managed hooks in future.** If we add more hooks later (e.g. SessionEnd), the patcher needs a way to identify "its" hook entries for clean unpatch. Tag Andon entries with a sentinel comment or a wrapper command name.
+- **Claude Code hook envelope changes.** The stdin JSON shape and field names (`session_id`, `cwd`, `source`) are verified against the current hooks docs but could shift in a future CLI release. Treat missing fields defensively in the script (which we already do — script exits 0 on any parse failure).
+- **Multiple Andon-managed hooks in future.** If we add more hooks later (e.g. `SessionEnd`, `UserPromptSubmit`), the patcher needs a way to identify "its" hook entries for clean unpatch. Tag Andon entries with a sentinel — either a comment field if Claude Code accepts one, or by matching on the `command` string containing `\.andon\hooks\`.
 - **Inference false positives.** A session that edited a file outside its actual repo (e.g. a temp file in `/tmp`) could pull the common ancestor away from the real repo. Mitigation: prefer the deepest `.git`-bearing ancestor of *most* file paths, not all.
