@@ -1,0 +1,21 @@
+<section class="panel">
+  <div class="panel-title">Top repos · period</div>
+  <div class="panel-body">
+    @if (entries().length === 0) {
+      <div class="text-muted text-xs font-mono py-4">No repo-attributed cost in this period.</div>
+    } @else {
+      <ul>
+        @for (e of entries(); track e.key) {
+          <li class="grid grid-cols-[1fr_auto_auto] gap-3 items-center font-mono text-xs py-1">
+            <a [routerLink]="['/sessions']" [queryParams]="{ repo: e.key }"
+               class="truncate text-muted hover:text-accent hover:underline">{{ e.label }}</a>
+            <svg class="h-6 w-16" viewBox="0 0 64 24" preserveAspectRatio="none">
+              <polyline [attr.points]="sparkPoints(e.spark)" fill="none" stroke="currentColor" stroke-width="1.5" />
+            </svg>
+            <span class="w-20 text-right tabular-nums">${{ e.cost_usd | number:'1.2-2' }}</span>
+          </li>
+        }
+      </ul>
+    }
+  </div>
+</section>
