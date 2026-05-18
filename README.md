@@ -114,6 +114,7 @@ cargo tauri build        # release binary in src-tauri/target/release/bundle/
 - No outbound calls. Andon never phones home.
 - Raw user prompts are never persisted even if `OTEL_LOG_USER_PROMPTS=1` upstream.
 - SQLite DB is user-only read/write.
+- Andon installs a Claude Code `SessionStart` hook (in addition to the existing `PostToolUse` and `SessionEnd` hooks) that POSTs the session id and working directory to `http://127.0.0.1:8765/api/session/context`. Git metadata (toplevel, remote, branch) is computed by Andon locally — git is invoked from the cwd you launched Claude Code from. Nothing leaves the machine.
 
 ## License
 
