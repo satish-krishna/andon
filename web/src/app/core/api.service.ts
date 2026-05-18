@@ -24,6 +24,7 @@ export interface FilterArgs {
   search?: string;
   sort?: string;
   langs?: string;
+  repo?: string;
   limit?: number;
 }
 
@@ -128,6 +129,7 @@ function toParams(args?: FilterArgs): HttpParams {
   if (args.search) p = p.set('search', args.search);
   if (args.sort) p = p.set('sort', args.sort);
   if (args.langs) p = p.set('langs', args.langs);
+  if (args.repo) p = p.set('repo', args.repo);
   if (args.limit !== undefined) p = p.set('limit', String(args.limit));
   return p;
 }
