@@ -1,11 +1,12 @@
 import { CommonModule, DatePipe, DecimalPipe } from '@angular/common';
-import { Component, computed, effect, inject, signal } from '@angular/core';
+import { Component, OnInit, computed, effect, inject, signal } from '@angular/core';
 import { FormsModule } from '@angular/forms';
 import { LucideAngularModule } from 'lucide-angular';
 
 import { ApiService, V2FileRow, V2FilesResponse } from '../../core/api.service';
 import { FilterService } from '../../core/filter.service';
 import { FilterBarComponent } from '../../shared/filter-bar.component';
+import { RepoSummary } from '../../core/models';
 
 type SortKey = 'edits' | 'accept' | 'recent' | 'churn';
 
@@ -15,7 +16,7 @@ type SortKey = 'edits' | 'accept' | 'recent' | 'churn';
   imports: [CommonModule, DatePipe, DecimalPipe, FormsModule, FilterBarComponent, LucideAngularModule],
   templateUrl: './files.component.html',
 })
-export class FilesComponent {
+export class FilesComponent implements OnInit {
   filter = inject(FilterService);
   private api = inject(ApiService);
 
@@ -24,6 +25,7 @@ export class FilesComponent {
   selectedLangs = signal<Set<string>>(new Set());
   selected = signal<string | null>(null);
   searchInput = '';
+  repoOptions = signal<RepoSummary[]>([]);
 
   maxEdits = computed(() => {
     const d = this.data();
@@ -39,10 +41,19 @@ export class FilesComponent {
     return [...new Set(d.files.map((f) => f.lang))];
   });
 
+  private readonly singleRepoRoot = computed<string | null>(() => {
+    const repos = this.filter.repos();
+    if (repos.length !== 1) return null;
+    const key = repos[0];
+    // V2FileRow doesn't carry repo_root/repo_remote, so fall back to key if it looks like an abs path
+    return key.startsWith('/') || /^[A-Z]:\\/i.test(key) ? key : null;
+  });
+
   constructor() {
     effect(() => {
       const w = this.filter.window();
       const langs = [...this.selectedLangs()].join(',');
+      const repo = this.filter.reposCsv();
       this.api
         .files({
           fromMs: w.fromMs,
@@ -50,9 +61,25 @@ export class FilesComponent {
           sort: this.sort(),
           langs: langs || undefined,
           search: this.searchInput || undefined,
+          repo: repo || undefined,
         })
         .subscribe((v) => this.data.set(v));
+      this.api.listRepos({ from: w.fromMs, to: w.toMs, limit: 20 }).subscribe((r) => {
+        this.repoOptions.set(r);
+      });
     });
+  }
+
+  ngOnInit(): void {}
+
+  toggleRepo(key: string) {
+    const current = this.filter.repos();
+    const idx = current.indexOf(key);
+    if (idx >= 0) {
+      this.filter.repos.set(current.filter((k) => k !== key));
+    } else {
+      this.filter.repos.set([...current, key]);
+    }
   }
 
   setSort(k: SortKey) {
@@ -70,6 +97,7 @@ export class FilesComponent {
     this.searchInput = v;
     const w = this.filter.window();
     const langs = [...this.selectedLangs()].join(',');
+    const repo = this.filter.reposCsv();
     this.api
       .files({
         fromMs: w.fromMs,
@@ -77,12 +105,20 @@ export class FilesComponent {
         sort: this.sort(),
         langs: langs || undefined,
         search: v || undefined,
+        repo: repo || undefined,
       })
       .subscribe((d) => this.data.set(d));
   }
 
   selectFile(p: string) {
     this.selected.set(this.selected() === p ? null : p);
+  }
+
+  displayPath(row: { file_path: string }): string {
+    const root = this.singleRepoRoot();
+    if (!root || !row.file_path?.startsWith(root)) return row.file_path;
+    const rel = row.file_path.slice(root.length);
+    return rel.replace(/^[/\\]/, '');
   }
 
   acceptColor(rate: number): string {
