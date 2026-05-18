@@ -89,6 +89,10 @@ export interface V2Session {
   top_model: string | null;
   api_calls: number;
   decisions: number;
+  repo_name: string | null;
+  repo_root: string | null;
+  repo_remote: string | null;
+  cwd: string | null;
 }
 
 export interface V2FileRow {

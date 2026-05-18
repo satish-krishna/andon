@@ -1,5 +1,5 @@
 import { CommonModule, DatePipe, DecimalPipe } from '@angular/common';
-import { Component, effect, inject, signal } from '@angular/core';
+import { Component, OnInit, effect, inject, signal } from '@angular/core';
 import { FormsModule } from '@angular/forms';
 import { RouterLink } from '@angular/router';
 import { LucideAngularModule } from 'lucide-angular';
@@ -7,7 +7,7 @@ import { LucideAngularModule } from 'lucide-angular';
 import { ApiService, V2Session, V2FileRow } from '../../core/api.service';
 import { FilterService } from '../../core/filter.service';
 import { FilterBarComponent } from '../../shared/filter-bar.component';
-import { SessionDetail } from '../../core/models';
+import { RepoSummary, SessionDetail } from '../../core/models';
 
 type SortKey = 'time' | 'cost' | 'duration' | 'decisions';
 
@@ -17,7 +17,7 @@ type SortKey = 'time' | 'cost' | 'duration' | 'decisions';
   templateUrl: './sessions.component.html',
   standalone: true,
 })
-export class SessionsComponent {
+export class SessionsComponent implements OnInit {
   filter = inject(FilterService);
   private api = inject(ApiService);
 
@@ -26,6 +26,7 @@ export class SessionsComponent {
   sort = signal<SortKey>('time');
   expanded = signal<string | null>(null);
   detailById = signal<Record<string, SessionDetail | null>>({});
+  repoOptions = signal<RepoSummary[]>([]);
 
   searchInput = '';
 
@@ -33,21 +34,38 @@ export class SessionsComponent {
     effect(() => {
       const w = this.filter.window();
       const models = this.filter.modelsCsv();
-      const args = { fromMs: w.fromMs, toMs: w.toMs, models, sort: this.sort(), limit: 200 };
+      const repo = this.filter.reposCsv();
+      const args = { fromMs: w.fromMs, toMs: w.toMs, models, repo, sort: this.sort(), limit: 200 };
       this.api.sessionsV2({ ...args, search: this.searchInput || undefined }).subscribe((v) => {
         this.rows.set(v);
         this.loaded.set(true);
       });
+      this.api.listRepos({ from: w.fromMs, to: w.toMs, limit: 20 }).subscribe((r) => {
+        this.repoOptions.set(r);
+      });
     });
   }
+
+  ngOnInit(): void {}
 
   onSearch(v: string) {
     this.searchInput = v;
     const w = this.filter.window();
     const models = this.filter.modelsCsv();
+    const repo = this.filter.reposCsv();
     this.api
-      .sessionsV2({ fromMs: w.fromMs, toMs: w.toMs, models, sort: this.sort(), limit: 200, search: v || undefined })
+      .sessionsV2({ fromMs: w.fromMs, toMs: w.toMs, models, repo, sort: this.sort(), limit: 200, search: v || undefined })
       .subscribe((r) => this.rows.set(r));
+  }
+
+  toggleRepo(key: string) {
+    const current = this.filter.repos();
+    const idx = current.indexOf(key);
+    if (idx >= 0) {
+      this.filter.repos.set(current.filter((k) => k !== key));
+    } else {
+      this.filter.repos.set([...current, key]);
+    }
   }
 
   setSort(k: SortKey) {

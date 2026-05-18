@@ -7,21 +7,42 @@
 
 <app-filter-bar />
 
-<div class="sticky top-[100px] z-[5] bg-bg/95 backdrop-blur-sm border-b border-border px-6 py-2 flex items-center gap-3">
-  <span class="filter-label flex items-center gap-1.5">
-    <lucide-icon name="filter" class="w-3 h-3"></lucide-icon>Sort
-  </span>
-  <div class="flex items-center gap-1.5">
-    <button class="filter-chip" [attr.data-active]="sort() === 'time' ? 'true' : null" (click)="setSort('time')">Time ↓</button>
-    <button class="filter-chip" [attr.data-active]="sort() === 'cost' ? 'true' : null" (click)="setSort('cost')">Cost</button>
-    <button class="filter-chip" [attr.data-active]="sort() === 'duration' ? 'true' : null" (click)="setSort('duration')">Duration</button>
-    <button class="filter-chip" [attr.data-active]="sort() === 'decisions' ? 'true' : null" (click)="setSort('decisions')">Decisions</button>
+<div class="sticky top-[100px] z-[5] bg-bg/95 backdrop-blur-sm border-b border-border">
+  <div class="px-6 py-2 flex items-center gap-3">
+    <span class="filter-label flex items-center gap-1.5">
+      <lucide-icon name="filter" class="w-3 h-3"></lucide-icon>Sort
+    </span>
+    <div class="flex items-center gap-1.5">
+      <button class="filter-chip" [attr.data-active]="sort() === 'time' ? 'true' : null" (click)="setSort('time')">Time ↓</button>
+      <button class="filter-chip" [attr.data-active]="sort() === 'cost' ? 'true' : null" (click)="setSort('cost')">Cost</button>
+      <button class="filter-chip" [attr.data-active]="sort() === 'duration' ? 'true' : null" (click)="setSort('duration')">Duration</button>
+      <button class="filter-chip" [attr.data-active]="sort() === 'decisions' ? 'true' : null" (click)="setSort('decisions')">Decisions</button>
+    </div>
+    <div class="ml-auto relative">
+      <lucide-icon name="search" class="w-3.5 h-3.5 absolute left-2.5 top-1/2 -translate-y-1/2 text-muted"></lucide-icon>
+      <input class="search-input w-72 pl-8" placeholder="Search session ID or file…"
+             [ngModel]="searchInput" (ngModelChange)="onSearch($event)" />
+    </div>
   </div>
-  <div class="ml-auto relative">
-    <lucide-icon name="search" class="w-3.5 h-3.5 absolute left-2.5 top-1/2 -translate-y-1/2 text-muted"></lucide-icon>
-    <input class="search-input w-72 pl-8" placeholder="Search session ID or file…"
-           [ngModel]="searchInput" (ngModelChange)="onSearch($event)" />
-  </div>
+  @if (repoOptions().length > 0) {
+    <div class="px-6 py-2 flex items-center gap-3 border-t border-border/50">
+      <span class="filter-label flex items-center gap-1.5">
+        <lucide-icon name="git-branch" class="w-3 h-3"></lucide-icon>Repo
+      </span>
+      <div class="flex items-center gap-1.5 flex-wrap">
+        @for (repo of repoOptions(); track repo.key) {
+          <button class="filter-chip"
+                  [attr.data-active]="filter.repos().includes(repo.key) ? 'true' : null"
+                  (click)="toggleRepo(repo.key)">
+            {{ repo.label }}
+            @if (!repo.has_remote) {
+              <span class="text-zinc-500 text-xs ml-1">(not git)</span>
+            }
+          </button>
+        }
+      </div>
+    </div>
+  }
 </div>
 
 <div class="px-6 py-5 flex flex-col gap-4">
@@ -41,6 +62,7 @@
               <th class="px-4 py-2 font-normal w-8"></th>
               <th class="px-2 py-2 font-normal">Time</th>
               <th class="px-2 py-2 font-normal">Session</th>
+              <th class="px-2 py-2 font-normal">Repo</th>
               <th class="px-2 py-2 font-normal">Model</th>
               <th class="px-2 py-2 font-normal text-right">Cost</th>
               <th class="px-2 py-2 font-normal text-right">Tokens</th>
@@ -51,7 +73,7 @@
           </thead>
           <tbody>
             @for (g of groupedRows(); track g.label) {
-              <tr><td colspan="9" class="px-4 pt-3 pb-1 text-[10px] uppercase tracking-wider text-muted">{{ g.label }}</td></tr>
+              <tr><td colspan="10" class="px-4 pt-3 pb-1 text-[10px] uppercase tracking-wider text-muted">{{ g.label }}</td></tr>
               @for (s of g.rows; track s.session_id) {
                 <tr class="border-t border-border row-hover cursor-pointer"
                     [class.bg-border]="expanded() === s.session_id"
@@ -63,6 +85,17 @@
                   </td>
                   <td class="px-2 py-2 text-muted">{{ s.started_at | date : 'HH:mm' }}</td>
                   <td class="px-2 py-2"><span class="text-accent">{{ s.session_id.slice(0, 8) }}</span><span class="text-muted">…</span></td>
+                  <td class="px-2 py-2 max-w-[160px]"
+                      [title]="s.repo_root ?? s.cwd ?? ''">
+                    @if (s.repo_name) {
+                      <span class="truncate block">{{ s.repo_name }}</span>
+                      @if (!s.repo_remote) {
+                        <span class="text-zinc-500 text-xs ml-1">(not git)</span>
+                      }
+                    } @else {
+                      <span class="text-muted">—</span>
+                    }
+                  </td>
                   <td class="px-2 py-2">
                     <span class="inline-flex items-center gap-1.5">
                       <span class="inline-block w-2 h-2 rounded-full" [style.background-color]="modelColor(s.top_model)"></span>
@@ -92,7 +125,7 @@
 
                 @if (expanded() === s.session_id) {
                   <tr class="bg-bg/60">
-                    <td colspan="9" class="px-6 py-5">
+                    <td colspan="10" class="px-6 py-5">
                       <div class="flex items-center gap-4 mb-3 text-[11px] font-mono">
                         <span class="text-muted uppercase tracking-wider">Session</span>
                         <span class="text-accent">{{ s.session_id }}</span>

@@ -40,10 +40,6 @@ import { FilterService, RangePreset } from '../core/filter.service';
           </button>
         }
       </div>
-      <div class="px-6 py-2 text-[11px] uppercase tracking-wider border-t border-border/50 text-muted flex items-center gap-1.5">
-        <lucide-icon name="git-branch" class="w-3 h-3"></lucide-icon>
-        <span>Repo — not emitted by Claude Code (filter by session instead)</span>
-      </div>
     </div>
   `,
 })
