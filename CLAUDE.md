@@ -31,12 +31,14 @@ cd web; npm install; npm run build
 cargo tauri build
 
 # Tests
-cargo test                          # Rust unit + integration tests
-cd web; npm test -- --watch=false   # Angular tests (CI mode)
+cd src-tauri; cargo test              # Rust unit + integration tests
+cd web; npm test -- --watch=false     # Angular tests (CI mode)
 
 # Smoke-test the OTLP receivers against a running app
+# (start `cargo tauri dev` first — these need the listeners bound on :4317 / :4318)
+cd scripts; npm install                 # one-time for the gRPC smoke deps
 node scripts/smoke_grpc.js
-python scripts/smoke_otlp.py
+python scripts/smoke_otlp.py            # no deps; uses stdlib
 ```
 
 Tagged builds follow [`docs/releasing.md`](docs/releasing.md) — do not invent a new flow.
@@ -55,7 +57,7 @@ web/               Angular 21 SPA (standalone components, signals)
   src/app/features/{overview,sessions,files,diagnostics,settings}
 docs/              Architecture, building, features, pitch
 docs/superpowers/  Active design specs + implementation plans
-scripts/           Smoke scripts, release helpers
+scripts/           OTLP smoke scripts (gRPC via Node, HTTP via stdlib Python)
 ```
 
 ## Non-negotiable rules
@@ -73,7 +75,7 @@ Full rationale lives in [`CONTRIBUTING.md`](CONTRIBUTING.md). Short list for in-
 - Standalone components only. No NgModules. No NgRx.
 - Signals for all state: `signal()`, `computed()`, `effect()`. No `Subject` / `Observable` in feature code.
 - `inject()`, `ChangeDetectionStrategy.OnPush`, `@if` / `@for` / `@switch` (never `*ngIf` / `*ngFor`).
-- Tailwind utilities first. Custom CSS only for SpartanNG overrides.
+- Tailwind utilities first. Custom CSS only when utilities don't cover the case.
 - Master-detail nav uses parent layout + `position: absolute; inset: 0` overlay. Do not destroy summary components when navigating to detail.
 
 **Both**

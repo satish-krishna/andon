@@ -158,7 +158,7 @@ chore: bump version to 0.4.2 (hook response envelope)
 
 ## Angular guidelines
 
-Stack: Angular 21, standalone components, signals, Tailwind 4, `@spartan-ng/brain`, `lucide-angular`. Charts are hand-rolled SVG + CSS (themable, deterministic). `chart.js` / `ng2-charts` are present for legacy callers; do not introduce new usages.
+Stack: Angular 21, standalone components, signals, Tailwind 4, `lucide-angular`. Charts are hand-rolled SVG + CSS (themable, deterministic). `@spartan-ng/brain` is declared in `package.json` but currently unused — don't reach for it without a deliberate decision. `chart.js` / `ng2-charts` are present for legacy callers; do not introduce new usages.
 
 ### Component patterns
 
@@ -218,7 +218,7 @@ Rules:
 
 ## Testing
 
-- **Rust**: `cargo test` for unit + integration tests. Integration tests against the real SQLite (file-backed under `tempfile`) — do not mock the DB.
+- **Rust**: `cd src-tauri; cargo test` for unit + integration tests (the crate lives in `src-tauri/`, not at the repo root). Integration tests run against the real SQLite (file-backed under `tempfile`) — do not mock the DB.
 - **Angular**: `cd web; npm test -- --watch=false` for Karma + Jasmine.
 - **Smoke**: `node scripts/smoke_grpc.js` and `python scripts/smoke_otlp.py` exercise the live OTLP receivers. Run these before merging anything that touches `otlp/` or the `Ingestor`.
 - **TDD is non-negotiable** — write the failing test first.
@@ -260,7 +260,7 @@ Before opening a PR, all of these must pass:
 - [ ] No `unwrap()` / `expect()` introduced outside `main.rs` setup
 
 **Tests**
-- [ ] `cargo test` passes
+- [ ] `cd src-tauri; cargo test` passes
 - [ ] `cd web; npm test -- --watch=false` passes
 - [ ] New code has tests driving it (TDD)
 - [ ] If `otlp/` or `Ingestor` changed: relevant smoke script run locally

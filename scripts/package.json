@@ -1,0 +1,14 @@
+{
+  "name": "andon-smoke-scripts",
+  "version": "0.0.0",
+  "private": true,
+  "description": "Smoke utilities for the andon OTLP receivers. Run `npm install` here once, then `node smoke_grpc.js`.",
+  "scripts": {
+    "smoke:grpc": "node smoke_grpc.js"
+  },
+  "dependencies": {
+    "@opentelemetry/exporter-metrics-otlp-grpc": "^0.55.0",
+    "@opentelemetry/resources": "^1.30.0",
+    "@opentelemetry/sdk-metrics": "^1.30.0"
+  }
+}
