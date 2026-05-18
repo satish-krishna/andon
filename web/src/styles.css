@@ -160,3 +160,22 @@
 ::-webkit-scrollbar-track { background: var(--color-panel); }
 ::-webkit-scrollbar-thumb { background: var(--color-border); border-radius: 4px; }
 ::-webkit-scrollbar-thumb:hover { background: var(--color-border-bright); }
+
+.filter-date-input {
+  background: transparent;
+  border: 1px solid var(--color-border);
+  color: var(--color-text);
+  font-family: 'JetBrains Mono', ui-monospace, monospace;
+  font-size: 11px;
+  padding: 2px 6px;
+  border-radius: 4px;
+  color-scheme: dark;
+}
+.filter-date-input:focus {
+  outline: none;
+  border-color: var(--color-border-bright);
+}
+.filter-date-input::-webkit-calendar-picker-indicator {
+  filter: invert(0.8);
+  cursor: pointer;
+}
