@@ -167,6 +167,39 @@ pub fn test_router(pool: &Arc<DbPool>) -> (Router, TempDir) {
 }
 
 // ---------------------------------------------------------------------------
+// Git repo helpers (reused by api_git and future test files)
+// ---------------------------------------------------------------------------
+
+/// Create a real git repository in a temporary directory with the given commit
+/// messages. Returns the `TempDir` guard — drop it to delete the repo.
+///
+/// The helper sets `GIT_AUTHOR_*` / `GIT_COMMITTER_*` env vars and disables
+/// GPG signing so tests work even without a git identity configured.
+pub fn init_temp_repo(commits: &[&str]) -> TempDir {
+    let dir = tempfile::tempdir().unwrap();
+    let run = |args: &[&str]| {
+        let status = std::process::Command::new("git")
+            .args(args)
+            .current_dir(dir.path())
+            .env("GIT_AUTHOR_NAME", "T")
+            .env("GIT_AUTHOR_EMAIL", "t@t")
+            .env("GIT_COMMITTER_NAME", "T")
+            .env("GIT_COMMITTER_EMAIL", "t@t")
+            .status()
+            .unwrap();
+        assert!(status.success(), "git {:?} failed", args);
+    };
+    run(&["init", "-q"]);
+    run(&["config", "commit.gpgsign", "false"]);
+    for (i, msg) in commits.iter().enumerate() {
+        std::fs::write(dir.path().join(format!("f{i}.txt")), b"x").unwrap();
+        run(&["add", "."]);
+        run(&["commit", "-q", "-m", msg]);
+    }
+    dir
+}
+
+// ---------------------------------------------------------------------------
 // OTLP sample-payload builders
 // ---------------------------------------------------------------------------
 
