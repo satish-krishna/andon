@@ -1539,17 +1539,37 @@ async fn v2_accept_by_language(
 ) -> Result<Json<Vec<serde_json::Value>>, ApiError> {
     let (from, to) = q.window();
     let conn = state.pool.get().map_err(ApiError::pool)?;
-    let mut stmt = conn.prepare(
+
+    // tool_decisions has no model column, so filter via EXISTS over cost_entries
+    // joined on session_id — same pattern as count_sessions / v2_sessions.
+    let (model_inner_sql, model_inner_vals) = q.model_clause("c.model");
+    let model_filter_sql = if model_inner_sql.is_empty() {
+        String::new()
+    } else {
+        let inner = model_inner_sql.trim_start_matches(" AND ");
+        format!(
+            " AND EXISTS (SELECT 1 FROM cost_entries c
+                          WHERE c.session_id = tool_decisions.session_id AND {inner})"
+        )
+    };
+
+    let sql = format!(
         "SELECT COALESCE(language, 'unknown') AS lang,
                 SUM(CASE WHEN decision='accept' THEN 1 ELSE 0 END) AS a,
                 SUM(CASE WHEN decision='reject' THEN 1 ELSE 0 END) AS r,
                 SUM(CASE WHEN decision='abort'  THEN 1 ELSE 0 END) AS x,
                 COUNT(*) AS total
          FROM tool_decisions
-         WHERE timestamp >= ?1 AND timestamp < ?2
-         GROUP BY lang ORDER BY total DESC",
-    )?;
-    let rows = stmt.query_map(params![from, to], |r| {
+         WHERE timestamp >= ? AND timestamp < ?{model_filter_sql}
+         GROUP BY lang ORDER BY total DESC"
+    );
+    let mut stmt = conn.prepare(&sql)?;
+    let mut p: Vec<Box<dyn rusqlite::ToSql>> = vec![Box::new(from), Box::new(to)];
+    for v in model_inner_vals {
+        p.push(Box::new(v));
+    }
+    let refs: Vec<&dyn rusqlite::ToSql> = p.iter().map(|b| b.as_ref()).collect();
+    let rows = stmt.query_map(refs.as_slice(), |r| {
         Ok((
             r.get::<_, String>(0)?,
             r.get::<_, i64>(1)?,
