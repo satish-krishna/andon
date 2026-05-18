@@ -36,9 +36,10 @@ cd web; npm test -- --watch=false     # Angular tests (CI mode)
 
 # Smoke-test the OTLP receivers against a running app
 # (start `cargo tauri dev` first — these need the listeners bound on :4317 / :4318)
-cd scripts; npm install                 # one-time for the gRPC smoke deps
-node scripts/smoke_grpc.js
-python scripts/smoke_otlp.py            # no deps; uses stdlib
+cd scripts
+npm install                             # one-time for the gRPC smoke deps
+node smoke_grpc.js
+python smoke_otlp.py                    # no deps; uses stdlib
 ```
 
 Tagged builds follow [`docs/releasing.md`](docs/releasing.md) — do not invent a new flow.
