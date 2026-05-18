@@ -1,4 +1,5 @@
 pub mod dto;
+pub mod hook_response;
 pub mod routes;
 
 use std::net::SocketAddr;
