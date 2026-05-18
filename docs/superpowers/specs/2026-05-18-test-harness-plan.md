@@ -59,15 +59,46 @@ This document enumerates every module that needs coverage, the fixture strategy,
 
 ## Web frontend (`web/`)
 
-Angular 21 with Jasmine/Karma already configured (`ng test`). Use `HttpTestingController` for service tests, `TestBed` for components.
+**Stack:** Vitest + ng-mocks + Spectator. Replaces the default Angular 21 Jasmine/Karma scaffold.
 
-### Harness setup (~0.5 day)
+### Harness setup (~1 day, +0.5 over Jasmine/Karma)
 
-- `web/src/testing/` folder:
-  - `signal-helpers.ts`: utilities for asserting signal/computed values across tick.
-  - `api-fixtures.ts`: typed sample responses for every endpoint.
-  - `filter-builder.ts`: build a `FilterService` in known states.
-- Configure `ng test` for headless Chrome in CI (`--browsers=ChromeHeadlessCI`).
+The extra half-day covers swapping the runner and proving the stack works against Angular 21's standalone-only components and signals.
+
+**Dependencies to add:**
+
+- `vitest`, `@analogjs/vitest-angular` (Vitest preset that handles Angular's TestBed bootstrap).
+- `@ngneat/spectator` (component / service test wrappers; works with Vitest via its `jest`-compatible matchers — verify version ≥ 19 for Angular 21 standalone support).
+- `ng-mocks` (mock components, directives, pipes, providers — pairs well with Spectator for shallow renders).
+- `jsdom` (Vitest's browser env; no headless Chrome needed in CI).
+- `@vitest/coverage-v8` (coverage reporting).
+
+**Project changes:**
+
+- Remove `jasmine-core`, `@types/jasmine`, `karma*` from `package.json`.
+- Delete `karma.conf.js` and `web/src/test.ts` if present.
+- Add `vitest.config.ts` with the Analog preset.
+- Add `setup-vitest.ts` registering `zone.js/testing` and Spectator's globals.
+- Update `tsconfig.spec.json` to point at Vitest types instead of Jasmine.
+- `npm run test` → `vitest run`; `npm run test:watch` → `vitest`.
+
+**`web/src/testing/` folder:**
+
+- `signal-helpers.ts`: utilities for asserting signal/computed values across tick.
+- `api-fixtures.ts`: typed sample responses for every endpoint.
+- `filter-builder.ts`: build a `FilterService` in known states.
+- `spectator-factories.ts`: re-export `createComponentFactory` / `createServiceFactory` pre-wired with `MockProvider`/`MockComponent` helpers from ng-mocks.
+
+**Patterns:**
+
+- Service tests: `createServiceFactory({ service: FilterService })` + Vitest `expect()`.
+- HTTP tests: Spectator's `HttpClientSpectator` wrapping `HttpTestingController` — same assertions, less boilerplate.
+- Component tests: `createComponentFactory({ component: OverviewComponent, declarations: [MockComponent(ChartComponent)], providers: [MockProvider(ApiService)] })` for shallow renders with ng-mocks stubs.
+
+**Risks to confirm during setup:**
+
+- Spectator + Vitest + Angular 21: officially supported combo is recent; verify on a single throwaway test before scaling out. If incompatible, fall back to Spectator + Jest (still keeps the ng-mocks/Spectator ergonomics).
+- ng2-charts + jsdom: Chart.js needs a canvas shim (`canvas` npm pkg or `jest-canvas-mock` equivalent). Confirm during overview component tests.
 
 ### Module-by-module
 
@@ -75,19 +106,20 @@ Angular 21 with Jasmine/Karma already configured (`ng test`). Use `HttpTestingCo
 |---|---|---|
 | `core/filter.service.ts` | Every preset's `window()` math (today/week/month/30d/custom); `modelsCsv` with all/partial/none selected; `enterCustomMode` seeding; `setCustomFrom/To` clamping; `hasActiveFilters` truth table; `clearFilters` resets. | 0.5d |
 | `shared/filter-bar.component.ts` | Chip click toggles model; range click switches preset; "Custom…" reveals date inputs; date input change updates `customRange`; Clear button visibility tracks `hasActiveFilters`. | 0.25d |
-| `core/api.service.ts` | Each method builds the correct URL incl. `models=`, `from=`, `to=`, `repos=`, `search=` query params. Use `HttpTestingController`. | 0.5d |
+| `core/api.service.ts` | Each method builds the correct URL incl. `models=`, `from=`, `to=`, `repos=`, `search=` query params. Use Spectator's `HttpClientSpectator`. | 0.5d |
 | `features/overview/overview.component.ts` | Renders all five visualizations when API returns data; empty states when API returns empty; re-fetches when `FilterService` state changes (effect-driven). | 0.5d |
 | `features/sessions/sessions.component.ts` + detail | List renders, pagination works, detail page fetches by id, timeline renders tool decisions in order. | 0.5d |
 | `features/files/files.component.ts` | Heatmap renders with sample data; sized by edit count; colored by accept rate. | 0.25d |
 | `features/settings/settings.component.ts` | DB location displays; row counts render; "Open data folder" calls Tauri command (mock). | 0.25d |
 | `shared/*` other components | Smoke render each. | 0.25d |
 
-**Subtotal: ~2.5–3 days**
+**Subtotal: ~3–3.5 days** (includes the +0.5d Vitest/Spectator setup tax)
 
 ### CI for web
 
 - Same GitHub Actions workflow as Rust.
-- `npm ci && npm run build && npx ng test --watch=false --browsers=ChromeHeadlessCI`.
+- `npm ci && npm run build && npm run test`.
+- Vitest runs headless in `jsdom` — no Chrome dependency in CI.
 - Cache `node_modules` keyed on `package-lock.json`.
 
 ---
@@ -122,4 +154,5 @@ Each phase is a reviewable PR on its own branch.
 
 - Use `mockall` for Rust trait mocking or hand-roll fakes? (Recommendation: hand-roll — only the ingestor would benefit, and it's small.)
 - Snapshot testing for JSON DTOs (e.g. `insta`)? Useful for endpoint shape stability. (Recommendation: yes — `insta` is low-friction.)
-- Coverage thresholds in CI (`cargo-llvm-cov`, `karma-coverage`)? (Recommendation: report but don't fail the build initially; set a floor later.)
+- Coverage thresholds in CI (`cargo-llvm-cov` for Rust, `@vitest/coverage-v8` for web)? (Recommendation: report but don't fail the build initially; set a floor later.)
+- Spectator + Vitest + Angular 21 compatibility — confirm during harness setup; documented fallback is Spectator + Jest.
