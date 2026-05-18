@@ -941,13 +941,11 @@ async fn hook_session_end(
 async fn hook_session_context(
     State(state): State<ApiState>,
     Json(p): Json<crate::api::dto::SessionContextPayload>,
-) -> Result<Json<serde_json::Value>, ApiError> {
+) -> Json<HookOutput> {
     let sid = p.session_id.trim().to_string();
     if sid.is_empty() {
-        return Err(ApiError {
-            status: StatusCode::BAD_REQUEST,
-            message: "session_id required".into(),
-        });
+        tracing::warn!("hook_session_context: missing session_id; skipping persist");
+        return Json(HookOutput::ok());
     }
     let now = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
@@ -1015,7 +1013,7 @@ async fn hook_session_context(
         });
     }
 
-    Ok(Json(json!({ "ok": true })))
+    Json(HookOutput::ok())
 }
 
 #[derive(serde::Deserialize)]
