@@ -49,57 +49,11 @@ Repo identity (the grouping key used by the UI) is computed at read time as `COA
 
 ### 1. SessionStart hook (primary)
 
-Claude Code delivers hook input as a JSON document on stdin (verified against the official hooks docs). The SessionStart payload includes `session_id`, `cwd`, `source` (`startup` / `resume` / `clear` / `compact`), `transcript_path`, `hook_event_name`, and `model`. The hook env also exposes `CLAUDE_PROJECT_DIR`. Our script reads the JSON payload, not env vars, and gets `cwd` directly from Claude Code rather than calling `Get-Location`.
+Claude Code delivers hook input as a JSON document on stdin (verified against the official hooks docs). The SessionStart payload includes `session_id`, `cwd`, `source` (`startup` / `resume` / `clear` / `compact`), `transcript_path`, `hook_event_name`, and `model`.
 
-Andon writes a PowerShell script to `~/.andon/hooks/session_start.ps1` on first launch:
+We follow the existing pattern in `src-tauri/src/integration.rs` (already used for `PostToolUse` and `SessionEnd` hooks): a one-line `curl` command in `settings.json` that streams the hook payload straight to a localhost endpoint. No script file on disk. Git queries happen **server-side**, on the Andon API process, after the hook returns.
 
-```powershell
-$ErrorActionPreference = 'SilentlyContinue'
-
-# Claude Code delivers the hook payload as JSON on stdin.
-$raw = [Console]::In.ReadToEnd()
-if (-not $raw) { exit 0 }
-try { $payload = $raw | ConvertFrom-Json } catch { exit 0 }
-
-$sid = $payload.session_id
-if (-not $sid) { exit 0 }
-$cwd    = $payload.cwd
-$source = $payload.source
-$projectDir = $env:CLAUDE_PROJECT_DIR
-
-# git queries run from the session's cwd so they describe the right repo.
-Push-Location -LiteralPath $cwd
-$top = (git rev-parse --show-toplevel 2>$null)
-$rem = (git config --get remote.origin.url 2>$null)
-$brn = (git branch --show-current 2>$null)
-Pop-Location
-
-$body = @{
-    session_id  = $sid
-    cwd         = $cwd
-    project_dir = $projectDir
-    repo_root   = $top
-    repo_remote = $rem
-    repo_branch = $brn
-    source      = $source
-} | ConvertTo-Json -Compress
-
-try {
-    Invoke-RestMethod -Uri 'http://127.0.0.1:8765/api/session/context' `
-        -Method Post -ContentType 'application/json' -Body $body -TimeoutSec 2 | Out-Null
-} catch {}
-exit 0
-```
-
-Design constraints on the script:
-- **Read input from stdin only.** The `session_id` env var (`CLAUDE_CODE_SESSION_ID`) is documented for Bash/PowerShell *tool* subprocesses, not for hooks. Hooks get the session ID via the stdin JSON payload.
-- **Never block Claude Code.** 2-second timeout, swallow all errors, always exit 0.
-- **Never write to stdout/stderr.** Claude Code may surface hook output.
-- **Be self-contained.** No PowerShell modules beyond what ships with Windows.
-
-`source` is captured in the POST body for future use (e.g. distinguishing a fresh startup from a `/clear`-driven new session) but is not part of the v1 data model.
-
-`~/.claude/settings.json` gets a hook entry pointing at the script:
+`~/.claude/settings.json` gets:
 
 ```json
 {
@@ -108,7 +62,7 @@ Design constraints on the script:
       {
         "matcher": "",
         "hooks": [
-          { "type": "command", "command": "powershell -NoProfile -ExecutionPolicy Bypass -File \"%USERPROFILE%\\.andon\\hooks\\session_start.ps1\"" }
+          { "type": "command", "command": "curl -s -X POST http://127.0.0.1:8765/api/session/context -H \"Content-Type: application/json\" --data-binary @-" }
         ]
       }
     ]
@@ -116,36 +70,48 @@ Design constraints on the script:
 }
 ```
 
+Design constraints on the hook:
+- **Hook never blocks Claude Code.** The endpoint returns 200 immediately after persisting the basic context (session_id, cwd, source). Git queries run in a `tokio::spawn` background task afterward; the hook does not wait for them.
+- **Hook never writes to stdout/stderr that Claude Code would surface.** `curl -s` is silent on success; errors are swallowed by Claude Code's hook runner.
+- **Idempotent on `session_id`.** A `resume` or `clear` SessionStart with the same session_id is safe to re-send.
+
 Patcher behaviour (`src-tauri/src/integration.rs`):
-- On first launch / Re-apply: merge the hook entry into existing `hooks.SessionStart` (don't clobber other hooks).
-- Backup file gets the original `hooks` block too, not just `env`.
-- If a `SessionStart` hook already exists from another source and Andon's is not present, add Andon's alongside it.
-- "Unpatch" removes only Andon's entry; if other entries remain, the `hooks.SessionStart` array stays.
+- Follow the existing `install_session_end_hook` / `remove_session_end_hook` pattern verbatim: marker-substring detection (`SESSION_START_MARKER = "/api/session/context"`), idempotent install, surgical remove.
+- The existing patch flow (`try_ensure`) becomes "env + 3 hooks installed" instead of "env + 2 hooks installed". The same backup/restore logic applies.
+- `unpatch_claude_settings` gains a `remove_session_start_hook` call alongside the other two.
 
 ### 2. API endpoint
 
 `POST /api/session/context`
 
-Request body:
+Request body is the **raw SessionStart hook payload from Claude Code** — Andon does not require the hook to massage it:
+
 ```json
 {
-  "session_id": "uuid",
+  "session_id": "abc123",
+  "transcript_path": "...",
   "cwd": "E:\\Repos\\andon",
-  "project_dir": "E:\\Repos\\andon",
-  "repo_root": "E:\\Repos\\andon",
-  "repo_remote": "https://github.com/satish-krishna/andon.git",
-  "repo_branch": "main",
-  "source": "startup"
+  "hook_event_name": "SessionStart",
+  "source": "startup",
+  "model": "claude-opus-4-7"
 }
 ```
 
-`project_dir` and `source` are accepted by the endpoint but not persisted in v1 (forward compatibility — they may be useful when we add per-source aggregation later).
+Only `session_id` and `cwd` are required. Other fields are accepted and ignored in v1.
 
-Behaviour:
-- Idempotent upsert on `session_id`. If the session row doesn't exist yet, insert a stub row with the context fields; the ingestor will fill in the rest when telemetry arrives (the existing `INSERT OR IGNORE` pattern on the sessions table needs to become an upsert that doesn't clobber repo columns).
-- Normalize `repo_remote` before storing.
-- Compute and store `repo_name`.
-- Always returns 200. Errors are logged via `tracing`, never propagated.
+Behaviour (in handler order):
+
+1. **Validate.** Reject 400 only if `session_id` is missing or empty. Otherwise treat all parsing failures as "best effort" — return 200, log the issue.
+2. **Persist immediate context synchronously.** Upsert into `sessions`: insert a stub row if absent (`started_at = now`, `cwd = payload.cwd`), or update only the `cwd` column (and `repo_root` to `cwd` as a fallback default) if the row exists and these columns are still NULL.
+3. **Return 200 immediately.** The hook is unblocked.
+4. **Enrich asynchronously.** `tokio::spawn` a task that:
+   - Runs `git -C <cwd> rev-parse --show-toplevel`, `git -C <cwd> config --get remote.origin.url`, `git -C <cwd> branch --show-current`.
+   - Each git call uses a hard 2-second timeout (`tokio::time::timeout`) so a hung git never leaks a task.
+   - Normalizes the remote URL.
+   - Computes `repo_name` (from remote, fallback to basename of `repo_root`, fallback to basename of `cwd`).
+   - Writes the four columns (`repo_root`, `repo_remote`, `repo_branch`, `repo_name`) back to the row using `UPDATE ... WHERE session_id = ?1 AND (repo_root IS NULL OR ...)` so a later hook from the same session never overwrites already-populated data.
+
+The git work happens on the Andon process, in a `spawn_blocking` inside the spawned task, so the tokio reactor is not blocked.
 
 ### 3. Inference fallback
 
@@ -201,8 +167,9 @@ No backfill is performed by the migration itself. Existing sessions get repo inf
 
 ## Testing
 
-- **Hook script:** PowerShell unit tests (Pester) covering: no git repo, git repo without remote, SSH remote, HTTPS remote, missing `CLAUDE_SESSION_ID`, API unreachable (must still exit 0).
-- **Endpoint:** Rust integration tests in `src-tauri/src/api/routes.rs` covering: insert when session row absent, upsert when row exists, idempotency, normalization of remote URL forms.
+- **Endpoint:** Rust integration tests covering: insert when session row absent, upsert when row exists, idempotency (replayed payload), reject when `session_id` missing, ignore unknown fields, doesn't overwrite already-populated repo columns.
+- **Git helper:** unit tests covering: non-git folder (returns None for all three), git repo with HTTPS remote, git repo with SSH remote, git repo with no remote, hung `git` aborted by timeout.
+- **Remote URL normalization:** unit tests for HTTPS, SSH (`git@host:org/repo`), with/without `.git` suffix, mixed-case host.
 - **Inference:** unit tests with synthetic file_changes rows: single-folder session, multi-folder session, no absolute paths, paths under a `.git` ancestor, paths with no `.git` anywhere.
 - **Patcher:** existing integration tests extended to cover hook merge / unmerge alongside the env-var patching.
 - **UI:** manual verification per page (no automated frontend tests in repo today).
