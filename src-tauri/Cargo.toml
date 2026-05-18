@@ -25,6 +25,7 @@ opentelemetry-proto = { version = "0.27", features = ["gen-tonic", "metrics", "l
 
 axum = "0.7"
 tower-http = { version = "0.6", features = ["cors", "fs"] }
+reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "http2"] }
 bytes = "1"
 
 rusqlite = { version = "0.32", features = ["bundled"] }
