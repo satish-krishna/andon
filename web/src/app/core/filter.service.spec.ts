@@ -1,10 +1,6 @@
-// Note: createServiceFactory from @ngneat/spectator is incompatible with the
-// current vitest-angular + zone.js setup (see test infrastructure notes below).
-// Tests use TestBed.inject directly, which is supported and idiomatic for
-// providedIn:'root' services with no constructor dependencies.
-//
-// Adaptation from plan: replaced `createServiceFactory` pattern with
-// `TestBed.configureTestingModule + TestBed.inject` per-test factory helper.
+// Bare TestBed pattern — idiomatic for providedIn:'root' services with no
+// constructor deps. See filter-bar.component.spec.ts for the component-level
+// pattern (also bare TestBed, for the same vitest-angular zone reason).
 
 import { TestBed } from '@angular/core/testing';
 import { FilterService } from './filter.service';
