@@ -2067,25 +2067,23 @@ async fn hook_tool_use(
         }
     };
 
-    let mut wrote_file = false;
-    let mut wrote_decision = false;
     if let Some(sid_str) = &sid {
         if file_path.is_some() && (added > 0 || removed > 0) {
-            wrote_file = conn
-                .execute(
-                    "INSERT INTO file_changes (session_id, timestamp, file_path, lines_added, lines_removed)
-                     VALUES (?1, ?2, ?3, ?4, ?5)",
-                    params![sid_str, now, file_path, added, removed],
-                )
-                .is_ok();
+            if let Err(e) = conn.execute(
+                "INSERT INTO file_changes (session_id, timestamp, file_path, lines_added, lines_removed)
+                 VALUES (?1, ?2, ?3, ?4, ?5)",
+                params![sid_str, now, file_path, added, removed],
+            ) {
+                tracing::warn!(error = %e, "hook_tool_use: failed to write file_changes");
+            }
         }
-        wrote_decision = conn
-            .execute(
-                "INSERT INTO tool_decisions (session_id, timestamp, tool_name, decision, language, file_path)
-                 VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
-                params![sid_str, now, tool, decision, language, file_path],
-            )
-            .is_ok();
+        if let Err(e) = conn.execute(
+            "INSERT INTO tool_decisions (session_id, timestamp, tool_name, decision, language, file_path)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+            params![sid_str, now, tool, decision, language, file_path],
+        ) {
+            tracing::warn!(error = %e, "hook_tool_use: failed to write tool_decisions");
+        }
     }
 
     tracing::info!(
@@ -2093,7 +2091,6 @@ async fn hook_tool_use(
         "tool-use hook ingested"
     );
 
-    let _ = (wrote_file, wrote_decision); // diagnostic flags retained for logging above
     Json(HookOutput::ok())
 }
 
