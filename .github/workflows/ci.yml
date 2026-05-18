@@ -30,6 +30,12 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install -y libwebkit2gtk-4.1-dev libgtk-3-dev libayatana-appindicator3-dev librsvg2-dev
+      - name: Create frontend dist stub
+        # tauri::generate_context!() is a proc-macro that runs at compile time and
+        # requires the frontendDist directory to exist. Create a minimal stub so
+        # the library compiles and tests run without a full Angular build.
+        shell: bash
+        run: mkdir -p ../web/dist/web/browser && echo '<!DOCTYPE html><html></html>' > ../web/dist/web/browser/index.html
       - run: cargo test --workspace --all-features
 
   web:
