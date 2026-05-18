@@ -6,6 +6,7 @@ mod diagnostics;
 mod git_query;
 mod integration;
 mod otlp;
+mod repo_inference;
 mod reports;
 mod settings;
 
