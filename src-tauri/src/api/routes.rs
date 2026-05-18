@@ -12,7 +12,7 @@ use rusqlite::params;
 use serde::Deserialize;
 use serde_json::json;
 
-use super::{ApiState, dto::*};
+use super::{ApiState, dto::*, hook_response::HookOutput};
 
 pub fn router(state: ApiState) -> Router {
     Router::new()
@@ -1986,7 +1986,7 @@ async fn autostart_disable(State(_state): State<ApiState>) -> Json<serde_json::V
 async fn hook_tool_use(
     State(state): State<ApiState>,
     Json(payload): Json<serde_json::Value>,
-) -> Json<serde_json::Value> {
+) -> Json<HookOutput> {
     let now = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .map(|d| d.as_millis() as i64)
@@ -2061,7 +2061,10 @@ async fn hook_tool_use(
 
     let conn = match state.pool.get() {
         Ok(c) => c,
-        Err(_) => return Json(json!({"ok": false, "error": "db unavailable"})),
+        Err(_) => {
+            tracing::warn!("hook_tool_use: db pool unavailable");
+            return Json(HookOutput::ok());
+        }
     };
 
     let mut wrote_file = false;
@@ -2090,16 +2093,8 @@ async fn hook_tool_use(
         "tool-use hook ingested"
     );
 
-    Json(json!({
-        "ok": true,
-        "tool": tool,
-        "file_path": file_path,
-        "added": added,
-        "removed": removed,
-        "decision": decision,
-        "wrote_file_change": wrote_file,
-        "wrote_decision": wrote_decision,
-    }))
+    let _ = (wrote_file, wrote_decision); // diagnostic flags retained for logging above
+    Json(HookOutput::ok())
 }
 
 fn count_lines(s: &str) -> i64 {
