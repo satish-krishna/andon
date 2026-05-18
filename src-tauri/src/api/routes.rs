@@ -2,7 +2,7 @@ use std::collections::BTreeMap;
 
 use axum::{
     Json, Router,
-    extract::{Path, Query, State},
+    extract::{Path, Query, State, rejection::JsonRejection},
     http::StatusCode,
     response::IntoResponse,
     routing::{get, post},
@@ -12,7 +12,7 @@ use rusqlite::params;
 use serde::Deserialize;
 use serde_json::json;
 
-use super::{ApiState, dto::*};
+use super::{ApiState, dto::*, hook_response::HookOutput};
 
 pub fn router(state: ApiState) -> Router {
     Router::new()
@@ -842,14 +842,19 @@ struct SessionEndPayload {
 
 async fn hook_session_end(
     State(state): State<ApiState>,
-    Json(p): Json<SessionEndPayload>,
-) -> Result<Json<serde_json::Value>, ApiError> {
+    payload: Result<Json<SessionEndPayload>, JsonRejection>,
+) -> Json<HookOutput> {
+    let Json(p) = match payload {
+        Ok(j) => j,
+        Err(e) => {
+            tracing::warn!(error = %e, "hook_session_end: invalid payload; skipping persist");
+            return Json(HookOutput::ok());
+        }
+    };
     let sid = p.session_id.unwrap_or_default();
     if sid.is_empty() {
-        return Err(ApiError {
-            status: StatusCode::BAD_REQUEST,
-            message: "session_id required".into(),
-        });
+        tracing::warn!("hook_session_end: missing session_id; skipping persist");
+        return Json(HookOutput::ok());
     }
     let now = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
@@ -936,19 +941,25 @@ async fn hook_session_end(
         }).await;
     });
 
-    Ok(Json(json!({ "ok": true, "reason": p.reason })))
+    let _ = p.reason; // diagnostic field; intentionally dropped from wire
+    Json(HookOutput::ok())
 }
 
 async fn hook_session_context(
     State(state): State<ApiState>,
-    Json(p): Json<crate::api::dto::SessionContextPayload>,
-) -> Result<Json<serde_json::Value>, ApiError> {
+    payload: Result<Json<crate::api::dto::SessionContextPayload>, JsonRejection>,
+) -> Json<HookOutput> {
+    let Json(p) = match payload {
+        Ok(j) => j,
+        Err(e) => {
+            tracing::warn!(error = %e, "hook_session_context: invalid payload; skipping persist");
+            return Json(HookOutput::ok());
+        }
+    };
     let sid = p.session_id.trim().to_string();
     if sid.is_empty() {
-        return Err(ApiError {
-            status: StatusCode::BAD_REQUEST,
-            message: "session_id required".into(),
-        });
+        tracing::warn!("hook_session_context: missing session_id; skipping persist");
+        return Json(HookOutput::ok());
     }
     let now = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
@@ -1016,7 +1027,7 @@ async fn hook_session_context(
         });
     }
 
-    Ok(Json(json!({ "ok": true })))
+    Json(HookOutput::ok())
 }
 
 #[derive(serde::Deserialize)]
@@ -1985,8 +1996,15 @@ async fn autostart_disable(State(_state): State<ApiState>) -> Json<serde_json::V
 
 async fn hook_tool_use(
     State(state): State<ApiState>,
-    Json(payload): Json<serde_json::Value>,
-) -> Json<serde_json::Value> {
+    body: Result<Json<serde_json::Value>, JsonRejection>,
+) -> Json<HookOutput> {
+    let Json(payload) = match body {
+        Ok(j) => j,
+        Err(e) => {
+            tracing::warn!(error = %e, "hook_tool_use: invalid payload; skipping persist");
+            return Json(HookOutput::ok());
+        }
+    };
     let now = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .map(|d| d.as_millis() as i64)
@@ -2061,28 +2079,29 @@ async fn hook_tool_use(
 
     let conn = match state.pool.get() {
         Ok(c) => c,
-        Err(_) => return Json(json!({"ok": false, "error": "db unavailable"})),
+        Err(_) => {
+            tracing::warn!("hook_tool_use: db pool unavailable");
+            return Json(HookOutput::ok());
+        }
     };
 
-    let mut wrote_file = false;
-    let mut wrote_decision = false;
     if let Some(sid_str) = &sid {
         if file_path.is_some() && (added > 0 || removed > 0) {
-            wrote_file = conn
-                .execute(
-                    "INSERT INTO file_changes (session_id, timestamp, file_path, lines_added, lines_removed)
-                     VALUES (?1, ?2, ?3, ?4, ?5)",
-                    params![sid_str, now, file_path, added, removed],
-                )
-                .is_ok();
+            if let Err(e) = conn.execute(
+                "INSERT INTO file_changes (session_id, timestamp, file_path, lines_added, lines_removed)
+                 VALUES (?1, ?2, ?3, ?4, ?5)",
+                params![sid_str, now, file_path, added, removed],
+            ) {
+                tracing::warn!(error = %e, "hook_tool_use: failed to write file_changes");
+            }
         }
-        wrote_decision = conn
-            .execute(
-                "INSERT INTO tool_decisions (session_id, timestamp, tool_name, decision, language, file_path)
-                 VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
-                params![sid_str, now, tool, decision, language, file_path],
-            )
-            .is_ok();
+        if let Err(e) = conn.execute(
+            "INSERT INTO tool_decisions (session_id, timestamp, tool_name, decision, language, file_path)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+            params![sid_str, now, tool, decision, language, file_path],
+        ) {
+            tracing::warn!(error = %e, "hook_tool_use: failed to write tool_decisions");
+        }
     }
 
     tracing::info!(
@@ -2090,16 +2109,7 @@ async fn hook_tool_use(
         "tool-use hook ingested"
     );
 
-    Json(json!({
-        "ok": true,
-        "tool": tool,
-        "file_path": file_path,
-        "added": added,
-        "removed": removed,
-        "decision": decision,
-        "wrote_file_change": wrote_file,
-        "wrote_decision": wrote_decision,
-    }))
+    Json(HookOutput::ok())
 }
 
 fn count_lines(s: &str) -> i64 {
