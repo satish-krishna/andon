@@ -1,7 +1,7 @@
 import { CommonModule, DatePipe, DecimalPipe } from '@angular/common';
 import { Component, OnInit, computed, effect, inject, signal } from '@angular/core';
 import { FormsModule } from '@angular/forms';
-import { RouterLink } from '@angular/router';
+import { ActivatedRoute, RouterLink } from '@angular/router';
 import { LucideAngularModule } from 'lucide-angular';
 
 import { ApiService, CoverageHint, V2Session, V2FileRow } from '../../core/api.service';
@@ -20,6 +20,7 @@ type SortKey = 'time' | 'cost' | 'duration' | 'decisions';
 export class SessionsComponent implements OnInit {
   filter = inject(FilterService);
   private api = inject(ApiService);
+  private route = inject(ActivatedRoute);
 
   rows = signal<V2Session[]>([]);
   loaded = signal(false);
@@ -54,7 +55,13 @@ export class SessionsComponent implements OnInit {
     });
   }
 
-  ngOnInit(): void {}
+  ngOnInit(): void {
+    const repoParam = this.route.snapshot.queryParamMap.get('repo');
+    if (repoParam) {
+      const repos = repoParam.split(',').filter(s => s.length > 0);
+      if (repos.length) this.filter.repos.set(repos);
+    }
+  }
 
   onSearch(v: string) {
     this.searchInput = v;

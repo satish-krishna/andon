@@ -92,6 +92,7 @@ export interface V2Session {
   repo_name: string | null;
   repo_root: string | null;
   repo_remote: string | null;
+  repo_branch: string | null;
   cwd: string | null;
 }
 
