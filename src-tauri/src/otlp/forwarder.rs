@@ -1,4 +1,4 @@
-use std::sync::Arc;
+use std::sync::{Arc, RwLock};
 use std::time::Duration;
 
 use opentelemetry_proto::tonic::collector::{
@@ -12,14 +12,41 @@ use crate::settings::{ForwarderSettings, SettingsStore};
 
 pub struct Forwarder {
     settings: Arc<SettingsStore>,
+    client: RwLock<ClientWithTimeout>,
+}
+
+struct ClientWithTimeout {
+    timeout_ms: u64,
     client: reqwest::Client,
 }
 
 impl Forwarder {
     pub fn new(settings: Arc<SettingsStore>) -> Self {
         let timeout_ms = settings.forwarder().timeout_ms;
-        let client = build_client(timeout_ms);
-        Self { settings, client }
+        let client = ClientWithTimeout {
+            timeout_ms,
+            client: build_client(timeout_ms),
+        };
+        Self {
+            settings,
+            client: RwLock::new(client),
+        }
+    }
+
+    /// Snapshot the current client, rebuilding it if the settings timeout has drifted.
+    fn current_client(&self) -> reqwest::Client {
+        let desired = self.settings.forwarder().timeout_ms;
+        if let Ok(guard) = self.client.read() {
+            if guard.timeout_ms == desired {
+                return guard.client.clone();
+            }
+        }
+        let new = build_client(desired);
+        if let Ok(mut guard) = self.client.write() {
+            guard.timeout_ms = desired;
+            guard.client = new.clone();
+        }
+        new
     }
 
     pub fn forward_metrics(&self, req: &ExportMetricsServiceRequest) {
@@ -43,7 +70,7 @@ impl Forwarder {
     }
 
     fn spawn_post(&self, url: String, body: Vec<u8>, fwd: ForwarderSettings) {
-        let client = self.client.clone();
+        let client = self.current_client();
         tokio::spawn(async move {
             let mut headers = HeaderMap::new();
             headers.insert(CONTENT_TYPE, HeaderValue::from_static("application/x-protobuf"));

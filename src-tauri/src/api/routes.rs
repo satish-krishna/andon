@@ -839,21 +839,31 @@ async fn hook_session_end(
         .map(|d| d.as_millis() as i64)
         .unwrap_or(0);
 
-    {
-        let conn = state.pool.get().map_err(ApiError::pool)?;
-        let exists: i64 = conn.query_row(
-            "SELECT COUNT(*) FROM sessions WHERE session_id = ?1",
-            params![sid], |r| r.get(0)).unwrap_or(0);
+    let pool_for_db = state.pool.clone();
+    let sid_for_db = sid.clone();
+    tokio::task::spawn_blocking(move || {
+        let Ok(conn) = pool_for_db.get() else { return };
+        let exists: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM sessions WHERE session_id = ?1",
+                params![sid_for_db],
+                |r| r.get(0),
+            )
+            .unwrap_or(0);
         if exists == 0 {
             let _ = conn.execute(
                 "INSERT INTO sessions (session_id, started_at, ended_at) VALUES (?1, ?2, ?2)",
-                params![sid, now]);
+                params![sid_for_db, now],
+            );
         } else {
             let _ = conn.execute(
                 "UPDATE sessions SET ended_at = ?2 WHERE session_id = ?1 AND ended_at IS NULL",
-                params![sid, now]);
+                params![sid_for_db, now],
+            );
         }
-    }
+    })
+    .await
+    .ok();
 
     let pool = state.pool.clone();
     let reports_dir = state.reports_dir.clone();
