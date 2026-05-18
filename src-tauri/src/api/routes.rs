@@ -304,7 +304,8 @@ async fn list_sessions(
                 COALESCE((SELECT SUM(count) FROM token_usage WHERE session_id = s.session_id AND token_type='input'), 0),
                 COALESCE((SELECT SUM(count) FROM token_usage WHERE session_id = s.session_id AND token_type='output'), 0),
                 COALESCE((SELECT COUNT(*) FROM tool_decisions WHERE session_id = s.session_id AND decision='accept'), 0),
-                COALESCE((SELECT COUNT(*) FROM tool_decisions WHERE session_id = s.session_id AND decision='reject'), 0)
+                COALESCE((SELECT COUNT(*) FROM tool_decisions WHERE session_id = s.session_id AND decision='reject'), 0),
+                s.cwd, s.repo_root, s.repo_remote, s.repo_branch, s.repo_name
          FROM sessions s
          WHERE s.started_at >= ?1 AND s.started_at <= ?2
          ORDER BY s.started_at DESC
@@ -323,6 +324,11 @@ async fn list_sessions(
             tokens_output: r.get(8).unwrap_or(0),
             accepts: r.get(9).unwrap_or(0),
             rejects: r.get(10).unwrap_or(0),
+            cwd: r.get(11)?,
+            repo_root: r.get(12)?,
+            repo_remote: r.get(13)?,
+            repo_branch: r.get(14)?,
+            repo_name: r.get(15)?,
         })
     })?;
     Ok(Json(rows.flatten().collect()))
@@ -341,7 +347,8 @@ async fn session_detail(
                     COALESCE((SELECT SUM(count) FROM token_usage WHERE session_id = s.session_id AND token_type='input'), 0),
                     COALESCE((SELECT SUM(count) FROM token_usage WHERE session_id = s.session_id AND token_type='output'), 0),
                     COALESCE((SELECT COUNT(*) FROM tool_decisions WHERE session_id = s.session_id AND decision='accept'), 0),
-                    COALESCE((SELECT COUNT(*) FROM tool_decisions WHERE session_id = s.session_id AND decision='reject'), 0)
+                    COALESCE((SELECT COUNT(*) FROM tool_decisions WHERE session_id = s.session_id AND decision='reject'), 0),
+                    s.cwd, s.repo_root, s.repo_remote, s.repo_branch, s.repo_name
              FROM sessions s WHERE s.session_id = ?1",
             params![id],
             |r| {
@@ -357,6 +364,11 @@ async fn session_detail(
                     tokens_output: r.get(8).unwrap_or(0),
                     accepts: r.get(9).unwrap_or(0),
                     rejects: r.get(10).unwrap_or(0),
+                    cwd: r.get(11)?,
+                    repo_root: r.get(12)?,
+                    repo_remote: r.get(13)?,
+                    repo_branch: r.get(14)?,
+                    repo_name: r.get(15)?,
                 })
             },
         )
@@ -1626,7 +1638,8 @@ async fn v2_sessions(
                 COALESCE((SELECT COUNT(*) FROM cost_entries WHERE session_id = s.session_id), 0) AS api_calls,
                 ((SELECT COUNT(*) FROM tool_decisions WHERE session_id = s.session_id AND decision='accept')
                  + (SELECT COUNT(*) FROM tool_decisions WHERE session_id = s.session_id AND decision='reject')
-                 + (SELECT COUNT(*) FROM tool_decisions WHERE session_id = s.session_id AND decision='abort')) AS decisions
+                 + (SELECT COUNT(*) FROM tool_decisions WHERE session_id = s.session_id AND decision='abort')) AS decisions,
+                s.cwd, s.repo_root, s.repo_remote, s.repo_branch, s.repo_name
          FROM sessions s
          WHERE s.started_at >= ? AND s.started_at <= ?{model_filter_sql}{search_sql}
          {order}
@@ -1664,6 +1677,11 @@ async fn v2_sessions(
             "top_model":       r.get::<_, Option<String>>(13)?,
             "api_calls":       r.get::<_, i64>(14)?,
             "decisions":       r.get::<_, i64>(15)?,
+            "cwd":             r.get::<_, Option<String>>(16)?,
+            "repo_root":       r.get::<_, Option<String>>(17)?,
+            "repo_remote":     r.get::<_, Option<String>>(18)?,
+            "repo_branch":     r.get::<_, Option<String>>(19)?,
+            "repo_name":       r.get::<_, Option<String>>(20)?,
         }))
     })?;
     Ok(Json(rows.flatten().collect()))

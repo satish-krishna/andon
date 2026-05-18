@@ -39,6 +39,11 @@ export interface SessionSummary {
   service_version: string | null;
   host_arch: string | null;
   os_type: string | null;
+  cwd?: string | null;
+  repo_root?: string | null;
+  repo_remote?: string | null;
+  repo_branch?: string | null;
+  repo_name?: string | null;
 }
 
 export interface KeyValueNum {

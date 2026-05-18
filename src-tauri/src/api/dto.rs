@@ -47,6 +47,11 @@ pub struct SessionSummary {
     pub service_version: Option<String>,
     pub host_arch: Option<String>,
     pub os_type: Option<String>,
+    #[serde(default)] pub cwd: Option<String>,
+    #[serde(default)] pub repo_root: Option<String>,
+    #[serde(default)] pub repo_remote: Option<String>,
+    #[serde(default)] pub repo_branch: Option<String>,
+    #[serde(default)] pub repo_name: Option<String>,
 }
 
 #[derive(Serialize)]
