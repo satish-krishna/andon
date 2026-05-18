@@ -1202,11 +1202,15 @@ impl FilterQuery {
     fn model_clause(&self, col: &str) -> (String, Vec<String>) {
         let models = self.model_list();
         if models.is_empty() {
-            (String::new(), vec![])
-        } else {
-            let placeholders = models.iter().map(|_| "?").collect::<Vec<_>>().join(",");
-            (format!(" AND {col} IN ({placeholders})"), models)
+            return (String::new(), vec![]);
         }
+        let likes: Vec<String> = models.iter().map(|m| format!("%{}%", m.to_lowercase())).collect();
+        let ored = likes
+            .iter()
+            .map(|_| format!("LOWER({col}) LIKE ?"))
+            .collect::<Vec<_>>()
+            .join(" OR ");
+        (format!(" AND ({ored})"), likes)
     }
 }
 
@@ -1625,20 +1629,21 @@ async fn v2_sessions(
     let limit = q.limit.clamp(1, 1000);
     let conn = state.pool.get().map_err(ApiError::pool)?;
 
-    let model_list = filt.model_list();
     let repo_list: Vec<String> = q
         .repo
         .as_deref()
         .map(|s| s.split(',').filter(|p| !p.is_empty()).map(str::to_string).collect())
         .unwrap_or_default();
 
-    let model_filter_sql = if model_list.is_empty() {
+    let (model_inner_sql, model_inner_vals) = filt.model_clause("c.model");
+    let model_filter_sql = if model_inner_sql.is_empty() {
         String::new()
     } else {
-        let placeholders = model_list.iter().map(|_| "?").collect::<Vec<_>>().join(",");
+        // model_inner_sql starts with " AND (...)". Strip the leading " AND " for embedding.
+        let inner = model_inner_sql.trim_start_matches(" AND ");
         format!(
             " AND EXISTS (SELECT 1 FROM cost_entries c
-                          WHERE c.session_id = s.session_id AND c.model IN ({placeholders}))"
+                          WHERE c.session_id = s.session_id AND {inner})"
         )
     };
     let repo_filter_sql = if repo_list.is_empty() {
@@ -1683,7 +1688,7 @@ async fn v2_sessions(
 
     let search_like = q.search.as_deref().map(|s| format!("%{s}%"));
     let mut p: Vec<Box<dyn rusqlite::ToSql>> = vec![Box::new(from), Box::new(to)];
-    for v in &model_list {
+    for v in &model_inner_vals {
         p.push(Box::new(v.clone()));
     }
     for r in &repo_list {
