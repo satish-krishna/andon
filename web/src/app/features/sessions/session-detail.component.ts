@@ -16,7 +16,24 @@ import { EmptyComponent } from '../../shared/empty.component';
       <div class="flex items-center gap-3">
         <a routerLink="/sessions" class="text-muted text-xs hover:text-text">← Sessions</a>
         @if (detail(); as d) {
-          <h1 class="text-xl font-semibold font-mono">{{ d.session.session_id }}</h1>
+          <div class="flex flex-col gap-0.5">
+            <h1 class="text-xl font-semibold font-mono">{{ d.session.session_id }}</h1>
+            @if (d.session.repo_name) {
+              <div class="text-sm text-zinc-400 font-mono">
+                @if (d.session.repo_remote) {
+                  <a [href]="'https://' + d.session.repo_remote" target="_blank" rel="noopener"
+                     class="hover:text-text underline underline-offset-2">{{ d.session.repo_name }}</a>
+                } @else {
+                  <span>{{ d.session.repo_name }}</span>
+                }
+                <span class="text-zinc-500"> · </span>
+                <span>{{ d.session.repo_branch }}</span>
+              </div>
+              @if (d.session.repo_root || d.session.cwd) {
+                <div class="text-xs text-zinc-500 font-mono">{{ d.session.repo_root || d.session.cwd }}</div>
+              }
+            }
+          </div>
           <button class="ml-auto text-[11px] px-3 py-1.5 rounded border border-border hover:bg-panel disabled:opacity-50"
                   [disabled]="reportBusy()"
                   (click)="openOrGenerateReport(d.session.session_id)">
