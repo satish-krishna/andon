@@ -6,7 +6,6 @@ src-tauri/gen/
 # Node / Angular
 node_modules/
 web/dist/
-!web/dist/web/browser/index.html
 
 # Andon data (local-only)
 .andon/
@@ -19,3 +18,4 @@ Thumbs.db
 .idea/
 .vscode/
 *.iml
+/.remember
