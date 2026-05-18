@@ -881,6 +881,45 @@ async fn hook_session_end(
         }
     });
 
+    // Best-effort repo inference for sessions the hook didn't cover.
+    let pool_for_inf = state.pool.clone();
+    let sid_for_inf = sid.clone();
+    tokio::spawn(async move {
+        // Skip if repo_root is already populated.
+        let needs = {
+            let pool = pool_for_inf.clone();
+            let sid = sid_for_inf.clone();
+            tokio::task::spawn_blocking(move || -> bool {
+                let Ok(conn) = pool.get() else { return false };
+                conn.query_row(
+                    "SELECT repo_root IS NULL FROM sessions WHERE session_id = ?1",
+                    params![sid], |r| r.get::<_, i64>(0)
+                ).map(|n| n != 0).unwrap_or(false)
+            }).await.unwrap_or(false)
+        };
+        if !needs { return; }
+
+        let Ok(Some(info)) = crate::repo_inference::infer_repo_for_session(
+            pool_for_inf.clone(), sid_for_inf.clone()
+        ).await else { return };
+
+        let pool = pool_for_inf.clone();
+        let sid  = sid_for_inf.clone();
+        let _ = tokio::task::spawn_blocking(move || {
+            let Ok(conn) = pool.get() else { return };
+            let root = info.repo_root.as_ref().map(|p| p.to_string_lossy().into_owned());
+            let _ = conn.execute(
+                "UPDATE sessions
+                   SET repo_root   = COALESCE(repo_root,   ?2),
+                       repo_remote = COALESCE(repo_remote, ?3),
+                       repo_branch = COALESCE(repo_branch, ?4),
+                       repo_name   = COALESCE(repo_name,   ?5)
+                 WHERE session_id = ?1",
+                params![sid, root, info.repo_remote, info.repo_branch, info.repo_name],
+            );
+        }).await;
+    });
+
     Ok(Json(json!({ "ok": true, "reason": p.reason })))
 }
 
