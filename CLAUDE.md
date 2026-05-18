@@ -20,6 +20,8 @@ Don't duplicate what those files say — link to them.
 
 ## Quick commands (Windows / PowerShell)
 
+Each block assumes you start at the repo root. `cd` back (or open a fresh shell) between blocks.
+
 ```powershell
 # Dev (Rust backend + embedded SPA, hot reload)
 cargo tauri dev
