@@ -255,3 +255,57 @@ fn gap_fills_cost_when_otlp_partial() {
         .unwrap();
     assert!((total - 0.06).abs() < 1e-9);
 }
+
+#[test]
+fn dedups_slash_commands_on_repeat() {
+    let (pool, _g) = fixture_pool();
+    let ing = test_ingestor(&pool);
+
+    let events = vec![DerivedEvent::SlashCommand {
+        session_id: "s1".into(),
+        ts: 100,
+        name: "review".into(),
+        arg_count: 1,
+    }];
+
+    ing.ingest_derived(&events, Coverage::JsonlOnly).unwrap();
+    ing.ingest_derived(&events, Coverage::JsonlOnly).unwrap();
+
+    let n: i64 = pool
+        .get()
+        .unwrap()
+        .query_row(
+            "SELECT COUNT(*) FROM slash_commands WHERE session_id='s1'",
+            [],
+            |r| r.get(0),
+        )
+        .unwrap();
+    assert_eq!(n, 1, "second call must not duplicate slash_command");
+}
+
+#[test]
+fn dedups_subagent_calls_on_repeat() {
+    let (pool, _g) = fixture_pool();
+    let ing = test_ingestor(&pool);
+
+    let events = vec![DerivedEvent::SubAgentCall {
+        parent_id: "s1".into(),
+        child_id: None,
+        subagent_type: Some("Explore".into()),
+        started_at: 100,
+    }];
+
+    ing.ingest_derived(&events, Coverage::JsonlOnly).unwrap();
+    ing.ingest_derived(&events, Coverage::JsonlOnly).unwrap();
+
+    let n: i64 = pool
+        .get()
+        .unwrap()
+        .query_row(
+            "SELECT COUNT(*) FROM subagent_calls WHERE parent_session_id='s1'",
+            [],
+            |r| r.get(0),
+        )
+        .unwrap();
+    assert_eq!(n, 1, "second call must not duplicate subagent_call");
+}

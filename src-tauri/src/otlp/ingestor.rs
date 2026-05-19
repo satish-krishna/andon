@@ -380,7 +380,11 @@ impl Ingestor {
                 } => {
                     let _ = tx.execute(
                         "INSERT INTO slash_commands (session_id, timestamp, command_name, arg_count)
-                         VALUES (?1, ?2, ?3, ?4)",
+                         SELECT ?1, ?2, ?3, ?4
+                         WHERE NOT EXISTS (
+                             SELECT 1 FROM slash_commands
+                             WHERE session_id = ?1 AND timestamp = ?2 AND command_name = ?3
+                         )",
                         params![session_id, ts, name, arg_count],
                     );
                 }
@@ -393,7 +397,13 @@ impl Ingestor {
                     let _ = tx.execute(
                         "INSERT INTO subagent_calls
                            (parent_session_id, child_session_id, subagent_type, started_at)
-                         VALUES (?1, ?2, ?3, ?4)",
+                         SELECT ?1, ?2, ?3, ?4
+                         WHERE NOT EXISTS (
+                             SELECT 1 FROM subagent_calls
+                             WHERE parent_session_id = ?1
+                               AND started_at = ?4
+                               AND COALESCE(subagent_type, '') = COALESCE(?3, '')
+                         )",
                         params![parent_id, child_id, subagent_type, started_at],
                     );
                 }
