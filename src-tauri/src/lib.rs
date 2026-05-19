@@ -2,6 +2,7 @@ pub mod api;
 mod autostart;
 mod config;
 pub mod db;
+pub mod jsonl;
 
 #[cfg(feature = "test-support")]
 pub mod diagnostics;
