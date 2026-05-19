@@ -333,6 +333,32 @@ pub fn sample_export_logs(
     }]
 }
 
+/// Like `sample_export_logs` but also sets `body` on the log record to the
+/// given string value. Used to test that body content is scrubbed correctly.
+pub fn sample_export_logs_with_body(
+    resource_attrs: Vec<KeyValue>,
+    event_name: &str,
+    body: &str,
+    record_attrs: Vec<KeyValue>,
+) -> Vec<ResourceLogs> {
+    let mut record = sample_log_record(event_name, record_attrs);
+    record.body = Some(AnyValue {
+        value: Some(AnyV::StringValue(body.into())),
+    });
+    vec![ResourceLogs {
+        resource: Some(Resource {
+            attributes: resource_attrs,
+            dropped_attributes_count: 0,
+        }),
+        scope_logs: vec![ScopeLogs {
+            scope: None,
+            log_records: vec![record],
+            schema_url: String::new(),
+        }],
+        schema_url: String::new(),
+    }]
+}
+
 /// Build a `Vec<ResourceMetrics>` containing one `Sum`-typed metric with a
 /// single `NumberDataPoint`. Useful for exercising the ingestor in Phase 2+.
 pub fn sample_sum_metric(

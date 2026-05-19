@@ -155,13 +155,24 @@ impl Ingestor {
                         now_ms()
                     };
 
-                    let body_str = record
+                    let raw_body_str = record
                         .body
                         .as_ref()
                         .and_then(|b| anyvalue_to_string(b.value.as_ref()));
 
-                    // 1. Always persist a verbatim copy.
-                    let attrs_json = attrs_to_json(&record.attributes);
+                    // Privacy guarantee: never persist raw user prompt content.
+                    // For user_prompt events: drop the body and redact the
+                    // "prompt" attribute value before writing to log_events.
+                    let (body_str, attrs_json) = if event_name == "user_prompt" {
+                        (
+                            None,
+                            attrs_to_json_redacted(&record.attributes, &["prompt"]),
+                        )
+                    } else {
+                        (raw_body_str, attrs_to_json(&record.attributes))
+                    };
+
+                    // 1. Always persist a (possibly redacted) copy.
                     let _ = tx.execute(
                         "INSERT INTO log_events (session_id, timestamp, event_name, body, attributes_json, transport)
                          VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
@@ -675,6 +686,24 @@ fn attrs_to_json(attrs: &[KeyValue]) -> String {
     let map: HashMap<String, serde_json::Value> = attrs
         .iter()
         .map(|kv| (kv.key.clone(), anyvalue_to_json(kv.value.as_ref())))
+        .collect();
+    serde_json::to_string(&map).unwrap_or_else(|_| "{}".into())
+}
+
+/// Like `attrs_to_json` but replaces the values of any key in `redact_keys`
+/// with the string `"[redacted]"`. The key is preserved so that key-existence
+/// and count-based analytics still work.
+fn attrs_to_json_redacted(attrs: &[KeyValue], redact_keys: &[&str]) -> String {
+    let map: HashMap<String, serde_json::Value> = attrs
+        .iter()
+        .map(|kv| {
+            let value = if redact_keys.contains(&kv.key.as_str()) {
+                serde_json::Value::String("[redacted]".into())
+            } else {
+                anyvalue_to_json(kv.value.as_ref())
+            };
+            (kv.key.clone(), value)
+        })
         .collect();
     serde_json::to_string(&map).unwrap_or_else(|_| "{}".into())
 }
