@@ -43,9 +43,9 @@ impl ResourceCtx {
 }
 
 pub struct Ingestor {
-    pool: Arc<DbPool>,
-    control: IngestionControl,
-    diagnostics: Diagnostics,
+    pub(crate) pool: Arc<DbPool>,
+    pub(crate) control: IngestionControl,
+    pub(crate) diagnostics: Diagnostics,
 }
 
 impl Ingestor {
@@ -242,6 +242,134 @@ impl Ingestor {
         Ok(())
     }
 
+    pub fn ingest_derived(
+        &self,
+        events: &[crate::jsonl::reducer::DerivedEvent],
+        coverage: crate::jsonl::reconciler::Coverage,
+    ) -> Result<()> {
+        use crate::jsonl::reconciler::Coverage;
+        use crate::jsonl::reducer::DerivedEvent as E;
+
+        if self.control.is_paused() {
+            return Ok(());
+        }
+        let mut conn = self.pool.get()?;
+        let tx = conn.transaction()?;
+
+        for ev in events {
+            match ev {
+                E::SessionLifecycle {
+                    session_id,
+                    started_at,
+                    ended_at,
+                    cc_version,
+                    cwd,
+                    git_branch,
+                } => {
+                    let _ = tx.execute(
+                        "INSERT OR IGNORE INTO sessions
+                           (session_id, started_at, ended_at, service_version, cwd, repo_branch, data_source)
+                         VALUES (?1, ?2, ?3, ?4, ?5, ?6, 'jsonl')",
+                        params![session_id, started_at, ended_at, cc_version, cwd, git_branch],
+                    );
+                    if matches!(coverage, Coverage::Otlp) {
+                        let _ = tx.execute(
+                            "UPDATE sessions SET data_source = 'mixed'
+                             WHERE session_id = ?1 AND data_source = 'otlp'",
+                            params![session_id],
+                        );
+                    }
+                }
+                E::TokenUsage {
+                    session_id,
+                    ts,
+                    model,
+                    input,
+                    output,
+                    cache_create,
+                    cache_read,
+                } => {
+                    if matches!(coverage, Coverage::JsonlOnly) {
+                        for (kind, n) in [
+                            ("input", *input),
+                            ("output", *output),
+                            ("cacheRead", *cache_read),
+                            ("cacheCreation", *cache_create),
+                        ] {
+                            if n > 0 {
+                                let _ = tx.execute(
+                                    "INSERT INTO token_usage (session_id, timestamp, model, token_type, count)
+                                     VALUES (?1, ?2, ?3, ?4, ?5)",
+                                    params![session_id, ts, model, kind, n],
+                                );
+                            }
+                        }
+                    }
+                }
+                E::CostEntry {
+                    session_id,
+                    ts,
+                    model,
+                    cost_usd,
+                } => {
+                    if matches!(coverage, Coverage::JsonlOnly) && *cost_usd > 0.0 {
+                        let _ = tx.execute(
+                            "INSERT INTO cost_entries (session_id, timestamp, model, cost_usd)
+                             VALUES (?1, ?2, ?3, ?4)",
+                            params![session_id, ts, model, cost_usd],
+                        );
+                    }
+                }
+                E::ToolCall {
+                    session_id,
+                    ts,
+                    tool_name,
+                    file_path,
+                    model,
+                } => {
+                    if matches!(coverage, Coverage::JsonlOnly) {
+                        // 'invoke' sentinel — JSONL records the invocation but
+                        // not whether the user accepted/rejected, and `decision`
+                        // is NOT NULL. Existing accept/reject/abort dashboards
+                        // filter explicitly so 'invoke' rows don't pollute them.
+                        let _ = tx.execute(
+                            "INSERT INTO tool_decisions
+                               (session_id, timestamp, tool_name, decision, language, file_path, source, model)
+                             VALUES (?1, ?2, ?3, 'invoke', NULL, ?4, 'jsonl', ?5)",
+                            params![session_id, ts, tool_name, file_path, model],
+                        );
+                    }
+                }
+                E::SlashCommand {
+                    session_id,
+                    ts,
+                    name,
+                    arg_count,
+                } => {
+                    let _ = tx.execute(
+                        "INSERT INTO slash_commands (session_id, timestamp, command_name, arg_count)
+                         VALUES (?1, ?2, ?3, ?4)",
+                        params![session_id, ts, name, arg_count],
+                    );
+                }
+                E::SubAgentCall {
+                    parent_id,
+                    child_id,
+                    subagent_type,
+                    started_at,
+                } => {
+                    let _ = tx.execute(
+                        "INSERT INTO subagent_calls
+                           (parent_session_id, child_session_id, subagent_type, started_at)
+                         VALUES (?1, ?2, ?3, ?4)",
+                        params![parent_id, child_id, subagent_type, started_at],
+                    );
+                }
+            }
+        }
+        tx.commit()?;
+        Ok(())
+    }
 }
 
 fn handle_event(
