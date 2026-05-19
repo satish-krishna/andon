@@ -100,11 +100,159 @@ pub fn seed_session(pool: &Arc<DbPool>, opts: &SeedOpts) {
 }
 
 // ---------------------------------------------------------------------------
+// Test-router and test-ingestor helpers
+// ---------------------------------------------------------------------------
+
+use std::sync::Mutex;
+
+use andon_lib::{
+    api::{routes, ApiState},
+    diagnostics::Diagnostics,
+    integration::IntegrationStatus,
+    otlp::{
+        IngestionControl,
+        forwarder::Forwarder,
+        ingestor::Ingestor,
+    },
+    settings::SettingsStore,
+};
+use axum::Router;
+
+/// Build a test `Ingestor` wired to the given pool.
+/// Returns the ingestor; the caller keeps the pool guard alive via the `TempDir`.
+pub fn test_ingestor(pool: &Arc<DbPool>) -> Ingestor {
+    let control = IngestionControl::default();
+    let diagnostics = Diagnostics::default();
+    Ingestor::new(Arc::clone(pool), control, diagnostics)
+}
+
+/// Like `test_ingestor` but also returns the `IngestionControl` so tests can
+/// call `control.set_paused(true)` before ingesting.
+pub fn test_ingestor_with_control(pool: &Arc<DbPool>) -> (Ingestor, IngestionControl) {
+    let control = IngestionControl::default();
+    let diagnostics = Diagnostics::default();
+    let ingestor = Ingestor::new(Arc::clone(pool), control.clone(), diagnostics);
+    (ingestor, control)
+}
+
+/// Build a test `Ingestor` sharing the provided `Diagnostics` and
+/// `IngestionControl` instances with the caller (and typically the router).
+/// Use together with `test_router_with` so the router and ingestor see the
+/// same diagnostics state.
+pub fn test_ingestor_with(
+    pool: &Arc<DbPool>,
+    diagnostics: Diagnostics,
+    control: IngestionControl,
+) -> Ingestor {
+    Ingestor::new(Arc::clone(pool), control, diagnostics)
+}
+
+/// Like `test_router` but accepts externally-created `Diagnostics` and
+/// `IngestionControl` so the router shares state with an ingestor built via
+/// `test_ingestor_with`.
+pub fn test_router_with(
+    pool: &Arc<DbPool>,
+    diagnostics: Diagnostics,
+    control: IngestionControl,
+) -> (Router, TempDir) {
+    let dir = tempfile::tempdir().expect("create router tempdir");
+
+    let settings_path = dir.path().join("settings.json");
+    let settings = Arc::new(
+        SettingsStore::load(settings_path.clone()).expect("load settings store"),
+    );
+    let forwarder = Arc::new(Forwarder::new(Arc::clone(&settings)));
+    let reports_dir = dir.path().join("reports");
+    std::fs::create_dir_all(&reports_dir).expect("create reports dir");
+
+    let state = ApiState {
+        pool: Arc::clone(pool),
+        db_path: dir.path().join("test.db"),
+        control,
+        integration: Arc::new(Mutex::new(IntegrationStatus::AlreadyConfigured {
+            settings_path: settings_path.display().to_string(),
+        })),
+        diagnostics,
+        settings,
+        forwarder,
+        reports_dir,
+    };
+
+    let router = routes::router(state);
+    (router, dir)
+}
+
+/// Build a test axum `Router` wired to the given pool.
+/// Returns `(Router, TempDir)` — drop the `TempDir` only after the router is
+/// no longer needed (it backs the settings file and reports directory).
+pub fn test_router(pool: &Arc<DbPool>) -> (Router, TempDir) {
+    let dir = tempfile::tempdir().expect("create router tempdir");
+
+    let settings_path = dir.path().join("settings.json");
+    let settings = Arc::new(
+        SettingsStore::load(settings_path.clone()).expect("load settings store"),
+    );
+    let forwarder = Arc::new(Forwarder::new(Arc::clone(&settings)));
+    let reports_dir = dir.path().join("reports");
+    std::fs::create_dir_all(&reports_dir).expect("create reports dir");
+
+    let state = ApiState {
+        pool: Arc::clone(pool),
+        db_path: dir.path().join("test.db"),
+        control: IngestionControl::default(),
+        integration: Arc::new(Mutex::new(IntegrationStatus::AlreadyConfigured {
+            settings_path: settings_path.display().to_string(),
+        })),
+        diagnostics: Diagnostics::default(),
+        settings,
+        forwarder,
+        reports_dir,
+    };
+
+    let router = routes::router(state);
+    (router, dir)
+}
+
+// ---------------------------------------------------------------------------
+// Git repo helpers (reused by api_git and future test files)
+// ---------------------------------------------------------------------------
+
+/// Create a real git repository in a temporary directory with the given commit
+/// messages. Returns the `TempDir` guard — drop it to delete the repo.
+///
+/// The helper sets `GIT_AUTHOR_*` / `GIT_COMMITTER_*` env vars and disables
+/// GPG signing so tests work even without a git identity configured.
+pub fn init_temp_repo(commits: &[&str]) -> TempDir {
+    let dir = tempfile::tempdir().unwrap();
+    let run = |args: &[&str]| {
+        let status = std::process::Command::new("git")
+            .args(args)
+            .current_dir(dir.path())
+            .env("GIT_AUTHOR_NAME", "T")
+            .env("GIT_AUTHOR_EMAIL", "t@t")
+            .env("GIT_COMMITTER_NAME", "T")
+            .env("GIT_COMMITTER_EMAIL", "t@t")
+            .status()
+            .unwrap();
+        assert!(status.success(), "git {:?} failed", args);
+    };
+    run(&["init", "-q"]);
+    run(&["config", "commit.gpgsign", "false"]);
+    for (i, msg) in commits.iter().enumerate() {
+        std::fs::write(dir.path().join(format!("f{i}.txt")), b"x").unwrap();
+        run(&["add", "."]);
+        run(&["commit", "-q", "-m", msg]);
+    }
+    dir
+}
+
+// ---------------------------------------------------------------------------
 // OTLP sample-payload builders
 // ---------------------------------------------------------------------------
 
 use opentelemetry_proto::tonic::{
     common::v1::{any_value::Value as AnyV, AnyValue, KeyValue},
+    logs::v1::{LogRecord, ResourceLogs, ScopeLogs},
     metrics::v1::{
         metric::Data, number_data_point::Value as NumberValue, Metric, NumberDataPoint,
         ResourceMetrics, ScopeMetrics, Sum,
@@ -120,6 +268,95 @@ pub fn kv(key: &str, val: &str) -> KeyValue {
             value: Some(AnyV::StringValue(val.into())),
         }),
     }
+}
+
+/// Convenience constructor for an integer-valued `KeyValue`.
+pub fn kv_int(key: &str, val: i64) -> KeyValue {
+    KeyValue {
+        key: key.into(),
+        value: Some(AnyValue {
+            value: Some(AnyV::IntValue(val)),
+        }),
+    }
+}
+
+/// Convenience constructor for a double-valued `KeyValue`.
+pub fn kv_f64(key: &str, val: f64) -> KeyValue {
+    KeyValue {
+        key: key.into(),
+        value: Some(AnyValue {
+            value: Some(AnyV::DoubleValue(val)),
+        }),
+    }
+}
+
+/// Build a single `LogRecord` with the given event name and record-level
+/// attributes. The `time_unix_nano` is set to a fixed non-zero value so tests
+/// get a deterministic timestamp.
+pub fn sample_log_record(event_name: &str, record_attrs: Vec<KeyValue>) -> LogRecord {
+    let mut attrs = vec![kv("event.name", event_name)];
+    attrs.extend(record_attrs);
+    LogRecord {
+        time_unix_nano: 1_700_000_000_000_000_000,
+        observed_time_unix_nano: 0,
+        severity_number: 0,
+        severity_text: String::new(),
+        body: None,
+        attributes: attrs,
+        dropped_attributes_count: 0,
+        flags: 0,
+        trace_id: vec![],
+        span_id: vec![],
+    }
+}
+
+/// Build a `Vec<ResourceLogs>` containing one resource with the given
+/// `resource_attrs` and a single log record built with `sample_log_record`.
+///
+/// Mirrors the shape of `sample_sum_metric` for ergonomic test writing.
+pub fn sample_export_logs(
+    resource_attrs: Vec<KeyValue>,
+    event_name: &str,
+    record_attrs: Vec<KeyValue>,
+) -> Vec<ResourceLogs> {
+    vec![ResourceLogs {
+        resource: Some(Resource {
+            attributes: resource_attrs,
+            dropped_attributes_count: 0,
+        }),
+        scope_logs: vec![ScopeLogs {
+            scope: None,
+            log_records: vec![sample_log_record(event_name, record_attrs)],
+            schema_url: String::new(),
+        }],
+        schema_url: String::new(),
+    }]
+}
+
+/// Like `sample_export_logs` but also sets `body` on the log record to the
+/// given string value. Used to test that body content is scrubbed correctly.
+pub fn sample_export_logs_with_body(
+    resource_attrs: Vec<KeyValue>,
+    event_name: &str,
+    body: &str,
+    record_attrs: Vec<KeyValue>,
+) -> Vec<ResourceLogs> {
+    let mut record = sample_log_record(event_name, record_attrs);
+    record.body = Some(AnyValue {
+        value: Some(AnyV::StringValue(body.into())),
+    });
+    vec![ResourceLogs {
+        resource: Some(Resource {
+            attributes: resource_attrs,
+            dropped_attributes_count: 0,
+        }),
+        scope_logs: vec![ScopeLogs {
+            scope: None,
+            log_records: vec![record],
+            schema_url: String::new(),
+        }],
+        schema_url: String::new(),
+    }]
 }
 
 /// Build a `Vec<ResourceMetrics>` containing one `Sum`-typed metric with a

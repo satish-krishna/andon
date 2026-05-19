@@ -36,7 +36,7 @@ jobs:
         # the library compiles and tests run without a full Angular build.
         shell: bash
         run: mkdir -p ../web/dist/web/browser && echo '<!DOCTYPE html><html></html>' > ../web/dist/web/browser/index.html
-      - run: cargo test --workspace --all-features
+      - run: cargo test --workspace --features test-support
 
   web:
     runs-on: ubuntu-latest

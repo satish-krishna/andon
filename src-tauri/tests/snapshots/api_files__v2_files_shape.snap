@@ -1,0 +1,41 @@
+---
+source: tests/api_files.rs
+assertion_line: 298
+expression: "&body"
+---
+{
+  "files": [
+    {
+      "accept_rate": "[rate]",
+      "added": 20,
+      "decision_count": 3,
+      "edits": 1,
+      "file_path": "app/main.ts",
+      "lang": "typescript",
+      "last_ts": "[ts]",
+      "removed": 5
+    },
+    {
+      "accept_rate": "[rate]",
+      "added": 8,
+      "decision_count": 1,
+      "edits": 1,
+      "file_path": "app/utils.ts",
+      "lang": "typescript",
+      "last_ts": "[ts]",
+      "removed": 3
+    }
+  ],
+  "lang_breakdown": [
+    {
+      "edits": 2,
+      "lang": "typescript"
+    }
+  ],
+  "totals": {
+    "added": 28,
+    "edits": 2,
+    "files": 2,
+    "removed": 8
+  }
+}

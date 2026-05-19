@@ -1,0 +1,22 @@
+---
+source: tests/api_sessions.rs
+expression: "&sessions[0]"
+---
+{
+  "accepts": 1,
+  "cost_usd": "[cost]",
+  "cwd": null,
+  "ended_at": "[ts]",
+  "host_arch": null,
+  "os_type": null,
+  "rejects": 1,
+  "repo_branch": null,
+  "repo_name": null,
+  "repo_remote": null,
+  "repo_root": null,
+  "service_version": null,
+  "session_id": "ls-1",
+  "started_at": "[ts]",
+  "tokens_input": 200,
+  "tokens_output": 100
+}

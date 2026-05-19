@@ -1,0 +1,21 @@
+---
+source: tests/api_overview.rs
+expression: "&body"
+---
+[
+  {
+    "accept_rate": "[rate]",
+    "language": "rust",
+    "total": "[total]"
+  },
+  {
+    "accept_rate": "[rate]",
+    "language": "python",
+    "total": "[total]"
+  },
+  {
+    "accept_rate": "[rate]",
+    "language": "go",
+    "total": "[total]"
+  }
+]

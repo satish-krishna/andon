@@ -1,0 +1,17 @@
+---
+source: tests/api_files.rs
+assertion_line: 132
+expression: "&body"
+---
+[
+  {
+    "accept_rate": "[rate]",
+    "edit_count": "[count]",
+    "file_path": "src/main.rs"
+  },
+  {
+    "accept_rate": "[rate]",
+    "edit_count": "[count]",
+    "file_path": "src/lib.rs"
+  }
+]

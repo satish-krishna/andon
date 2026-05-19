@@ -10,6 +10,9 @@ default-run = "andon"
 name = "andon_lib"
 crate-type = ["staticlib", "cdylib", "rlib"]
 
+[features]
+test-support = []
+
 [build-dependencies]
 tauri-build = { version = "2", features = [] }
 
@@ -51,6 +54,9 @@ winreg = "0.55"
 
 [dev-dependencies]
 tempfile = "3"
+insta = { version = "1", features = ["json", "redactions"] }
+tower = { version = "0.5", features = ["util"] }
+http-body-util = "0.1"
 
 [profile.release]
 codegen-units = 1

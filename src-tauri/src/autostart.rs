@@ -93,3 +93,62 @@ pub enum EnsureOutcome {
 }
 
 pub use imp::*;
+
+// ---------------------------------------------------------------------------
+// Unit tests — pure Rust only, no real OS state touched
+// ---------------------------------------------------------------------------
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // Verify the registry key path and value name constants have not been
+    // accidentally changed.  These strings are load-bearing on Windows.
+    #[test]
+    fn registry_constants_are_correct() {
+        assert_eq!(
+            RUN_KEY,
+            r"Software\Microsoft\Windows\CurrentVersion\Run",
+            "RUN_KEY must match the standard Windows logon autostart location"
+        );
+        assert_eq!(VALUE_NAME, "andon", "VALUE_NAME must match the app identity");
+    }
+
+    // EnsureOutcome must be serializable with the expected JSON tags so the
+    // Tauri front-end can pattern-match on `outcome`.
+    #[test]
+    fn ensure_outcome_serializes_to_snake_case_tag() {
+        let cases: &[(EnsureOutcome, &str)] = &[
+            (EnsureOutcome::Enabled, r#"{"outcome":"enabled"}"#),
+            (EnsureOutcome::Updated, r#"{"outcome":"updated"}"#),
+            (EnsureOutcome::AlreadyCorrect, r#"{"outcome":"already_correct"}"#),
+            (EnsureOutcome::Unsupported, r#"{"outcome":"unsupported"}"#),
+        ];
+        for (outcome, expected) in cases {
+            let got = serde_json::to_string(outcome).expect("serialize EnsureOutcome");
+            assert_eq!(&got, expected, "EnsureOutcome serialization mismatch");
+        }
+    }
+
+    // On non-Windows the no-op stubs must return the Unsupported outcome and
+    // must not error.  On Windows the imp functions interact with the real
+    // registry so we do NOT call enable()/disable() here.
+    #[cfg(not(windows))]
+    #[test]
+    fn non_windows_stubs_are_safe() {
+        assert!(!is_enabled(), "is_enabled() stub must return false");
+        assert!(registered_command().is_none(), "registered_command() stub must return None");
+
+        let r = enable();
+        assert!(r.is_ok(), "enable() stub must not error");
+
+        let r = disable();
+        assert!(r.is_ok(), "disable() stub must not error");
+
+        let r = ensure_current();
+        assert!(r.is_ok(), "ensure_current() stub must not error");
+        assert!(
+            matches!(r.unwrap(), EnsureOutcome::Unsupported),
+            "ensure_current() stub must return Unsupported"
+        );
+    }
+}

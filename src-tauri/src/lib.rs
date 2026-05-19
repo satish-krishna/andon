@@ -2,12 +2,40 @@ pub mod api;
 mod autostart;
 mod config;
 pub mod db;
+
+#[cfg(feature = "test-support")]
+pub mod diagnostics;
+#[cfg(not(feature = "test-support"))]
 mod diagnostics;
+
+#[cfg(feature = "test-support")]
+pub mod git_query;
+#[cfg(not(feature = "test-support"))]
 mod git_query;
+
+#[cfg(feature = "test-support")]
+pub mod integration;
+#[cfg(not(feature = "test-support"))]
 mod integration;
+
+#[cfg(feature = "test-support")]
+pub mod otlp;
+#[cfg(not(feature = "test-support"))]
 mod otlp;
+
+#[cfg(feature = "test-support")]
+pub mod repo_inference;
+#[cfg(not(feature = "test-support"))]
 mod repo_inference;
+
+#[cfg(feature = "test-support")]
+pub mod reports;
+#[cfg(not(feature = "test-support"))]
 mod reports;
+
+#[cfg(feature = "test-support")]
+pub mod settings;
+#[cfg(not(feature = "test-support"))]
 mod settings;
 
 use std::sync::Mutex;
