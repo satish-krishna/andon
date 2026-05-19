@@ -2,3 +2,4 @@
 
 pub mod record;
 pub mod pricing;
+pub mod reducer;
