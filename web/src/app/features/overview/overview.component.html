@@ -164,6 +164,19 @@
             </div>
           }
         }
+        @if (modelMix(); as mm) {
+          @if (mm.by_model.length > 0) {
+            <div class="mt-4 pt-3 border-t border-border/60">
+              <div class="text-[10px] text-muted uppercase tracking-wider mb-2">Invocations by model</div>
+              @for (m of mm.by_model; track m.model) {
+                <div class="flex justify-between font-mono text-xs py-0.5">
+                  <span class="text-muted truncate">{{ modelLabel(m.model) }}</span>
+                  <span class="tabular-nums">{{ m.invocations | number }}</span>
+                </div>
+              }
+            </div>
+          }
+        }
       </div>
     </section>
 
