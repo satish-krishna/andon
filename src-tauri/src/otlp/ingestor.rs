@@ -247,7 +247,7 @@ impl Ingestor {
         events: &[crate::jsonl::reducer::DerivedEvent],
         coverage: crate::jsonl::reconciler::Coverage,
     ) -> Result<(i64, i64)> {
-        use crate::jsonl::reconciler::{token_row_already_covered, Coverage};
+        use crate::jsonl::reconciler::{cost_row_already_covered, token_row_already_covered, Coverage};
         use crate::jsonl::reducer::DerivedEvent as E;
 
         const DEDUP_WINDOW_MS: i64 = 5_000;
@@ -258,7 +258,7 @@ impl Ingestor {
         let mut conn = self.pool.get()?;
         let tx = conn.transaction()?;
         let mut tokens_filled: i64 = 0;
-        let cost_filled: i64 = 0;
+        let mut cost_filled: i64 = 0;
 
         for ev in events {
             match ev {
@@ -332,14 +332,27 @@ impl Ingestor {
                     model,
                     cost_usd,
                 } => {
-                    // Intentionally still gated on Coverage in this task — Task 3 switches
-                    // this arm to per-row dedup like TokenUsage. Kept as-is so this task's
-                    // diff is scoped to tokens only.
-                    if matches!(coverage, Coverage::JsonlOnly) && *cost_usd > 0.0 {
+                    if *cost_usd > 0.0
+                        && !cost_row_already_covered(
+                            self.pool.as_ref(),
+                            session_id,
+                            *ts,
+                            model,
+                            DEDUP_WINDOW_MS,
+                        )
+                        && tx
+                            .execute(
+                                "INSERT INTO cost_entries (session_id, timestamp, model, cost_usd)
+                                 VALUES (?1, ?2, ?3, ?4)",
+                                params![session_id, ts, model, cost_usd],
+                            )
+                            .is_ok()
+                    {
+                        cost_filled += 1;
                         let _ = tx.execute(
-                            "INSERT INTO cost_entries (session_id, timestamp, model, cost_usd)
-                             VALUES (?1, ?2, ?3, ?4)",
-                            params![session_id, ts, model, cost_usd],
+                            "UPDATE sessions SET data_source = 'mixed'
+                             WHERE session_id = ?1 AND data_source = 'otlp'",
+                            params![session_id],
                         );
                     }
                 }

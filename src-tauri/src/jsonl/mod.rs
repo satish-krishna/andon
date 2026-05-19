@@ -135,9 +135,14 @@ async fn ingest_one_inner(
             let cov = reconciler::coverage_for(&pool_clone, &sid)
                 .unwrap_or(reconciler::Coverage::JsonlOnly);
             match fresh_ing.ingest_derived(&events, cov) {
-                Ok((tokens, _cost)) => {
-                    if tokens > 0 {
-                        tracing::info!(sid, tokens_filled = tokens, "JSONL gap-filled token rows");
+                Ok((tokens, cost)) => {
+                    if tokens + cost > 0 {
+                        tracing::info!(
+                            sid,
+                            tokens_filled = tokens,
+                            cost_filled = cost,
+                            "JSONL gap-filled rows for OTLP-partial session"
+                        );
                     }
                 }
                 Err(e) => tracing::error!(sid, error = ?e, "ingest_derived failed"),

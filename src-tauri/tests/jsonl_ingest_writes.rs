@@ -207,3 +207,51 @@ fn writes_tool_decisions_for_jsonl_only_session() {
     assert_eq!(src, "jsonl");
     assert_eq!(model, "claude-opus-4-7");
 }
+
+#[test]
+fn gap_fills_cost_when_otlp_partial() {
+    let (pool, _g) = fixture_pool();
+    let ing = test_ingestor(&pool);
+    let conn = pool.get().unwrap();
+    conn.execute(
+        "INSERT INTO sessions (session_id, started_at, data_source) VALUES ('s1', 0, 'otlp')",
+        [],
+    )
+    .unwrap();
+    conn.execute(
+        "INSERT INTO cost_entries (session_id, timestamp, model, cost_usd) \
+         VALUES ('s1', 100, 'claude-opus-4-7', 0.01)",
+        [],
+    )
+    .unwrap();
+    drop(conn);
+
+    let events = vec![
+        // Overlap with the OTLP row — must NOT duplicate.
+        DerivedEvent::CostEntry {
+            session_id: "s1".into(),
+            ts: 100,
+            model: "claude-opus-4-7".into(),
+            cost_usd: 0.01,
+        },
+        // Gap — must be written.
+        DerivedEvent::CostEntry {
+            session_id: "s1".into(),
+            ts: 10_000,
+            model: "claude-opus-4-7".into(),
+            cost_usd: 0.05,
+        },
+    ];
+    let (_, cost_filled) = ing.ingest_derived(&events, Coverage::Otlp).unwrap();
+    assert_eq!(cost_filled, 1);
+
+    let conn = pool.get().unwrap();
+    let total: f64 = conn
+        .query_row(
+            "SELECT COALESCE(SUM(cost_usd), 0) FROM cost_entries WHERE session_id='s1'",
+            [],
+            |r| r.get(0),
+        )
+        .unwrap();
+    assert!((total - 0.06).abs() < 1e-9);
+}
