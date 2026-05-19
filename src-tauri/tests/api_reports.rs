@@ -280,10 +280,7 @@ async fn open_report_returns_not_found_when_report_missing() {
 // ---------------------------------------------------------------------------
 
 #[tokio::test]
-#[cfg_attr(
-    not(any(target_os = "windows", target_os = "macos", target_os = "linux")),
-    ignore = "open_report shells out; skipped on unsupported OS"
-)]
+#[ignore = "shells out to the OS to open a browser; would hang or pop UI in CI/dev"]
 async fn open_report_returns_ok_when_report_exists() {
     let (pool, _db_dir) = common::fixture_pool();
 
