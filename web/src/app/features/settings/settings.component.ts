@@ -2,14 +2,15 @@ import { CommonModule, DecimalPipe } from '@angular/common';
 import { Component, OnInit, inject, signal } from '@angular/core';
 import { LucideAngularModule } from 'lucide-angular';
 
+import { RouterLink } from '@angular/router';
 import { ApiService, IntegrationStatus } from '../../core/api.service';
-import { DbStats } from '../../core/models';
+import { DbStats, JsonlIngestRun } from '../../core/models';
 import { ForwarderCardComponent } from './forwarder-card.component';
 
 @Component({
   selector: 'app-settings',
   standalone: true,
-  imports: [CommonModule, DecimalPipe, LucideAngularModule, ForwarderCardComponent],
+  imports: [CommonModule, DecimalPipe, RouterLink, LucideAngularModule, ForwarderCardComponent],
   templateUrl: './settings.component.html',
 })
 export class SettingsComponent implements OnInit {
@@ -23,6 +24,9 @@ export class SettingsComponent implements OnInit {
   backfillResult = signal<{ scanned: number; updated: number } | null>(null);
   backfilling = signal(false);
   version = signal<string | null>(null);
+  jsonlBusy = signal(false);
+  jsonlToast = signal<string | null>(null);
+  jsonlLatestRun = signal<JsonlIngestRun | null>(null);
 
   settingsSnippet = `{
   "env": {
@@ -43,6 +47,25 @@ export class SettingsComponent implements OnInit {
     this.api.integrationStatus().subscribe((i) => this.integration.set(i));
     this.api.autostartStatus().subscribe((a) => this.autostart.set(a));
     this.api.health().subscribe((h) => this.version.set(h.version));
+    this.api.jsonlIngestRuns().subscribe((rs) => this.jsonlLatestRun.set(rs[0] ?? null));
+  }
+
+  ingestJsonl() {
+    this.jsonlBusy.set(true);
+    this.jsonlToast.set(null);
+    this.api.ingestJsonl().subscribe({
+      next: (s) => {
+        this.jsonlToast.set(
+          `Ingested ${s.records_processed} records from ${s.files_processed} files (${s.records_errored} errors).`,
+        );
+        this.jsonlBusy.set(false);
+        this.api.jsonlIngestRuns().subscribe((rs) => this.jsonlLatestRun.set(rs[0] ?? null));
+      },
+      error: (e) => {
+        this.jsonlToast.set(`Backfill failed: ${e?.message ?? e}`);
+        this.jsonlBusy.set(false);
+      },
+    });
   }
 
   toggleAutostart() {
