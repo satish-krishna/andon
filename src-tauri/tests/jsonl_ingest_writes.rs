@@ -43,31 +43,145 @@ fn writes_slash_and_subagent() {
 }
 
 #[test]
-fn skips_token_usage_when_otlp_covered() {
+fn dedups_token_usage_against_otlp_within_window() {
     let (pool, _g) = fixture_pool();
     let ing = test_ingestor(&pool);
+    let conn = pool.get().unwrap();
+    conn.execute(
+        "INSERT INTO sessions (session_id, started_at, data_source) VALUES ('s1', 0, 'otlp')",
+        [],
+    )
+    .unwrap();
+    conn.execute(
+        "INSERT INTO token_usage (session_id, timestamp, model, token_type, count) \
+         VALUES ('s1', 10000, 'claude-opus-4-7', 'input', 500)",
+        [],
+    )
+    .unwrap();
+    drop(conn);
+
+    // JSONL turn at the same timestamp must NOT duplicate the existing OTLP row.
     let events = vec![DerivedEvent::TokenUsage {
         session_id: "s1".into(),
-        ts: 100,
+        ts: 10_000,
         model: "claude-opus-4-7".into(),
-        input: 10,
-        output: 20,
+        input: 500,
+        output: 0,
         cache_create: 0,
         cache_read: 0,
     }];
-    ing.ingest_derived(&events, Coverage::Otlp).unwrap();
-    let conn = pool.get().unwrap();
-    let n: i64 = conn
+    let (tokens_filled, _) = ing.ingest_derived(&events, Coverage::Otlp).unwrap();
+
+    let n: i64 = pool
+        .get()
+        .unwrap()
         .query_row(
-            "SELECT COUNT(*) FROM token_usage WHERE session_id='s1'",
+            "SELECT COUNT(*) FROM token_usage WHERE session_id='s1' AND model='claude-opus-4-7' AND token_type='input'",
             [],
             |r| r.get(0),
         )
         .unwrap();
-    assert_eq!(
-        n, 0,
-        "JSONL must not write token_usage for OTLP-covered sessions"
-    );
+    assert_eq!(n, 1, "JSONL must not duplicate the OTLP row");
+    assert_eq!(tokens_filled, 0);
+}
+
+#[test]
+fn gap_fills_when_otlp_partial() {
+    let (pool, _g) = fixture_pool();
+    let ing = test_ingestor(&pool);
+    let conn = pool.get().unwrap();
+    conn.execute(
+        "INSERT INTO sessions (session_id, started_at, data_source) VALUES ('s1', 0, 'otlp')",
+        [],
+    )
+    .unwrap();
+    // OTLP captured only the first turn at t=100ms.
+    conn.execute(
+        "INSERT INTO token_usage (session_id, timestamp, model, token_type, count) \
+         VALUES ('s1', 100, 'claude-opus-4-7', 'input', 500)",
+        [],
+    )
+    .unwrap();
+    drop(conn);
+
+    // JSONL has two turns: the captured one + a later gap turn at t=10_000ms.
+    let events = vec![
+        DerivedEvent::TokenUsage {
+            session_id: "s1".into(),
+            ts: 100,
+            model: "claude-opus-4-7".into(),
+            input: 500,
+            output: 0,
+            cache_create: 0,
+            cache_read: 0,
+        },
+        DerivedEvent::TokenUsage {
+            session_id: "s1".into(),
+            ts: 10_000,
+            model: "claude-opus-4-7".into(),
+            input: 1000,
+            output: 2000,
+            cache_create: 0,
+            cache_read: 50,
+        },
+    ];
+    let (tokens_filled, _) = ing.ingest_derived(&events, Coverage::Otlp).unwrap();
+
+    let conn = pool.get().unwrap();
+    // Original OTLP row preserved.
+    let otlp_count: i64 = conn
+        .query_row(
+            "SELECT count FROM token_usage WHERE session_id='s1' AND timestamp=100 AND token_type='input'",
+            [],
+            |r| r.get(0),
+        )
+        .unwrap();
+    assert_eq!(otlp_count, 500);
+
+    // Gap-turn input/output/cacheRead all written.
+    let gap_input: i64 = conn
+        .query_row(
+            "SELECT count FROM token_usage WHERE session_id='s1' AND timestamp=10000 AND token_type='input'",
+            [], |r| r.get(0),
+        )
+        .unwrap();
+    let gap_output: i64 = conn
+        .query_row(
+            "SELECT count FROM token_usage WHERE session_id='s1' AND timestamp=10000 AND token_type='output'",
+            [], |r| r.get(0),
+        )
+        .unwrap();
+    let gap_cache_read: i64 = conn
+        .query_row(
+            "SELECT count FROM token_usage WHERE session_id='s1' AND timestamp=10000 AND token_type='cacheRead'",
+            [], |r| r.get(0),
+        )
+        .unwrap();
+    assert_eq!(gap_input, 1000);
+    assert_eq!(gap_output, 2000);
+    assert_eq!(gap_cache_read, 50);
+
+    // No cacheCreation row (count was 0, skipped).
+    let cache_create_n: i64 = conn
+        .query_row(
+            "SELECT COUNT(*) FROM token_usage WHERE session_id='s1' AND timestamp=10000 AND token_type='cacheCreation'",
+            [], |r| r.get(0),
+        )
+        .unwrap();
+    assert_eq!(cache_create_n, 0);
+
+    // 3 rows filled.
+    assert_eq!(tokens_filled, 3);
+
+    // data_source flipped from 'otlp' to 'mixed' once JSONL contributed.
+    let data_source: String = conn
+        .query_row(
+            "SELECT data_source FROM sessions WHERE session_id='s1'",
+            [],
+            |r| r.get(0),
+        )
+        .unwrap();
+    assert_eq!(data_source, "mixed");
 }
 
 #[test]

@@ -134,8 +134,13 @@ async fn ingest_one_inner(
         for (sid, events) in events_by_session {
             let cov = reconciler::coverage_for(&pool_clone, &sid)
                 .unwrap_or(reconciler::Coverage::JsonlOnly);
-            if let Err(e) = fresh_ing.ingest_derived(&events, cov) {
-                tracing::error!(sid, error = ?e, "ingest_derived failed");
+            match fresh_ing.ingest_derived(&events, cov) {
+                Ok((tokens, _cost)) => {
+                    if tokens > 0 {
+                        tracing::info!(sid, tokens_filled = tokens, "JSONL gap-filled token rows");
+                    }
+                }
+                Err(e) => tracing::error!(sid, error = ?e, "ingest_derived failed"),
             }
             stats.sessions_added += 1;
         }

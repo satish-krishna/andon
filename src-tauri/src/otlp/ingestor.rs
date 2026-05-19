@@ -246,15 +246,20 @@ impl Ingestor {
         &self,
         events: &[crate::jsonl::reducer::DerivedEvent],
         coverage: crate::jsonl::reconciler::Coverage,
-    ) -> Result<()> {
-        use crate::jsonl::reconciler::Coverage;
+    ) -> Result<(i64, i64)> {
+        use crate::jsonl::reconciler::{cost_row_already_covered, token_row_already_covered, Coverage};
         use crate::jsonl::reducer::DerivedEvent as E;
 
+        const DEDUP_WINDOW_MS: i64 = 5_000;
+
         if self.control.is_paused() {
-            return Ok(());
+            return Ok((0, 0));
         }
+        let pool = self.pool.clone();
         let mut conn = self.pool.get()?;
         let tx = conn.transaction()?;
+        let mut tokens_filled: i64 = 0;
+        let mut cost_filled: i64 = 0;
 
         for ev in events {
             match ev {
@@ -289,18 +294,36 @@ impl Ingestor {
                     cache_create,
                     cache_read,
                 } => {
-                    if matches!(coverage, Coverage::JsonlOnly) {
-                        for (kind, n) in [
-                            ("input", *input),
-                            ("output", *output),
-                            ("cacheRead", *cache_read),
-                            ("cacheCreation", *cache_create),
-                        ] {
-                            if n > 0 {
-                                let _ = tx.execute(
+                    for (kind, n) in [
+                        ("input", *input),
+                        ("output", *output),
+                        ("cacheRead", *cache_read),
+                        ("cacheCreation", *cache_create),
+                    ] {
+                        if n > 0
+                            && !token_row_already_covered(
+                                pool.as_ref(),
+                                session_id,
+                                *ts,
+                                model,
+                                kind,
+                                DEDUP_WINDOW_MS,
+                            )
+                        {
+                            if tx
+                                .execute(
                                     "INSERT INTO token_usage (session_id, timestamp, model, token_type, count)
                                      VALUES (?1, ?2, ?3, ?4, ?5)",
                                     params![session_id, ts, model, kind, n],
+                                )
+                                .is_ok()
+                            {
+                                tokens_filled += 1;
+                                // Flip data_source if this is the first JSONL row landing on an OTLP-marked session.
+                                let _ = tx.execute(
+                                    "UPDATE sessions SET data_source = 'mixed'
+                                     WHERE session_id = ?1 AND data_source = 'otlp'",
+                                    params![session_id],
                                 );
                             }
                         }
@@ -312,6 +335,9 @@ impl Ingestor {
                     model,
                     cost_usd,
                 } => {
+                    // Intentionally still gated on Coverage in this task — Task 3 switches
+                    // this arm to per-row dedup like TokenUsage. Kept as-is so this task's
+                    // diff is scoped to tokens only.
                     if matches!(coverage, Coverage::JsonlOnly) && *cost_usd > 0.0 {
                         let _ = tx.execute(
                             "INSERT INTO cost_entries (session_id, timestamp, model, cost_usd)
@@ -328,10 +354,6 @@ impl Ingestor {
                     model,
                 } => {
                     if matches!(coverage, Coverage::JsonlOnly) {
-                        // 'invoke' sentinel — JSONL records the invocation but
-                        // not whether the user accepted/rejected, and `decision`
-                        // is NOT NULL. Existing accept/reject/abort dashboards
-                        // filter explicitly so 'invoke' rows don't pollute them.
                         let _ = tx.execute(
                             "INSERT INTO tool_decisions
                                (session_id, timestamp, tool_name, decision, language, file_path, source, model)
@@ -368,7 +390,7 @@ impl Ingestor {
             }
         }
         tx.commit()?;
-        Ok(())
+        Ok((tokens_filled, cost_filled))
     }
 }
 
