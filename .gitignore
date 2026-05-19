@@ -19,3 +19,4 @@ Thumbs.db
 .vscode/
 *.iml
 /.remember
+.claude/settings.local.json
