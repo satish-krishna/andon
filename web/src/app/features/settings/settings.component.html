@@ -174,8 +174,9 @@
                   <a routerLink="/diagnostics" class="underline">{{ run.records_errored | number }} errors</a>
                 </p>
               }
-              @if (jsonlToast()) {
-                <p class="text-[10px] text-warn font-mono">{{ jsonlToast() }}</p>
+              @if (jsonlToast(); as toast) {
+                <p class="text-[10px] font-mono"
+                   [class]="toast.kind === 'err' ? 'text-warn' : 'text-ok'">{{ toast.msg }}</p>
               }
             </div>
             <button class="filter-chip flex items-center gap-1.5" [disabled]="jsonlBusy()" (click)="ingestJsonl()">

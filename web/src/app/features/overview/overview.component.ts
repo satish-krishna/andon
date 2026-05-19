@@ -95,8 +95,9 @@ export class OverviewComponent implements OnInit {
       this.api.acceptByLanguageV2(args).subscribe((v) => this.acceptLang.set(v));
       this.api.activeTime(args).subscribe((v) => this.activeTime.set(v));
       this.api.sessionsV2({ ...args, sort: 'time', limit: 6 }).subscribe((v) => this.recent.set(v.sessions));
-      this.api.modelMix().subscribe((v) => this.modelMix.set(v));
     });
+    // Global, unfiltered — fetched once, not inside the filter effect.
+    this.api.modelMix().subscribe((v) => this.modelMix.set(v));
   }
 
   ngOnInit() {}

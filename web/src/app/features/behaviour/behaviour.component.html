@@ -32,7 +32,7 @@
         <h3 class="text-sm text-zinc-400 mb-2">Tools per model</h3>
         <table class="text-xs">
           <tbody>
-            @for (c of mm.by_model_tool; track c.model + c.tool) {
+            @for (c of mm.by_model_tool; track $index) {
               <tr>
                 <td class="font-mono pr-3">{{ c.model }}</td>
                 <td class="font-mono pr-3">{{ c.tool }}</td>

@@ -25,7 +25,7 @@ export class SettingsComponent implements OnInit {
   backfilling = signal(false);
   version = signal<string | null>(null);
   jsonlBusy = signal(false);
-  jsonlToast = signal<string | null>(null);
+  jsonlToast = signal<{ msg: string; kind: 'ok' | 'err' } | null>(null);
   jsonlLatestRun = signal<JsonlIngestRun | null>(null);
 
   settingsSnippet = `{
@@ -59,12 +59,16 @@ export class SettingsComponent implements OnInit {
           `Ingested ${s.records_processed} records from ${s.files_processed} files`;
         const filled = s.tokens_filled + s.cost_filled;
         const tail = filled > 0 ? ` · filled ${filled} gap rows from JSONL` : '';
-        this.jsonlToast.set(`${summary}${tail} (${s.records_errored} errors).`);
+        this.jsonlToast.set({
+          msg: `${summary}${tail} (${s.records_errored} errors).`,
+          kind: 'ok',
+        });
         this.jsonlBusy.set(false);
         this.api.jsonlIngestRuns().subscribe((rs) => this.jsonlLatestRun.set(rs[0] ?? null));
       },
       error: (e) => {
-        this.jsonlToast.set(`Backfill failed: ${e?.message ?? e}`);
+        const detail = e?.error?.error ?? e?.message ?? String(e);
+        this.jsonlToast.set({ msg: `Backfill failed: ${detail}`, kind: 'err' });
         this.jsonlBusy.set(false);
       },
     });
