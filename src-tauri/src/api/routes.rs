@@ -62,6 +62,14 @@ pub fn router(state: ApiState) -> Router {
         .route("/api/repo/backfill", post(repo_backfill))
         .route("/api/repos", get(list_repos))
         .route("/api/overview/top-repos", get(overview_top_repos))
+        // JSONL ingest + diagnostics
+        .route("/api/jsonl/backfill", post(jsonl_backfill))
+        .route("/api/jsonl/errors", get(jsonl_errors))
+        .route("/api/jsonl/ingest-runs", get(jsonl_ingest_runs))
+        // Behaviour views (Plan C)
+        .route("/api/behaviour/model-mix", get(behaviour_model_mix))
+        .route("/api/behaviour/slash-commands", get(behaviour_slash_commands))
+        .route("/api/behaviour/subagents", get(behaviour_subagents))
         .with_state(state)
 }
 
@@ -826,6 +834,8 @@ struct SessionEndPayload {
     session_id: Option<String>,
     #[serde(default)]
     reason: Option<String>,
+    #[serde(default)]
+    transcript_path: Option<String>,
 }
 
 async fn hook_session_end(
@@ -889,6 +899,19 @@ async fn hook_session_end(
             Err(e)       => tracing::error!(error = ?e, "report task panicked"),
         }
     });
+
+    if let Some(tp) = p.transcript_path.clone() {
+        let pool_j = state.pool.clone();
+        let control_j = state.control.clone();
+        let diag_j = state.diagnostics.clone();
+        tokio::spawn(async move {
+            let ing = crate::otlp::ingestor::Ingestor::new(pool_j.clone(), control_j, diag_j);
+            let path = std::path::PathBuf::from(tp);
+            if let Err(e) = crate::jsonl::ingest_one(&pool_j, &ing, &path).await {
+                tracing::error!(error = ?e, "session-end JSONL ingest failed");
+            }
+        });
+    }
 
     // Best-effort repo inference for sessions the hook didn't cover.
     let pool_for_inf = state.pool.clone();
@@ -2191,4 +2214,205 @@ async fn overview_top_repos(
         Ok(out)
     }).await.unwrap_or(Ok(vec![])).unwrap_or_default();
     Json(rows)
+}
+
+// ---------- JSONL ingest endpoints ----------
+
+#[tracing::instrument(skip(state))]
+async fn jsonl_backfill(State(state): State<ApiState>) -> axum::response::Response {
+    let Some(home) = dirs::home_dir() else {
+        return (
+            axum::http::StatusCode::INTERNAL_SERVER_ERROR,
+            Json(serde_json::json!({"error":"no home dir"})),
+        )
+            .into_response();
+    };
+    let claude_home = home.join(".claude");
+    let pool = std::sync::Arc::clone(&state.pool);
+    let ingestor = crate::otlp::ingestor::Ingestor::new(
+        std::sync::Arc::clone(&state.pool),
+        state.control.clone(),
+        state.diagnostics.clone(),
+    );
+    match crate::jsonl::backfill(&pool, &ingestor, &claude_home).await {
+        Ok(stats) => Json(crate::api::dto::JsonlBackfillResponse::from(stats)).into_response(),
+        Err(e) => {
+            tracing::error!(error = ?e, "jsonl backfill failed");
+            (
+                axum::http::StatusCode::INTERNAL_SERVER_ERROR,
+                Json(serde_json::json!({"error": e.to_string()})),
+            )
+                .into_response()
+        }
+    }
+}
+
+#[tracing::instrument(skip(state))]
+async fn jsonl_errors(State(state): State<ApiState>) -> Json<Vec<crate::api::dto::JsonlErrorEntry>> {
+    let pool = state.pool.clone();
+    let rows = tokio::task::spawn_blocking(move || -> Vec<_> {
+        let Ok(conn) = pool.get() else { return vec![] };
+        let Ok(mut stmt) = conn.prepare(
+            "SELECT jsonl_path, line_no, error_kind, error_msg, cc_version, ingested_at
+             FROM jsonl_errors ORDER BY ingested_at DESC LIMIT 100",
+        ) else {
+            return vec![];
+        };
+        stmt.query_map([], |r| {
+            Ok(crate::api::dto::JsonlErrorEntry {
+                jsonl_path: r.get(0)?,
+                line_no: r.get(1)?,
+                error_kind: r.get(2)?,
+                error_msg: r.get(3)?,
+                cc_version: r.get(4)?,
+                ingested_at: r.get(5)?,
+            })
+        })
+        .map(|i| i.filter_map(|r| r.ok()).collect())
+        .unwrap_or_default()
+    })
+    .await
+    .unwrap_or_default();
+    Json(rows)
+}
+
+#[tracing::instrument(skip(state))]
+async fn jsonl_ingest_runs(
+    State(state): State<ApiState>,
+) -> Json<Vec<crate::api::dto::JsonlIngestRunEntry>> {
+    let pool = state.pool.clone();
+    let rows = tokio::task::spawn_blocking(move || -> Vec<_> {
+        let Ok(conn) = pool.get() else { return vec![] };
+        let Ok(mut stmt) = conn.prepare(
+            "SELECT id, kind, started_at, ended_at, files_processed, records_processed, records_errored
+             FROM jsonl_ingest_runs ORDER BY started_at DESC LIMIT 20",
+        ) else {
+            return vec![];
+        };
+        stmt.query_map([], |r| {
+            Ok(crate::api::dto::JsonlIngestRunEntry {
+                id: r.get(0)?,
+                kind: r.get(1)?,
+                started_at: r.get(2)?,
+                ended_at: r.get(3)?,
+                files_processed: r.get(4)?,
+                records_processed: r.get(5)?,
+                records_errored: r.get(6)?,
+            })
+        })
+        .map(|i| i.filter_map(|r| r.ok()).collect())
+        .unwrap_or_default()
+    })
+    .await
+    .unwrap_or_default();
+    Json(rows)
+}
+
+// ---------- Behaviour endpoints (Plan C) ----------
+
+async fn behaviour_model_mix(
+    State(state): State<ApiState>,
+) -> Json<crate::api::dto::ModelMixResponse> {
+    let pool = state.pool.clone();
+    let out = tokio::task::spawn_blocking(move || {
+        let conn = pool.get().ok()?;
+        let by_model: Vec<crate::api::dto::ModelMixEntry> = conn
+            .prepare(
+                "SELECT model, COUNT(*), COUNT(DISTINCT session_id)
+                 FROM token_usage GROUP BY model ORDER BY 2 DESC",
+            )
+            .ok()?
+            .query_map([], |r| {
+                Ok(crate::api::dto::ModelMixEntry {
+                    model: r.get(0)?,
+                    invocations: r.get(1)?,
+                    sessions: r.get(2)?,
+                })
+            })
+            .ok()?
+            .filter_map(|r| r.ok())
+            .collect();
+        let by_model_tool: Vec<crate::api::dto::ModelToolCell> = conn
+            .prepare(
+                "SELECT model, tool_name, COUNT(*)
+                 FROM tool_decisions WHERE model IS NOT NULL
+                 GROUP BY model, tool_name ORDER BY 3 DESC",
+            )
+            .ok()?
+            .query_map([], |r| {
+                Ok(crate::api::dto::ModelToolCell {
+                    model: r.get(0)?,
+                    tool: r.get(1)?,
+                    count: r.get(2)?,
+                })
+            })
+            .ok()?
+            .filter_map(|r| r.ok())
+            .collect();
+        Some(crate::api::dto::ModelMixResponse {
+            by_model,
+            by_model_tool,
+        })
+    })
+    .await
+    .ok()
+    .flatten()
+    .unwrap_or(crate::api::dto::ModelMixResponse {
+        by_model: vec![],
+        by_model_tool: vec![],
+    });
+    Json(out)
+}
+
+async fn behaviour_slash_commands(
+    State(state): State<ApiState>,
+) -> Json<Vec<crate::api::dto::SlashCommandEntry>> {
+    let pool = state.pool.clone();
+    let out = tokio::task::spawn_blocking(move || -> Vec<_> {
+        let Ok(conn) = pool.get() else { return vec![] };
+        let Ok(mut stmt) = conn.prepare(
+            "SELECT command_name, COUNT(*) FROM slash_commands
+             GROUP BY command_name ORDER BY 2 DESC LIMIT 30",
+        ) else {
+            return vec![];
+        };
+        stmt.query_map([], |r| {
+            Ok(crate::api::dto::SlashCommandEntry {
+                name: r.get(0)?,
+                count: r.get(1)?,
+            })
+        })
+        .map(|i| i.filter_map(|r| r.ok()).collect())
+        .unwrap_or_default()
+    })
+    .await
+    .unwrap_or_default();
+    Json(out)
+}
+
+async fn behaviour_subagents(
+    State(state): State<ApiState>,
+) -> Json<Vec<crate::api::dto::SubAgentEntry>> {
+    let pool = state.pool.clone();
+    let out = tokio::task::spawn_blocking(move || -> Vec<_> {
+        let Ok(conn) = pool.get() else { return vec![] };
+        let Ok(mut stmt) = conn.prepare(
+            "SELECT subagent_type, COUNT(*) FROM subagent_calls
+             WHERE subagent_type IS NOT NULL
+             GROUP BY subagent_type ORDER BY 2 DESC",
+        ) else {
+            return vec![];
+        };
+        stmt.query_map([], |r| {
+            Ok(crate::api::dto::SubAgentEntry {
+                subagent_type: r.get(0)?,
+                invocations: r.get(1)?,
+            })
+        })
+        .map(|i| i.filter_map(|r| r.ok()).collect())
+        .unwrap_or_default()
+    })
+    .await
+    .unwrap_or_default();
+    Json(out)
 }
