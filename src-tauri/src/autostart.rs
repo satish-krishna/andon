@@ -113,10 +113,10 @@ mod tests {
         assert_eq!(VALUE_NAME, "andon", "VALUE_NAME must match the app identity");
     }
 
-    // EnsureOutcome must be serialisable with the expected JSON tags so the
+    // EnsureOutcome must be serializable with the expected JSON tags so the
     // Tauri front-end can pattern-match on `outcome`.
     #[test]
-    fn ensure_outcome_serialises_to_snake_case_tag() {
+    fn ensure_outcome_serializes_to_snake_case_tag() {
         let cases: &[(EnsureOutcome, &str)] = &[
             (EnsureOutcome::Enabled, r#"{"outcome":"enabled"}"#),
             (EnsureOutcome::Updated, r#"{"outcome":"updated"}"#),
