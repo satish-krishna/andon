@@ -44,17 +44,15 @@ pub fn token_row_already_covered(
     };
     let lo = ts_ms - window_ms;
     let hi = ts_ms + window_ms;
-    let n: i64 = conn
-        .query_row(
-            "SELECT COUNT(*) FROM token_usage
-             WHERE session_id = ?1 AND model = ?2 AND token_type = ?3
-               AND timestamp BETWEEN ?4 AND ?5
-             LIMIT 1",
-            params![session_id, model, token_type, lo, hi],
-            |r| r.get(0),
-        )
-        .unwrap_or(0);
-    n > 0
+    conn.query_row(
+        "SELECT 1 FROM token_usage
+         WHERE session_id = ?1 AND model = ?2 AND token_type = ?3
+           AND timestamp BETWEEN ?4 AND ?5
+         LIMIT 1",
+        params![session_id, model, token_type, lo, hi],
+        |_| Ok(true),
+    )
+    .unwrap_or(false)
 }
 
 /// Returns true if `cost_entries` already has a row for this
@@ -71,17 +69,15 @@ pub fn cost_row_already_covered(
     };
     let lo = ts_ms - window_ms;
     let hi = ts_ms + window_ms;
-    let n: i64 = conn
-        .query_row(
-            "SELECT COUNT(*) FROM cost_entries
-             WHERE session_id = ?1 AND model = ?2
-               AND timestamp BETWEEN ?3 AND ?4
-             LIMIT 1",
-            params![session_id, model, lo, hi],
-            |r| r.get(0),
-        )
-        .unwrap_or(0);
-    n > 0
+    conn.query_row(
+        "SELECT 1 FROM cost_entries
+         WHERE session_id = ?1 AND model = ?2
+           AND timestamp BETWEEN ?3 AND ?4
+         LIMIT 1",
+        params![session_id, model, lo, hi],
+        |_| Ok(true),
+    )
+    .unwrap_or(false)
 }
 
 #[cfg(test)]
