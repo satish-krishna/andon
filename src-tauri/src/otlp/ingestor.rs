@@ -246,15 +246,19 @@ impl Ingestor {
         &self,
         events: &[crate::jsonl::reducer::DerivedEvent],
         coverage: crate::jsonl::reconciler::Coverage,
-    ) -> Result<()> {
-        use crate::jsonl::reconciler::Coverage;
+    ) -> Result<(i64, i64)> {
+        use crate::jsonl::reconciler::{cost_row_already_covered, token_row_already_covered, Coverage};
         use crate::jsonl::reducer::DerivedEvent as E;
 
+        const DEDUP_WINDOW_MS: i64 = 5_000;
+
         if self.control.is_paused() {
-            return Ok(());
+            return Ok((0, 0));
         }
         let mut conn = self.pool.get()?;
         let tx = conn.transaction()?;
+        let mut tokens_filled: i64 = 0;
+        let mut cost_filled: i64 = 0;
 
         for ev in events {
             match ev {
@@ -275,7 +279,7 @@ impl Ingestor {
                     if matches!(coverage, Coverage::Otlp) {
                         let _ = tx.execute(
                             "UPDATE sessions SET data_source = 'mixed'
-                             WHERE session_id = ?1 AND data_source = 'otlp'",
+                             WHERE session_id = ?1 AND COALESCE(data_source, 'otlp') = 'otlp'",
                             params![session_id],
                         );
                     }
@@ -289,20 +293,36 @@ impl Ingestor {
                     cache_create,
                     cache_read,
                 } => {
-                    if matches!(coverage, Coverage::JsonlOnly) {
-                        for (kind, n) in [
-                            ("input", *input),
-                            ("output", *output),
-                            ("cacheRead", *cache_read),
-                            ("cacheCreation", *cache_create),
-                        ] {
-                            if n > 0 {
-                                let _ = tx.execute(
+                    for (kind, n) in [
+                        ("input", *input),
+                        ("output", *output),
+                        ("cacheRead", *cache_read),
+                        ("cacheCreation", *cache_create),
+                    ] {
+                        if n > 0
+                            && !token_row_already_covered(
+                                self.pool.as_ref(),
+                                session_id,
+                                *ts,
+                                model,
+                                kind,
+                                DEDUP_WINDOW_MS,
+                            )
+                            && tx
+                                .execute(
                                     "INSERT INTO token_usage (session_id, timestamp, model, token_type, count)
                                      VALUES (?1, ?2, ?3, ?4, ?5)",
                                     params![session_id, ts, model, kind, n],
-                                );
-                            }
+                                )
+                                .is_ok()
+                        {
+                            tokens_filled += 1;
+                            // Flip data_source if this is the first JSONL row landing on an OTLP-marked session.
+                            let _ = tx.execute(
+                                "UPDATE sessions SET data_source = 'mixed'
+                                 WHERE session_id = ?1 AND COALESCE(data_source, 'otlp') = 'otlp'",
+                                params![session_id],
+                            );
                         }
                     }
                 }
@@ -312,11 +332,27 @@ impl Ingestor {
                     model,
                     cost_usd,
                 } => {
-                    if matches!(coverage, Coverage::JsonlOnly) && *cost_usd > 0.0 {
+                    if *cost_usd > 0.0
+                        && !cost_row_already_covered(
+                            self.pool.as_ref(),
+                            session_id,
+                            *ts,
+                            model,
+                            DEDUP_WINDOW_MS,
+                        )
+                        && tx
+                            .execute(
+                                "INSERT INTO cost_entries (session_id, timestamp, model, cost_usd)
+                                 VALUES (?1, ?2, ?3, ?4)",
+                                params![session_id, ts, model, cost_usd],
+                            )
+                            .is_ok()
+                    {
+                        cost_filled += 1;
                         let _ = tx.execute(
-                            "INSERT INTO cost_entries (session_id, timestamp, model, cost_usd)
-                             VALUES (?1, ?2, ?3, ?4)",
-                            params![session_id, ts, model, cost_usd],
+                            "UPDATE sessions SET data_source = 'mixed'
+                             WHERE session_id = ?1 AND COALESCE(data_source, 'otlp') = 'otlp'",
+                            params![session_id],
                         );
                     }
                 }
@@ -328,10 +364,6 @@ impl Ingestor {
                     model,
                 } => {
                     if matches!(coverage, Coverage::JsonlOnly) {
-                        // 'invoke' sentinel — JSONL records the invocation but
-                        // not whether the user accepted/rejected, and `decision`
-                        // is NOT NULL. Existing accept/reject/abort dashboards
-                        // filter explicitly so 'invoke' rows don't pollute them.
                         let _ = tx.execute(
                             "INSERT INTO tool_decisions
                                (session_id, timestamp, tool_name, decision, language, file_path, source, model)
@@ -348,7 +380,11 @@ impl Ingestor {
                 } => {
                     let _ = tx.execute(
                         "INSERT INTO slash_commands (session_id, timestamp, command_name, arg_count)
-                         VALUES (?1, ?2, ?3, ?4)",
+                         SELECT ?1, ?2, ?3, ?4
+                         WHERE NOT EXISTS (
+                             SELECT 1 FROM slash_commands
+                             WHERE session_id = ?1 AND timestamp = ?2 AND command_name = ?3
+                         )",
                         params![session_id, ts, name, arg_count],
                     );
                 }
@@ -361,14 +397,20 @@ impl Ingestor {
                     let _ = tx.execute(
                         "INSERT INTO subagent_calls
                            (parent_session_id, child_session_id, subagent_type, started_at)
-                         VALUES (?1, ?2, ?3, ?4)",
+                         SELECT ?1, ?2, ?3, ?4
+                         WHERE NOT EXISTS (
+                             SELECT 1 FROM subagent_calls
+                             WHERE parent_session_id = ?1
+                               AND started_at = ?4
+                               AND COALESCE(subagent_type, '') = COALESCE(?3, '')
+                         )",
                         params![parent_id, child_id, subagent_type, started_at],
                     );
                 }
             }
         }
         tx.commit()?;
-        Ok(())
+        Ok((tokens_filled, cost_filled))
     }
 }
 
