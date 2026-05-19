@@ -33,7 +33,7 @@ cd web; npm install; npm run build
 cargo tauri build
 
 # Tests
-cd src-tauri; cargo test              # Rust unit + integration tests
+cd src-tauri; cargo test --features test-support   # Rust unit + integration tests
 cd web; npm test                      # Angular tests (Vitest, CI mode by default)
 
 # Smoke-test the OTLP receivers against a running app
