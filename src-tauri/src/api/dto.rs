@@ -154,6 +154,8 @@ pub struct JsonlBackfillResponse {
     pub records_processed: i64,
     pub records_errored: i64,
     pub sessions_added: i64,
+    pub tokens_filled: i64,
+    pub cost_filled: i64,
     pub duration_ms: i64,
 }
 
@@ -164,6 +166,8 @@ impl From<crate::jsonl::IngestStats> for JsonlBackfillResponse {
             records_processed: s.records_processed,
             records_errored: s.records_errored,
             sessions_added: s.sessions_added,
+            tokens_filled: s.tokens_filled,
+            cost_filled: s.cost_filled,
             duration_ms: s.duration_ms,
         }
     }
