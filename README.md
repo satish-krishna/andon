@@ -30,6 +30,30 @@ No collector, no Docker, no daemon to install. One executable.
 
 More detail and per-page screenshots: [`docs/features.md`](docs/features.md). Architecture, ports, and data model: [`docs/architecture.md`](docs/architecture.md).
 
+## Compared to ccusage and JSONL-based tools
+
+`ccusage` and tools like `claude-code-templates` read `~/.claude/projects/<slug>/*.jsonl` — the conversation transcripts Claude Code writes to disk — and derive token counts and inferred costs from them. They're great for "what did I spend yesterday" answers with zero setup, work retroactively on data already on disk, and can grep your prompts.
+
+Andon ingests a different stream: the OpenTelemetry feed Claude Code emits when `CLAUDE_CODE_ENABLE_TELEMETRY=1`. That stream carries the numeric and metadata signal (token counts split by type, the `claude_code.cost.usage` value Claude Code itself computes, tool decisions, file paths, lifecycle events) — and no conversation text at all.
+
+| | Andon | ccusage / JSONL harvesters |
+|---|---|---|
+| Data source | OTLP (gRPC `:4317` + HTTP `:4318`) from the CLI | `~/.claude/projects/**/*.jsonl` transcripts |
+| Cost source | `claude_code.cost.usage` metric, emitted by Claude Code | Inferred: token counts × a bundled pricing table |
+| Captures prompts / responses | Never — see *Privacy* below | Yes, on disk; the tool chooses whether to surface them |
+| Persistence | Embedded SQLite, WAL mode | None — recomputes from JSONL on each invocation |
+| Real-time | Live ingest plus a diagnostic event feed | Snapshot at invocation |
+| Retroactive | No — only sees sessions that ran after install | Yes — every session you've ever run |
+| Form factor | Tray app plus web dashboard | Terminal CLI |
+| Setup | One exe, auto-patches `~/.claude/settings.json` | `npx ccusage@latest` |
+| Cross-platform | Windows-first today | Anywhere Node runs |
+| Outbound network | None (forwarder opt-in) | None |
+
+The tools are complementary more than competing. A reasonable workflow:
+
+- Run `npx ccusage@latest` once for the retroactive month-to-date number on a machine that has never been instrumented.
+- Run Andon from then on for the persistent dashboard, behavioural views (accept-rate by language, file heatmap, repo attribution), the live OTLP diagnostic feed, and optional forwarding to your own collector.
+
 ## Requirements
 
 - Windows 10/11 (x64). No admin rights required.
