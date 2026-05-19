@@ -22,6 +22,8 @@ pub struct IngestStats {
     pub records_processed: i64,
     pub records_errored: i64,
     pub sessions_added: i64,
+    pub tokens_filled: i64,
+    pub cost_filled: i64,
     pub duration_ms: i64,
 }
 
@@ -42,6 +44,8 @@ pub async fn backfill(
                 stats.records_processed += s.records_processed;
                 stats.records_errored += s.records_errored;
                 stats.sessions_added += s.sessions_added;
+                stats.tokens_filled += s.tokens_filled;
+                stats.cost_filled += s.cost_filled;
             }
             Err(e) => {
                 tracing::error!(?path, error = ?e, "jsonl ingest failed");
@@ -136,6 +140,8 @@ async fn ingest_one_inner(
                 .unwrap_or(reconciler::Coverage::JsonlOnly);
             match fresh_ing.ingest_derived(&events, cov) {
                 Ok((tokens, cost)) => {
+                    stats.tokens_filled += tokens;
+                    stats.cost_filled += cost;
                     if tokens + cost > 0 {
                         tracing::info!(
                             sid,

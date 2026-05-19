@@ -54,23 +54,34 @@ async fn backfill_is_idempotent() {
     let (pool, _g) = fixture_pool();
     let ing = test_ingestor(&pool);
     let home = tempfile::tempdir().unwrap();
+    // One turn with tokens + cost so the second run has something to dedup against.
     write_transcript(
         home.path(),
         "x",
         &[
             r#"{"type":"user","sessionId":"sIDP","timestamp":"2026-05-19T10:00:00.000Z","message":{"role":"user","content":[]}}"#,
+            r#"{"type":"assistant","sessionId":"sIDP","timestamp":"2026-05-19T10:00:01.000Z","message":{"role":"assistant","model":"claude-opus-4-7","usage":{"input_tokens":100,"output_tokens":200}}}"#,
         ],
     );
     let pool_arc = Arc::clone(&pool);
-    let _ = jsonl::backfill(&pool_arc, &ing, home.path()).await.unwrap();
-    let _ = jsonl::backfill(&pool_arc, &ing, home.path()).await.unwrap();
+
+    let s1 = jsonl::backfill(&pool_arc, &ing, home.path()).await.unwrap();
+    let s2 = jsonl::backfill(&pool_arc, &ing, home.path()).await.unwrap();
+
     let conn = pool.get().unwrap();
-    let n: i64 = conn
-        .query_row(
-            "SELECT COUNT(*) FROM sessions WHERE session_id='sIDP'",
-            [],
-            |r| r.get(0),
-        )
+    let sessions: i64 = conn
+        .query_row("SELECT COUNT(*) FROM sessions WHERE session_id='sIDP'", [], |r| r.get(0))
         .unwrap();
-    assert_eq!(n, 1, "second run must not duplicate the session row");
+    let tokens: i64 = conn
+        .query_row("SELECT COUNT(*) FROM token_usage WHERE session_id='sIDP'", [], |r| r.get(0))
+        .unwrap();
+    let costs: i64 = conn
+        .query_row("SELECT COUNT(*) FROM cost_entries WHERE session_id='sIDP'", [], |r| r.get(0))
+        .unwrap();
+    assert_eq!(sessions, 1, "session row not duplicated");
+    assert_eq!(tokens, 2, "input + output rows; no duplicates from second run");
+    assert_eq!(costs, 1, "single cost row");
+    assert!(s1.tokens_filled >= 2, "first run filled at least 2 token rows");
+    assert_eq!(s2.tokens_filled, 0, "second run filled nothing");
+    assert_eq!(s2.cost_filled, 0);
 }
