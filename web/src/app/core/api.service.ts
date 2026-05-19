@@ -8,10 +8,16 @@ import {
   DailySeries,
   DbStats,
   FileHeatmapRow,
+  JsonlBackfillResponse,
+  JsonlErrorEntry,
+  JsonlIngestRun,
+  ModelMixResponse,
   OverviewToday,
   RepoSummary,
   SessionDetail,
   SessionSummary,
+  SlashCommandEntry,
+  SubAgentEntry,
   TopRepoEntry,
 } from './models';
 
@@ -293,6 +299,26 @@ export class ApiService {
   }
   backfillRepos(): Observable<BackfillResult> {
     return this.http.post<BackfillResult>(`${BASE}/api/repo/backfill`, {});
+  }
+
+  // ----- behaviour + JSONL ingest -----
+  modelMix(): Observable<ModelMixResponse> {
+    return this.http.get<ModelMixResponse>(`${BASE}/api/behaviour/model-mix`);
+  }
+  slashCommands(): Observable<SlashCommandEntry[]> {
+    return this.http.get<SlashCommandEntry[]>(`${BASE}/api/behaviour/slash-commands`);
+  }
+  subagents(): Observable<SubAgentEntry[]> {
+    return this.http.get<SubAgentEntry[]>(`${BASE}/api/behaviour/subagents`);
+  }
+  jsonlErrors(): Observable<JsonlErrorEntry[]> {
+    return this.http.get<JsonlErrorEntry[]>(`${BASE}/api/jsonl/errors`);
+  }
+  jsonlIngestRuns(): Observable<JsonlIngestRun[]> {
+    return this.http.get<JsonlIngestRun[]>(`${BASE}/api/jsonl/ingest-runs`);
+  }
+  ingestJsonl(): Observable<JsonlBackfillResponse> {
+    return this.http.post<JsonlBackfillResponse>(`${BASE}/api/jsonl/backfill`, {});
   }
 }
 

@@ -105,3 +105,23 @@ export interface BackfillResult {
   scanned: number;
   updated: number;
 }
+
+// ---- Behaviour + JSONL ingest ----
+
+export interface ModelMixEntry { model: string; invocations: number; sessions: number; }
+export interface ModelToolCell { model: string; tool: string; count: number; }
+export interface ModelMixResponse { by_model: ModelMixEntry[]; by_model_tool: ModelToolCell[]; }
+export interface SlashCommandEntry { name: string; count: number; }
+export interface SubAgentEntry { subagent_type: string; invocations: number; }
+export interface JsonlErrorEntry {
+  jsonl_path: string; line_no: number; error_kind: string;
+  error_msg: string; cc_version: string | null; ingested_at: number;
+}
+export interface JsonlIngestRun {
+  id: number; kind: string; started_at: number; ended_at: number | null;
+  files_processed: number; records_processed: number; records_errored: number;
+}
+export interface JsonlBackfillResponse {
+  files_processed: number; records_processed: number; records_errored: number;
+  sessions_added: number; duration_ms: number;
+}
