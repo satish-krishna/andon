@@ -44,15 +44,20 @@ pub fn token_row_already_covered(
     };
     let lo = ts_ms - window_ms;
     let hi = ts_ms + window_ms;
-    conn.query_row(
+    match conn.query_row(
         "SELECT 1 FROM token_usage
          WHERE session_id = ?1 AND model = ?2 AND token_type = ?3
            AND timestamp BETWEEN ?4 AND ?5
          LIMIT 1",
         params![session_id, model, token_type, lo, hi],
         |_| Ok(true),
-    )
-    .unwrap_or(false)
+    ) {
+        Ok(found) => found,
+        Err(rusqlite::Error::QueryReturnedNoRows) => false,
+        // Conservative: a real query failure (e.g. SQLITE_BUSY) means we can't
+        // be sure — treat as covered so we skip the write rather than risk a duplicate.
+        Err(_) => true,
+    }
 }
 
 /// Returns true if `cost_entries` already has a row for this
@@ -69,15 +74,20 @@ pub fn cost_row_already_covered(
     };
     let lo = ts_ms - window_ms;
     let hi = ts_ms + window_ms;
-    conn.query_row(
+    match conn.query_row(
         "SELECT 1 FROM cost_entries
          WHERE session_id = ?1 AND model = ?2
            AND timestamp BETWEEN ?3 AND ?4
          LIMIT 1",
         params![session_id, model, lo, hi],
         |_| Ok(true),
-    )
-    .unwrap_or(false)
+    ) {
+        Ok(found) => found,
+        Err(rusqlite::Error::QueryReturnedNoRows) => false,
+        // Conservative: a real query failure (e.g. SQLITE_BUSY) means we can't
+        // be sure — treat as covered so we skip the write rather than risk a duplicate.
+        Err(_) => true,
+    }
 }
 
 #[cfg(test)]

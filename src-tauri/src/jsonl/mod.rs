@@ -142,7 +142,9 @@ async fn ingest_one_inner(
                 Ok((tokens, cost)) => {
                     stats.tokens_filled += tokens;
                     stats.cost_filled += cost;
-                    if tokens + cost > 0 {
+                    // Only an OTLP-covered session can be "gap-filled" — for a
+                    // JSONL-only session these rows are the primary import, not gaps.
+                    if matches!(cov, reconciler::Coverage::Otlp) && tokens + cost > 0 {
                         tracing::info!(
                             sid,
                             tokens_filled = tokens,

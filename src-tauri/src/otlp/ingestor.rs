@@ -279,7 +279,7 @@ impl Ingestor {
                     if matches!(coverage, Coverage::Otlp) {
                         let _ = tx.execute(
                             "UPDATE sessions SET data_source = 'mixed'
-                             WHERE session_id = ?1 AND data_source = 'otlp'",
+                             WHERE session_id = ?1 AND COALESCE(data_source, 'otlp') = 'otlp'",
                             params![session_id],
                         );
                     }
@@ -320,7 +320,7 @@ impl Ingestor {
                             // Flip data_source if this is the first JSONL row landing on an OTLP-marked session.
                             let _ = tx.execute(
                                 "UPDATE sessions SET data_source = 'mixed'
-                                 WHERE session_id = ?1 AND data_source = 'otlp'",
+                                 WHERE session_id = ?1 AND COALESCE(data_source, 'otlp') = 'otlp'",
                                 params![session_id],
                             );
                         }
@@ -351,7 +351,7 @@ impl Ingestor {
                         cost_filled += 1;
                         let _ = tx.execute(
                             "UPDATE sessions SET data_source = 'mixed'
-                             WHERE session_id = ?1 AND data_source = 'otlp'",
+                             WHERE session_id = ?1 AND COALESCE(data_source, 'otlp') = 'otlp'",
                             params![session_id],
                         );
                     }
