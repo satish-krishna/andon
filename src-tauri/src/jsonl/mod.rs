@@ -4,3 +4,4 @@ pub mod record;
 pub mod pricing;
 pub mod reducer;
 pub mod parser;
+pub mod walker;
