@@ -1,0 +1,79 @@
+<div class="p-6 space-y-8">
+  <h1 class="text-2xl font-semibold">Behaviour</h1>
+
+  <section>
+    <h2 class="text-lg font-medium mb-3">Model mix (by frequency)</h2>
+    @if (modelMix(); as mm) {
+      <div class="grid grid-cols-2 gap-6">
+        <div>
+          <h3 class="text-sm text-zinc-400 mb-2">Invocations per model</h3>
+          <ul class="space-y-1">
+            @for (m of mm.by_model; track m.model) {
+              <li class="flex justify-between text-sm">
+                <span>{{ m.model }}</span>
+                <span class="font-mono">{{ m.invocations | number }}</span>
+              </li>
+            }
+          </ul>
+        </div>
+        <div>
+          <h3 class="text-sm text-zinc-400 mb-2">Sessions per model</h3>
+          <ul class="space-y-1">
+            @for (m of mm.by_model; track m.model) {
+              <li class="flex justify-between text-sm">
+                <span>{{ m.model }}</span>
+                <span class="font-mono">{{ m.sessions | number }}</span>
+              </li>
+            }
+          </ul>
+        </div>
+      </div>
+      <div class="mt-6">
+        <h3 class="text-sm text-zinc-400 mb-2">Tools per model</h3>
+        <table class="text-xs">
+          <tbody>
+            @for (c of mm.by_model_tool; track c.model + c.tool) {
+              <tr>
+                <td class="font-mono pr-3">{{ c.model }}</td>
+                <td class="font-mono pr-3">{{ c.tool }}</td>
+                <td class="text-right text-zinc-400">{{ c.count | number }}</td>
+              </tr>
+            }
+          </tbody>
+        </table>
+      </div>
+    }
+  </section>
+
+  <section>
+    <h2 class="text-lg font-medium mb-3">Slash commands</h2>
+    @if (slash().length === 0) {
+      <p class="text-xs text-zinc-500">No slash commands detected yet.</p>
+    } @else {
+      <ul class="space-y-1">
+        @for (c of slash(); track c.name) {
+          <li class="flex justify-between text-sm">
+            <span class="font-mono">/{{ c.name }}</span>
+            <span class="text-zinc-400">{{ c.count | number }}</span>
+          </li>
+        }
+      </ul>
+    }
+  </section>
+
+  <section>
+    <h2 class="text-lg font-medium mb-3">Sub-agent usage</h2>
+    @if (subs().length === 0) {
+      <p class="text-xs text-zinc-500">No sub-agent (Task) invocations detected yet.</p>
+    } @else {
+      <ul class="space-y-1">
+        @for (a of subs(); track a.subagent_type) {
+          <li class="flex gap-4 text-sm">
+            <span class="font-mono">{{ a.subagent_type }}</span>
+            <span>{{ a.invocations | number }} invocations</span>
+          </li>
+        }
+      </ul>
+    }
+  </section>
+</div>
