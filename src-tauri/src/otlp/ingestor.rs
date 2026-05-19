@@ -247,7 +247,7 @@ impl Ingestor {
         events: &[crate::jsonl::reducer::DerivedEvent],
         coverage: crate::jsonl::reconciler::Coverage,
     ) -> Result<(i64, i64)> {
-        use crate::jsonl::reconciler::{cost_row_already_covered, token_row_already_covered, Coverage};
+        use crate::jsonl::reconciler::{token_row_already_covered, Coverage};
         use crate::jsonl::reducer::DerivedEvent as E;
 
         const DEDUP_WINDOW_MS: i64 = 5_000;
@@ -255,11 +255,10 @@ impl Ingestor {
         if self.control.is_paused() {
             return Ok((0, 0));
         }
-        let pool = self.pool.clone();
         let mut conn = self.pool.get()?;
         let tx = conn.transaction()?;
         let mut tokens_filled: i64 = 0;
-        let mut cost_filled: i64 = 0;
+        let cost_filled: i64 = 0;
 
         for ev in events {
             match ev {
@@ -302,30 +301,28 @@ impl Ingestor {
                     ] {
                         if n > 0
                             && !token_row_already_covered(
-                                pool.as_ref(),
+                                self.pool.as_ref(),
                                 session_id,
                                 *ts,
                                 model,
                                 kind,
                                 DEDUP_WINDOW_MS,
                             )
-                        {
-                            if tx
+                            && tx
                                 .execute(
                                     "INSERT INTO token_usage (session_id, timestamp, model, token_type, count)
                                      VALUES (?1, ?2, ?3, ?4, ?5)",
                                     params![session_id, ts, model, kind, n],
                                 )
                                 .is_ok()
-                            {
-                                tokens_filled += 1;
-                                // Flip data_source if this is the first JSONL row landing on an OTLP-marked session.
-                                let _ = tx.execute(
-                                    "UPDATE sessions SET data_source = 'mixed'
-                                     WHERE session_id = ?1 AND data_source = 'otlp'",
-                                    params![session_id],
-                                );
-                            }
+                        {
+                            tokens_filled += 1;
+                            // Flip data_source if this is the first JSONL row landing on an OTLP-marked session.
+                            let _ = tx.execute(
+                                "UPDATE sessions SET data_source = 'mixed'
+                                 WHERE session_id = ?1 AND data_source = 'otlp'",
+                                params![session_id],
+                            );
                         }
                     }
                 }
