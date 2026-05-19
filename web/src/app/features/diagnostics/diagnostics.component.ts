@@ -4,6 +4,7 @@ import { FormsModule } from '@angular/forms';
 import { LucideAngularModule } from 'lucide-angular';
 
 import { ApiService } from '../../core/api.service';
+import { JsonlErrorEntry } from '../../core/models';
 
 @Component({
   selector: 'app-diagnostics',
@@ -19,6 +20,7 @@ export class DiagnosticsComponent implements OnInit, OnDestroy {
   expandedId = signal<number | null>(null);
   feedFilter = signal<string>('');
   paused = signal(false);
+  jsonlErrors = signal<JsonlErrorEntry[]>([]);
 
   private pollDiag?: ReturnType<typeof setInterval>;
   private pollFeed?: ReturnType<typeof setInterval>;
@@ -46,6 +48,7 @@ export class DiagnosticsComponent implements OnInit, OnDestroy {
 
   refreshDiag() {
     this.api.diagnostics().subscribe((d) => this.diag.set(d));
+    this.api.jsonlErrors().subscribe((es) => this.jsonlErrors.set(es));
   }
   refreshFeed() {
     this.api.recentEvents(80, this.feedFilter() || undefined).subscribe((r) => this.events.set(r.events));
