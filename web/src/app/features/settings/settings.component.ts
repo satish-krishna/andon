@@ -55,9 +55,11 @@ export class SettingsComponent implements OnInit {
     this.jsonlToast.set(null);
     this.api.ingestJsonl().subscribe({
       next: (s) => {
-        this.jsonlToast.set(
-          `Ingested ${s.records_processed} records from ${s.files_processed} files (${s.records_errored} errors).`,
-        );
+        const summary =
+          `Ingested ${s.records_processed} records from ${s.files_processed} files`;
+        const filled = s.tokens_filled + s.cost_filled;
+        const tail = filled > 0 ? ` · filled ${filled} gap rows from JSONL` : '';
+        this.jsonlToast.set(`${summary}${tail} (${s.records_errored} errors).`);
         this.jsonlBusy.set(false);
         this.api.jsonlIngestRuns().subscribe((rs) => this.jsonlLatestRun.set(rs[0] ?? null));
       },

@@ -123,5 +123,5 @@ export interface JsonlIngestRun {
 }
 export interface JsonlBackfillResponse {
   files_processed: number; records_processed: number; records_errored: number;
-  sessions_added: number; duration_ms: number;
+  sessions_added: number; tokens_filled: number; cost_filled: number; duration_ms: number;
 }
