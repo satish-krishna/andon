@@ -95,4 +95,19 @@ describe('FilterService', () => {
     expect(s.models().size).toBe(s.allModels().length);
     expect(s.customRange()).toBeNull();
   });
+
+  it('refresh() increments refreshTick and leaves filters untouched', () => {
+    const s = createService();
+    const before = s.refreshTick();
+    s.refresh();
+    expect(s.refreshTick()).toBe(before + 1);
+    s.refresh();
+    expect(s.refreshTick()).toBe(before + 2);
+    // refresh() must never behave like clearFilters() — filters stay as they were.
+    expect(s.range()).toBe('month');
+    expect(s.models().size).toBe(s.allModels().length);
+    expect(s.search()).toBe('');
+    expect(s.repos()).toEqual([]);
+    expect(s.hasActiveFilters()).toBe(false);
+  });
 });

@@ -57,6 +57,7 @@ tempfile = "3"
 insta = { version = "1", features = ["json", "redactions"] }
 tower = { version = "0.5", features = ["util"] }
 http-body-util = "0.1"
+proptest = "1"
 
 [profile.release]
 codegen-units = 1

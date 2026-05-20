@@ -43,9 +43,9 @@ impl ResourceCtx {
 }
 
 pub struct Ingestor {
-    pool: Arc<DbPool>,
-    control: IngestionControl,
-    diagnostics: Diagnostics,
+    pub(crate) pool: Arc<DbPool>,
+    pub(crate) control: IngestionControl,
+    pub(crate) diagnostics: Diagnostics,
 }
 
 impl Ingestor {
@@ -242,6 +242,172 @@ impl Ingestor {
         Ok(())
     }
 
+    /// Returns `(tokens_written, cost_written, sessions_inserted)`, where
+    /// `sessions_inserted` is the number of `sessions` rows the SessionLifecycle
+    /// `INSERT OR IGNORE` actually created (0 when the session already existed).
+    pub fn ingest_derived(
+        &self,
+        events: &[crate::jsonl::reducer::DerivedEvent],
+        coverage: crate::jsonl::reconciler::Coverage,
+    ) -> Result<(i64, i64, i64)> {
+        use crate::jsonl::reconciler::Coverage;
+        use crate::jsonl::reducer::DerivedEvent as E;
+
+        if self.control.is_paused() {
+            return Ok((0, 0, 0));
+        }
+        let mut conn = self.pool.get()?;
+        let tx = conn.transaction()?;
+        let mut tokens_written: i64 = 0;
+        let mut cost_written: i64 = 0;
+        let mut sessions_inserted: i64 = 0;
+
+        for ev in events {
+            match ev {
+                E::SessionLifecycle {
+                    session_id,
+                    started_at,
+                    ended_at,
+                    cc_version,
+                    cwd,
+                    git_branch,
+                } => {
+                    // Binary routing: a JSONL-only session is 'jsonl'; an
+                    // OTLP-covered session keeps 'otlp'. 'mixed' is no longer used.
+                    match tx.execute(
+                        "INSERT OR IGNORE INTO sessions
+                           (session_id, started_at, ended_at, service_version, cwd, repo_branch, data_source)
+                         VALUES (?1, ?2, ?3, ?4, ?5, ?6, 'jsonl')",
+                        params![session_id, started_at, ended_at, cc_version, cwd, git_branch],
+                    ) {
+                        Ok(rows) => sessions_inserted += rows as i64,
+                        Err(e) => {
+                            tracing::warn!(error = ?e, session_id, "JSONL session insert failed");
+                        }
+                    }
+                }
+                E::TokenUsage {
+                    session_id,
+                    request_id,
+                    ts,
+                    model,
+                    input,
+                    output,
+                    cache_create,
+                    cache_read,
+                } => {
+                    if matches!(coverage, Coverage::JsonlOnly) {
+                        for (kind, n) in [
+                            ("input", *input),
+                            ("output", *output),
+                            ("cacheRead", *cache_read),
+                            ("cacheCreation", *cache_create),
+                        ] {
+                            if n > 0 {
+                                let affected = match tx.execute(
+                                    "INSERT INTO token_usage
+                                       (session_id, request_id, timestamp, model, token_type, count)
+                                     VALUES (?1, ?2, ?3, ?4, ?5, ?6)
+                                     ON CONFLICT(request_id, token_type)
+                                       WHERE request_id IS NOT NULL DO NOTHING",
+                                    params![session_id, request_id, ts, model, kind, n],
+                                ) {
+                                    Ok(rows) => rows,
+                                    Err(e) => {
+                                        // ON CONFLICT DO NOTHING yields Ok(0) on a duplicate, so any Err
+                                        // here is a genuine insert failure — log it, never surface it.
+                                        tracing::warn!(error = ?e, session_id, "JSONL token_usage insert failed");
+                                        0
+                                    }
+                                };
+                                tokens_written += affected as i64;
+                            }
+                        }
+                    }
+                }
+                E::CostEntry {
+                    session_id,
+                    request_id,
+                    ts,
+                    model,
+                    cost_usd,
+                } => {
+                    if matches!(coverage, Coverage::JsonlOnly) && *cost_usd > 0.0 {
+                        let affected = match tx.execute(
+                            "INSERT INTO cost_entries
+                               (session_id, request_id, timestamp, model, cost_usd)
+                             VALUES (?1, ?2, ?3, ?4, ?5)
+                             ON CONFLICT(request_id)
+                               WHERE request_id IS NOT NULL DO NOTHING",
+                            params![session_id, request_id, ts, model, cost_usd],
+                        ) {
+                            Ok(rows) => rows,
+                            Err(e) => {
+                                // ON CONFLICT DO NOTHING yields Ok(0) on a duplicate, so any Err
+                                // here is a genuine insert failure — log it, never surface it.
+                                tracing::warn!(error = ?e, session_id, "JSONL cost_entries insert failed");
+                                0
+                            }
+                        };
+                        cost_written += affected as i64;
+                    }
+                }
+                E::ToolCall {
+                    session_id,
+                    ts,
+                    tool_name,
+                    file_path,
+                    model,
+                } => {
+                    if matches!(coverage, Coverage::JsonlOnly) {
+                        let _ = tx.execute(
+                            "INSERT INTO tool_decisions
+                               (session_id, timestamp, tool_name, decision, language, file_path, source, model)
+                             VALUES (?1, ?2, ?3, 'invoke', NULL, ?4, 'jsonl', ?5)",
+                            params![session_id, ts, tool_name, file_path, model],
+                        );
+                    }
+                }
+                E::SlashCommand {
+                    session_id,
+                    ts,
+                    name,
+                    arg_count,
+                } => {
+                    let _ = tx.execute(
+                        "INSERT INTO slash_commands (session_id, timestamp, command_name, arg_count)
+                         SELECT ?1, ?2, ?3, ?4
+                         WHERE NOT EXISTS (
+                             SELECT 1 FROM slash_commands
+                             WHERE session_id = ?1 AND timestamp = ?2 AND command_name = ?3
+                         )",
+                        params![session_id, ts, name, arg_count],
+                    );
+                }
+                E::SubAgentCall {
+                    parent_id,
+                    child_id,
+                    subagent_type,
+                    started_at,
+                } => {
+                    let _ = tx.execute(
+                        "INSERT INTO subagent_calls
+                           (parent_session_id, child_session_id, subagent_type, started_at)
+                         SELECT ?1, ?2, ?3, ?4
+                         WHERE NOT EXISTS (
+                             SELECT 1 FROM subagent_calls
+                             WHERE parent_session_id = ?1
+                               AND started_at = ?4
+                               AND COALESCE(subagent_type, '') = COALESCE(?3, '')
+                         )",
+                        params![parent_id, child_id, subagent_type, started_at],
+                    );
+                }
+            }
+        }
+        tx.commit()?;
+        Ok((tokens_written, cost_written, sessions_inserted))
+    }
 }
 
 fn handle_event(

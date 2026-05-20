@@ -20,3 +20,6 @@ Thumbs.db
 *.iml
 /.remember
 .claude/settings.local.json
+
+# Release build transcript
+scripts/build-release.log

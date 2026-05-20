@@ -5,6 +5,7 @@ import { ActivatedRoute, RouterLink } from '@angular/router';
 import { LucideAngularModule } from 'lucide-angular';
 
 import { ApiService, CoverageHint, V2Session, V2FileRow } from '../../core/api.service';
+import { sourceLabel, sourceDotClass, sourceTooltip } from '../../core/cost-source';
 import { FilterService } from '../../core/filter.service';
 import { FilterBarComponent } from '../../shared/filter-bar.component';
 import { RepoSummary, SessionDetail } from '../../core/models';
@@ -40,6 +41,7 @@ export class SessionsComponent implements OnInit {
 
   constructor() {
     effect(() => {
+      this.filter.refreshTick(); // re-run when the Refresh button is clicked
       const w = this.filter.window();
       const models = this.filter.modelsCsv();
       const repo = this.filter.reposCsv();
@@ -145,6 +147,9 @@ export class SessionsComponent implements OnInit {
   }
 
   Math = Math;
+  sourceLabel = sourceLabel;
+  sourceDotClass = sourceDotClass;
+  sourceTooltip = sourceTooltip;
 
   modelLabel(m: string | null): string {
     if (!m) return '—';

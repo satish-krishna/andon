@@ -20,6 +20,9 @@ export class FilterService {
   readonly search = signal<string>('');
   readonly repos = signal<string[]>([]);
 
+  /** Bumped by refresh() so filter-driven page effects re-fetch on demand. */
+  readonly refreshTick = signal(0);
+
   readonly window = computed<{ fromMs: number; toMs: number }>(() => {
     const r = this.range();
     if (r === 'custom') {
@@ -138,6 +141,11 @@ export class FilterService {
     this.models.set(new Set(ALL_MODELS));
     this.search.set('');
     this.repos.set([]);
+  }
+
+  /** Force a re-fetch on pages whose data effect reads refreshTick(). */
+  refresh() {
+    this.refreshTick.update((n) => n + 1);
   }
 
   allModels(): readonly string[] {

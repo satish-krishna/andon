@@ -14,7 +14,7 @@ Under the hood it's pretty boring on purpose:
 - Works with any Claude Code plan — Pro, Max, Team, Enterprise, API key. Telemetry is client-side, so the plan doesn't matter.
 - All listeners bind to `127.0.0.1`. No account, no auth.
 
-> **Privacy, in plain terms.** <ins>**No secrets, code contents, or prompts are ever read or stored.**</ins> Andon only ingests the numeric/metadata signal Claude Code emits — token counts, cost, accept/reject decisions, file paths, timings. <ins>**Nothing leaves the engineer's machine.**</ins> The SQLite file sits in your home directory and the OTLP listeners are bound to localhost.
+> **Privacy, in plain terms.** <ins>**No secrets, code contents, or prompts are ever persisted.**</ins> Andon's JSONL parser reads transcript files locally to derive numeric and structural signals (token counts, tool names, file paths, slash command names), but the reducer drops all prompt and response text before any DB write. Andon also ingests the numeric/metadata signal Claude Code emits via OTLP — token counts, cost, accept/reject decisions, file paths, timings. <ins>**Nothing leaves the engineer's machine.**</ins> The SQLite file sits in your home directory and the OTLP listeners are bound to localhost.
 >
 > *For now.* The local-only model is deliberate for v1. A natural next step, **if and only if a team wants it**, is an opt-in mode where the listener and storage live on a shared host so a team or org can see a roll-up. That would be opt-in, configurable, and still wouldn't change what data is collected — only where it's stored.
 

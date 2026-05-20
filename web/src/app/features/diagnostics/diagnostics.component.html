@@ -221,6 +221,48 @@
       </div>
     </section>
 
+    <section class="panel">
+      <div class="panel-title">JSONL parse errors</div>
+      <div class="panel-body">
+        @if (jsonlErrors().length === 0) {
+          <div class="text-muted text-xs font-mono py-4">No JSONL parse errors recorded.</div>
+        } @else {
+          <p class="text-xs text-warn font-mono mb-2">{{ jsonlErrors().length }} recent errors:</p>
+          <ul class="text-[11px] font-mono space-y-1 max-h-64 overflow-y-auto">
+            @for (e of jsonlErrors().slice(0, 20); track e.ingested_at + ':' + e.line_no) {
+              <li class="border-b border-border/30 py-1">
+                <span class="text-muted">[{{ e.error_kind }}]</span>
+                <span class="break-all">{{ e.jsonl_path }}:{{ e.line_no }}</span>
+                <div class="text-muted text-[10px]">{{ e.error_msg }}</div>
+                @if (e.cc_version) { <span class="text-muted text-[10px]">cc:{{ e.cc_version }}</span> }
+              </li>
+            }
+          </ul>
+        }
+      </div>
+    </section>
+
+    <section class="panel">
+      <div class="panel-title">Possible OTLP coverage gaps</div>
+      <div class="panel-body">
+        @if (coverageGaps().length === 0) {
+          <div class="text-muted text-xs font-mono py-4">No coverage gaps detected.</div>
+        } @else {
+          <p class="text-xs text-warn font-mono mb-2">
+            {{ coverageGaps().length }} session(s) where the transcript shows more API calls than OTLP recorded:
+          </p>
+          <ul class="text-[11px] font-mono space-y-1 max-h-64 overflow-y-auto">
+            @for (g of coverageGaps(); track g.session_id) {
+              <li class="border-b border-border/30 py-1">
+                <span class="break-all">{{ g.session_id }}</span>
+                <span class="text-muted"> — JSONL {{ g.jsonl_calls }} vs OTLP {{ g.otlp_calls }}</span>
+              </li>
+            }
+          </ul>
+        }
+      </div>
+    </section>
+
   } @else {
     <div class="text-center py-10 text-muted font-mono">Loading…</div>
   }

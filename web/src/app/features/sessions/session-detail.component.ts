@@ -5,6 +5,7 @@ import { switchMap } from 'rxjs';
 
 import { ApiService } from '../../core/api.service';
 import { SessionDetail } from '../../core/models';
+import { sourceLabel, sourceDotClass, sourceTooltip } from '../../core/cost-source';
 import { PanelComponent } from '../../shared/panel.component';
 import { EmptyComponent } from '../../shared/empty.component';
 
@@ -49,6 +50,13 @@ import { EmptyComponent } from '../../shared/empty.component';
           </app-panel>
           <app-panel title="Cost">
             <div class="text-2xl font-mono">$ {{ d.session.cost_usd | number : '1.4-4' }}</div>
+            @if (d.session.cost_source) {
+              <div class="mt-1 inline-flex items-center gap-1.5 text-xs text-muted"
+                   [title]="sourceTooltip(d.session.cost_source)">
+                <span class="inline-block w-2 h-2 rounded-full" [ngClass]="sourceDotClass(d.session.cost_source)"></span>
+                {{ sourceLabel(d.session.cost_source) }}
+              </div>
+            }
           </app-panel>
           <app-panel title="Tokens">
             <div class="text-sm font-mono">in {{ d.session.tokens_input | number }}</div>
@@ -143,6 +151,10 @@ export class SessionDetailComponent implements OnInit {
   detail = signal<SessionDetail | null>(null);
   reportExists = signal(false);
   reportBusy   = signal(false);
+
+  sourceLabel = sourceLabel;
+  sourceDotClass = sourceDotClass;
+  sourceTooltip = sourceTooltip;
 
   constructor(private route: ActivatedRoute, private api: ApiService) {}
 

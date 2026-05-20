@@ -51,14 +51,22 @@ import { FilterService, RangePreset } from '../core/filter.service';
             </button>
           }
         </div>
-        @if (filter.hasActiveFilters()) {
-          <button class="ml-auto text-muted hover:text-text font-mono text-[11px] flex items-center gap-1"
-                  data-testid="clear-filters"
-                  aria-label="Clear filters"
-                  (click)="filter.clearFilters()">
-            <lucide-icon name="x" class="w-3 h-3"></lucide-icon>Clear
+        <div class="ml-auto flex items-center gap-3">
+          <button class="text-muted hover:text-text font-mono text-[11px] flex items-center gap-1"
+                  data-testid="refresh-data"
+                  aria-label="Refresh data"
+                  (click)="filter.refresh()">
+            <lucide-icon name="refresh-cw" class="w-3 h-3"></lucide-icon>Refresh
           </button>
-        }
+          @if (filter.hasActiveFilters()) {
+            <button class="text-muted hover:text-text font-mono text-[11px] flex items-center gap-1"
+                    data-testid="clear-filters"
+                    aria-label="Clear filters"
+                    (click)="filter.clearFilters()">
+              <lucide-icon name="x" class="w-3 h-3"></lucide-icon>Clear
+            </button>
+          }
+        </div>
       </div>
     </div>
   `,

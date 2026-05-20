@@ -106,7 +106,85 @@ CREATE INDEX idx_sessions_repo_remote ON sessions(repo_remote);
 CREATE INDEX idx_sessions_repo_root   ON sessions(repo_root);
 "#;
 
-const MIGRATIONS: &[(i32, &str)] = &[(1, MIGRATION_V1), (2, MIGRATION_V2), (3, MIGRATION_V3)];
+const MIGRATION_V4: &str = r#"
+-- Distinguishes OTLP-derived from JSONL-derived sessions.
+ALTER TABLE sessions ADD COLUMN data_source TEXT;
+UPDATE sessions SET data_source = 'otlp' WHERE data_source IS NULL;
+
+-- Distinguishes OTLP-emitted decisions from JSONL-derived tool calls.
+ALTER TABLE tool_decisions ADD COLUMN source TEXT NOT NULL DEFAULT 'otlp';
+ALTER TABLE tool_decisions ADD COLUMN model TEXT;
+
+-- New tables.
+CREATE TABLE slash_commands (
+    id            INTEGER PRIMARY KEY AUTOINCREMENT,
+    session_id    TEXT NOT NULL,
+    timestamp     INTEGER NOT NULL,
+    command_name  TEXT NOT NULL,
+    arg_count     INTEGER NOT NULL DEFAULT 0
+);
+CREATE INDEX idx_slash_session ON slash_commands(session_id);
+CREATE INDEX idx_slash_name    ON slash_commands(command_name);
+
+CREATE TABLE subagent_calls (
+    id                 INTEGER PRIMARY KEY AUTOINCREMENT,
+    parent_session_id  TEXT NOT NULL,
+    child_session_id   TEXT,
+    subagent_type      TEXT,
+    started_at         INTEGER NOT NULL,
+    ended_at           INTEGER,
+    tool_call_count    INTEGER NOT NULL DEFAULT 0
+);
+CREATE INDEX idx_subagent_parent ON subagent_calls(parent_session_id);
+
+CREATE TABLE jsonl_errors (
+    id             INTEGER PRIMARY KEY AUTOINCREMENT,
+    jsonl_path     TEXT NOT NULL,
+    line_no        INTEGER NOT NULL,
+    error_kind     TEXT NOT NULL,
+    error_msg      TEXT NOT NULL,
+    cc_version     TEXT,
+    ingested_at    INTEGER NOT NULL
+);
+CREATE INDEX idx_jsonl_errors_ts ON jsonl_errors(ingested_at);
+
+CREATE TABLE jsonl_ingest_runs (
+    id                  INTEGER PRIMARY KEY AUTOINCREMENT,
+    kind                TEXT NOT NULL,
+    started_at          INTEGER NOT NULL,
+    ended_at            INTEGER,
+    files_processed     INTEGER NOT NULL DEFAULT 0,
+    records_processed   INTEGER NOT NULL DEFAULT 0,
+    records_errored     INTEGER NOT NULL DEFAULT 0
+);
+"#;
+
+const MIGRATION_V5: &str = r#"
+-- Per-API-call identity for JSONL-derived rows. NULL on OTLP-derived rows.
+ALTER TABLE cost_entries ADD COLUMN request_id TEXT;
+ALTER TABLE token_usage  ADD COLUMN request_id TEXT;
+
+-- Uniqueness enforced ONLY on JSONL rows; OTLP rows (request_id IS NULL) are unconstrained.
+CREATE UNIQUE INDEX idx_cost_request
+    ON cost_entries(request_id)            WHERE request_id IS NOT NULL;
+CREATE UNIQUE INDEX idx_token_request
+    ON token_usage(request_id, token_type) WHERE request_id IS NOT NULL;
+
+-- Per-session transcript API-call count; powers partial-OTLP detection.
+CREATE TABLE session_jsonl_calls (
+    session_id  TEXT PRIMARY KEY,
+    api_calls   INTEGER NOT NULL,
+    updated_at  INTEGER NOT NULL
+);
+"#;
+
+const MIGRATIONS: &[(i32, &str)] = &[
+    (1, MIGRATION_V1),
+    (2, MIGRATION_V2),
+    (3, MIGRATION_V3),
+    (4, MIGRATION_V4),
+    (5, MIGRATION_V5),
+];
 
 pub fn apply(conn: &mut Connection) -> Result<()> {
     conn.execute_batch(
@@ -173,7 +251,7 @@ mod tests {
         let v: i32 = conn.query_row(
             "SELECT MAX(version) FROM schema_version", [], |r| r.get(0)
         ).unwrap();
-        assert_eq!(v, 3);
+        assert_eq!(v, 5);
     }
 
     #[test]
@@ -184,6 +262,70 @@ mod tests {
         let v: i32 = conn.query_row(
             "SELECT MAX(version) FROM schema_version", [], |r| r.get(0)
         ).unwrap();
-        assert_eq!(v, 3);
+        assert_eq!(v, 5);
+    }
+
+    #[test]
+    fn v4_creates_jsonl_tables_and_extends_decisions() {
+        let mut conn = Connection::open_in_memory().unwrap();
+        apply(&mut conn).unwrap();
+
+        for tbl in ["slash_commands", "subagent_calls", "jsonl_errors", "jsonl_ingest_runs"] {
+            let n: i64 = conn.query_row(
+                "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name=?1",
+                [tbl], |r| r.get(0),
+            ).unwrap();
+            assert_eq!(n, 1, "missing table {tbl}");
+        }
+
+        let cols: Vec<String> = conn.prepare("PRAGMA table_info(tool_decisions)").unwrap()
+            .query_map([], |r| r.get::<_, String>(1)).unwrap()
+            .map(|r| r.unwrap()).collect();
+        for c in ["source", "model"] {
+            assert!(cols.contains(&c.to_string()), "missing tool_decisions column {c}");
+        }
+
+        let cols: Vec<String> = conn.prepare("PRAGMA table_info(sessions)").unwrap()
+            .query_map([], |r| r.get::<_, String>(1)).unwrap()
+            .map(|r| r.unwrap()).collect();
+        assert!(cols.contains(&"data_source".to_string()));
+
+        let v: i32 = conn.query_row(
+            "SELECT MAX(version) FROM schema_version", [], |r| r.get(0),
+        ).unwrap();
+        assert_eq!(v, 5);
+    }
+
+    #[test]
+    fn v5_adds_request_id_and_coverage_table() {
+        let mut conn = Connection::open_in_memory().unwrap();
+        apply(&mut conn).unwrap();
+
+        for tbl in ["cost_entries", "token_usage"] {
+            let cols: Vec<String> = conn
+                .prepare(&format!("PRAGMA table_info({tbl})")).unwrap()
+                .query_map([], |r| r.get::<_, String>(1)).unwrap()
+                .map(|r| r.unwrap()).collect();
+            assert!(cols.contains(&"request_id".to_string()), "{tbl} missing request_id");
+        }
+
+        let n: i64 = conn.query_row(
+            "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='session_jsonl_calls'",
+            [], |r| r.get(0),
+        ).unwrap();
+        assert_eq!(n, 1, "session_jsonl_calls table missing");
+
+        for idx in ["idx_cost_request", "idx_token_request"] {
+            let n: i64 = conn.query_row(
+                "SELECT COUNT(*) FROM sqlite_master WHERE type='index' AND name=?1",
+                [idx], |r| r.get(0),
+            ).unwrap();
+            assert_eq!(n, 1, "missing index {idx}");
+        }
+
+        let v: i32 = conn.query_row(
+            "SELECT MAX(version) FROM schema_version", [], |r| r.get(0),
+        ).unwrap();
+        assert_eq!(v, 5);
     }
 }

@@ -47,9 +47,6 @@
                   [attr.data-active]="filter.repos().includes(repo.key) ? 'true' : null"
                   (click)="toggleRepo(repo.key)">
             {{ repo.label }}
-            @if (!repo.has_remote) {
-              <span class="text-zinc-500 text-xs ml-1">(not git)</span>
-            }
           </button>
         }
       </div>

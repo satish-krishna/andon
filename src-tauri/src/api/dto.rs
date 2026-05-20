@@ -52,6 +52,7 @@ pub struct SessionSummary {
     #[serde(default)] pub repo_remote: Option<String>,
     #[serde(default)] pub repo_branch: Option<String>,
     #[serde(default)] pub repo_name: Option<String>,
+    #[serde(default)] pub cost_source: Option<String>,
 }
 
 #[derive(Serialize)]
@@ -116,8 +117,6 @@ pub struct RepoSummary {
     pub key: String,
     /// Display label: repo_name (preferred), else basename of key.
     pub label: String,
-    /// `true` when repo_remote is set.
-    pub has_remote: bool,
     pub session_count: i64,
     /// Any one repo_root observed for this group (MAX). Used by the Files page
     /// to derive relative paths when the user selects a remote-keyed repo chip.
@@ -144,4 +143,93 @@ pub struct CoverageHint {
 pub struct SessionListResponse {
     pub sessions: Vec<serde_json::Value>,
     pub coverage: CoverageHint,
+}
+
+// ---- JSONL ingest DTOs ----
+
+#[derive(Debug, serde::Serialize)]
+pub struct JsonlBackfillResponse {
+    pub files_processed: i64,
+    pub records_processed: i64,
+    pub records_errored: i64,
+    pub sessions_added: i64,
+    pub tokens_written: i64,
+    pub cost_written: i64,
+    pub duration_ms: i64,
+}
+
+impl From<crate::jsonl::IngestStats> for JsonlBackfillResponse {
+    fn from(s: crate::jsonl::IngestStats) -> Self {
+        Self {
+            files_processed: s.files_processed,
+            records_processed: s.records_processed,
+            records_errored: s.records_errored,
+            sessions_added: s.sessions_added,
+            tokens_written: s.tokens_written,
+            cost_written: s.cost_written,
+            duration_ms: s.duration_ms,
+        }
+    }
+}
+
+#[derive(Debug, serde::Serialize)]
+pub struct JsonlErrorEntry {
+    pub jsonl_path: String,
+    pub line_no: i64,
+    pub error_kind: String,
+    pub error_msg: String,
+    pub cc_version: Option<String>,
+    pub ingested_at: i64,
+}
+
+#[derive(Debug, serde::Serialize)]
+pub struct JsonlIngestRunEntry {
+    pub id: i64,
+    pub kind: String,
+    pub started_at: i64,
+    pub ended_at: Option<i64>,
+    pub files_processed: i64,
+    pub records_processed: i64,
+    pub records_errored: i64,
+}
+
+#[derive(Debug, serde::Serialize)]
+pub struct CoverageGap {
+    pub session_id: String,
+    pub jsonl_calls: i64,
+    pub otlp_calls: i64,
+}
+
+// ---- Behaviour DTOs ----
+
+#[derive(Debug, serde::Serialize)]
+pub struct ModelMixEntry {
+    pub model: String,
+    pub invocations: i64,
+    pub sessions: i64,
+}
+
+#[derive(Debug, serde::Serialize)]
+pub struct ModelToolCell {
+    pub model: String,
+    pub tool: String,
+    pub count: i64,
+}
+
+#[derive(Debug, serde::Serialize)]
+pub struct ModelMixResponse {
+    pub by_model: Vec<ModelMixEntry>,
+    pub by_model_tool: Vec<ModelToolCell>,
+}
+
+#[derive(Debug, serde::Serialize)]
+pub struct SlashCommandEntry {
+    pub name: String,
+    pub count: i64,
+}
+
+#[derive(Debug, serde::Serialize)]
+pub struct SubAgentEntry {
+    pub subagent_type: String,
+    pub invocations: i64,
 }
