@@ -86,6 +86,7 @@ export class OverviewComponent implements OnInit {
   constructor() {
     // refetch whenever the filter window or models change
     effect(() => {
+      this.filter.refreshTick(); // re-run when the Refresh button is clicked
       const w = this.filter.window();
       const models = this.filter.modelsCsv();
       const args = { fromMs: w.fromMs, toMs: w.toMs, models };

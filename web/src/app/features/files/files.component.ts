@@ -56,6 +56,7 @@ export class FilesComponent implements OnInit {
 
   constructor() {
     effect(() => {
+      this.filter.refreshTick(); // re-run when the Refresh button is clicked
       const w = this.filter.window();
       const langs = [...this.selectedLangs()].join(',');
       const repo = this.filter.reposCsv();

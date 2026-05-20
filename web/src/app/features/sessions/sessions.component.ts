@@ -40,6 +40,7 @@ export class SessionsComponent implements OnInit {
 
   constructor() {
     effect(() => {
+      this.filter.refreshTick(); // re-run when the Refresh button is clicked
       const w = this.filter.window();
       const models = this.filter.modelsCsv();
       const repo = this.filter.reposCsv();
