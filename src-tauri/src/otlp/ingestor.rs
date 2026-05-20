@@ -242,21 +242,25 @@ impl Ingestor {
         Ok(())
     }
 
+    /// Returns `(tokens_written, cost_written, sessions_inserted)`, where
+    /// `sessions_inserted` is the number of `sessions` rows the SessionLifecycle
+    /// `INSERT OR IGNORE` actually created (0 when the session already existed).
     pub fn ingest_derived(
         &self,
         events: &[crate::jsonl::reducer::DerivedEvent],
         coverage: crate::jsonl::reconciler::Coverage,
-    ) -> Result<(i64, i64)> {
+    ) -> Result<(i64, i64, i64)> {
         use crate::jsonl::reconciler::Coverage;
         use crate::jsonl::reducer::DerivedEvent as E;
 
         if self.control.is_paused() {
-            return Ok((0, 0));
+            return Ok((0, 0, 0));
         }
         let mut conn = self.pool.get()?;
         let tx = conn.transaction()?;
         let mut tokens_written: i64 = 0;
         let mut cost_written: i64 = 0;
+        let mut sessions_inserted: i64 = 0;
 
         for ev in events {
             match ev {
@@ -270,12 +274,17 @@ impl Ingestor {
                 } => {
                     // Binary routing: a JSONL-only session is 'jsonl'; an
                     // OTLP-covered session keeps 'otlp'. 'mixed' is no longer used.
-                    let _ = tx.execute(
+                    match tx.execute(
                         "INSERT OR IGNORE INTO sessions
                            (session_id, started_at, ended_at, service_version, cwd, repo_branch, data_source)
                          VALUES (?1, ?2, ?3, ?4, ?5, ?6, 'jsonl')",
                         params![session_id, started_at, ended_at, cc_version, cwd, git_branch],
-                    );
+                    ) {
+                        Ok(rows) => sessions_inserted += rows as i64,
+                        Err(e) => {
+                            tracing::warn!(error = ?e, session_id, "JSONL session insert failed");
+                        }
+                    }
                 }
                 E::TokenUsage {
                     session_id,
@@ -397,7 +406,7 @@ impl Ingestor {
             }
         }
         tx.commit()?;
-        Ok((tokens_written, cost_written))
+        Ok((tokens_written, cost_written, sessions_inserted))
     }
 }
 

@@ -89,6 +89,46 @@ async fn behaviour_endpoints_return_200_with_empty_db() {
 }
 
 #[tokio::test]
+async fn model_mix_counts_api_calls_not_token_rows() {
+    // Each API call writes several token_usage rows (input/output/cache…).
+    // "Invocations by model" must count distinct calls, not rows.
+    let (pool, _g) = common::fixture_pool();
+    common::seed_session(
+        &pool,
+        &common::SeedOpts {
+            session_id: "s-mix".into(),
+            model: "claude-opus-4-7".into(),
+            input_tokens: 100,
+            output_tokens: 200,
+            ..Default::default()
+        },
+    );
+    let (router, _g2) = test_router(&pool);
+    let res = router
+        .oneshot(
+            axum::http::Request::builder()
+                .method("GET")
+                .uri("/api/behaviour/model-mix")
+                .body(axum::body::Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(res.status(), StatusCode::OK);
+
+    let bytes = axum::body::to_bytes(res.into_body(), usize::MAX).await.unwrap();
+    let json: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+    let opus = json["by_model"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|e| e["model"] == "claude-opus-4-7")
+        .expect("opus row present");
+    assert_eq!(opus["invocations"], 1, "two token rows from one call count once");
+    assert_eq!(opus["sessions"], 1);
+}
+
+#[tokio::test]
 async fn coverage_gaps_flags_partial_otlp_session() {
     let (pool, _g) = common::fixture_pool();
     {

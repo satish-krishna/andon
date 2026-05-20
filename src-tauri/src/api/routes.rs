@@ -851,6 +851,22 @@ struct SessionEndPayload {
     transcript_path: Option<String>,
 }
 
+/// Resolve a hook-supplied `transcript_path`, but only if it is a `.jsonl` file
+/// genuinely under `~/.claude/projects/`. The web API is unauthenticated and
+/// localhost-only; validating the path keeps the session-end hook from doubling
+/// as a generic local file reader if the endpoint is ever reached from outside.
+/// Canonicalizing both sides resolves `..` and symlinks before the prefix check.
+fn validate_transcript_path(raw: &str) -> Option<std::path::PathBuf> {
+    let projects = dirs::home_dir()?
+        .join(".claude")
+        .join("projects")
+        .canonicalize()
+        .ok()?;
+    let path = std::path::PathBuf::from(raw).canonicalize().ok()?;
+    let is_jsonl = path.extension().and_then(|e| e.to_str()) == Some("jsonl");
+    (path.starts_with(&projects) && is_jsonl).then_some(path)
+}
+
 async fn hook_session_end(
     State(state): State<ApiState>,
     payload: Result<Json<SessionEndPayload>, JsonRejection>,
@@ -914,16 +930,26 @@ async fn hook_session_end(
     });
 
     if let Some(tp) = p.transcript_path.clone() {
-        let pool_j = state.pool.clone();
-        let control_j = state.control.clone();
-        let diag_j = state.diagnostics.clone();
-        tokio::spawn(async move {
-            let ing = crate::otlp::ingestor::Ingestor::new(pool_j.clone(), control_j, diag_j);
-            let path = std::path::PathBuf::from(tp);
-            if let Err(e) = crate::jsonl::ingest_one(&pool_j, &ing, &path).await {
-                tracing::error!(error = ?e, "session-end JSONL ingest failed");
+        match validate_transcript_path(&tp) {
+            Some(path) => {
+                let pool_j = state.pool.clone();
+                let control_j = state.control.clone();
+                let diag_j = state.diagnostics.clone();
+                tokio::spawn(async move {
+                    let ing =
+                        crate::otlp::ingestor::Ingestor::new(pool_j.clone(), control_j, diag_j);
+                    if let Err(e) = crate::jsonl::ingest_one(&pool_j, &ing, &path).await {
+                        tracing::error!(error = ?e, "session-end JSONL ingest failed");
+                    }
+                });
             }
-        });
+            None => {
+                tracing::warn!(
+                    transcript_path = %tp,
+                    "ignoring transcript_path outside ~/.claude/projects/"
+                );
+            }
+        }
     }
 
     // Best-effort repo inference for sessions the hook didn't cover.
@@ -2375,7 +2401,13 @@ async fn behaviour_model_mix(
         let conn = pool.get().ok()?;
         let by_model: Vec<crate::api::dto::ModelMixEntry> = conn
             .prepare(
-                "SELECT model, COUNT(*), COUNT(DISTINCT session_id)
+                // One API call writes several token_usage rows (input/output/
+                // cacheRead/cacheCreation), so COUNT(*) would inflate
+                // invocations ~2-4x. Count distinct calls instead: request_id
+                // for JSONL rows, timestamp for OTLP rows (request_id IS NULL).
+                "SELECT model,
+                        COUNT(DISTINCT COALESCE(request_id, timestamp)),
+                        COUNT(DISTINCT session_id)
                  FROM token_usage GROUP BY model ORDER BY 2 DESC",
             )
             .ok()?

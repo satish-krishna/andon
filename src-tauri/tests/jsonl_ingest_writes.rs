@@ -80,7 +80,7 @@ fn otlp_coverage_skips_jsonl_cost_and_tokens() {
             cost_usd: 0.42,
         },
     ];
-    let (tokens_written, cost_written) = ing.ingest_derived(&events, Coverage::Otlp).unwrap();
+    let (tokens_written, cost_written, _) = ing.ingest_derived(&events, Coverage::Otlp).unwrap();
     assert_eq!((tokens_written, cost_written), (0, 0));
 
     let conn = pool.get().unwrap();
@@ -117,7 +117,8 @@ fn jsonl_only_writes_cost_and_tokens_with_request_id() {
             cost_usd: 0.05,
         },
     ];
-    let (tokens_written, cost_written) = ing.ingest_derived(&events, Coverage::JsonlOnly).unwrap();
+    let (tokens_written, cost_written, _) =
+        ing.ingest_derived(&events, Coverage::JsonlOnly).unwrap();
     assert_eq!(tokens_written, 2, "input + output rows");
     assert_eq!(cost_written, 1);
 
@@ -176,7 +177,7 @@ fn jsonl_reingest_is_idempotent_via_request_id() {
         },
     ];
     ing.ingest_derived(&events, Coverage::JsonlOnly).unwrap();
-    let (t2, c2) = ing.ingest_derived(&events, Coverage::JsonlOnly).unwrap();
+    let (t2, c2, _) = ing.ingest_derived(&events, Coverage::JsonlOnly).unwrap();
     assert_eq!((t2, c2), (0, 0), "second ingest writes nothing");
 
     let conn = pool.get().unwrap();

@@ -16,11 +16,17 @@ pub struct ParseErr {
     pub cc_version: Option<String>,
 }
 
+/// The kinds of failure that can land in the `jsonl_errors.error_kind` column.
+/// Every variant is actually emitted — `JsonParse` here, `Io` here and by the
+/// ingest loop for unreadable transcripts, `ReducerPanic` by the ingest loop
+/// when `Reducer::reduce` panics on a record.
 #[derive(Debug, Clone, Copy)]
 pub enum ErrKind {
+    /// A line was not valid JSON.
     JsonParse,
-    UnknownType,
-    MissingField,
+    /// The transcript file, or a line of it, could not be read.
+    Io,
+    /// The reducer panicked while processing a record.
     ReducerPanic,
 }
 
@@ -28,8 +34,7 @@ impl ErrKind {
     pub fn as_str(&self) -> &'static str {
         match self {
             ErrKind::JsonParse => "json_parse",
-            ErrKind::UnknownType => "unknown_type",
-            ErrKind::MissingField => "missing_field",
+            ErrKind::Io => "io_error",
             ErrKind::ReducerPanic => "reducer_panic",
         }
     }
@@ -49,7 +54,7 @@ where
                 let cont = cb(Err(ParseErr {
                     file: path.to_path_buf(),
                     line_no,
-                    kind: ErrKind::JsonParse,
+                    kind: ErrKind::Io,
                     msg: format!("read error: {e}"),
                     cc_version: None,
                 }));

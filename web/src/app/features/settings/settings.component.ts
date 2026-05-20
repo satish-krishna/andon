@@ -68,7 +68,7 @@ export class SettingsComponent implements OnInit {
       },
       error: (e) => {
         const detail = e?.error?.error ?? e?.message ?? String(e);
-        this.jsonlToast.set({ msg: `Backfill failed: ${detail}`, kind: 'err' });
+        this.jsonlToast.set({ msg: `JSONL ingest failed: ${detail}`, kind: 'err' });
         this.jsonlBusy.set(false);
       },
     });

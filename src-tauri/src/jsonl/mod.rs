@@ -21,6 +21,8 @@ pub struct IngestStats {
     pub files_processed: i64,
     pub records_processed: i64,
     pub records_errored: i64,
+    /// Session rows newly inserted by this run; re-ingesting an existing
+    /// session contributes 0.
     pub sessions_added: i64,
     pub tokens_written: i64,
     pub cost_written: i64,
@@ -94,7 +96,7 @@ async fn ingest_one_inner(
         let mut events_by_session: std::collections::HashMap<String, Vec<reducer::DerivedEvent>> =
             std::collections::HashMap::new();
 
-        let _ = parser::for_each_record(&path_owned, |r| {
+        let scan = parser::for_each_record(&path_owned, |r| {
             stats.records_processed += 1;
             match r {
                 Ok(rec) => {
@@ -112,7 +114,7 @@ async fn ingest_one_inner(
                                 &pool_clone,
                                 &path_owned,
                                 0,
-                                "reducer_panic",
+                                parser::ErrKind::ReducerPanic.as_str(),
                                 "reducer panicked",
                                 None,
                             );
@@ -134,14 +136,32 @@ async fn ingest_one_inner(
             }
             true
         });
+        // A transcript that can't be opened or read at all is an ingest
+        // failure, not a silent success — log it and count it like a per-line
+        // error so `records_errored` and the Diagnostics page reflect reality.
+        if let Err(e) = scan {
+            log_jsonl_error(
+                &pool_clone,
+                &path_owned,
+                0,
+                parser::ErrKind::Io.as_str(),
+                &format!("transcript unreadable: {e}"),
+                None,
+            );
+            stats.records_errored += 1;
+        }
 
         for (sid, events) in events_by_session {
             let cov = reconciler::coverage_for(&pool_clone, &sid)
                 .unwrap_or(reconciler::Coverage::JsonlOnly);
             match fresh_ing.ingest_derived(&events, cov) {
-                Ok((tokens, cost)) => {
+                Ok((tokens, cost, sessions)) => {
                     stats.tokens_written += tokens;
                     stats.cost_written += cost;
+                    // `sessions` is the affected-row count of the
+                    // SessionLifecycle `INSERT OR IGNORE`: 1 for a genuinely
+                    // new session, 0 when re-running over an existing one.
+                    stats.sessions_added += sessions;
                 }
                 Err(e) => tracing::error!(sid, error = ?e, "ingest_derived failed"),
             }
@@ -154,7 +174,6 @@ async fn ingest_one_inner(
                 .collect::<std::collections::HashSet<_>>()
                 .len() as i64;
             record_jsonl_calls(&pool_clone, &sid, api_calls);
-            stats.sessions_added += 1;
         }
         Ok::<_, anyhow::Error>(stats)
     })

@@ -84,6 +84,32 @@ async fn backfill_is_idempotent() {
     assert!(s1.tokens_written >= 2, "first run filled at least 2 token rows");
     assert_eq!(s2.tokens_written, 0, "second run filled nothing");
     assert_eq!(s2.cost_written, 0);
+    assert_eq!(s1.sessions_added, 1, "first run inserts the session");
+    assert_eq!(s2.sessions_added, 0, "re-running adds no new session");
+}
+
+#[tokio::test]
+async fn ingest_one_unreadable_file_is_counted() {
+    // A transcript path that can't be opened must surface as an ingest error,
+    // not a silent records_processed=0 success that hides the failure.
+    let (pool, _g) = fixture_pool();
+    let ing = test_ingestor(&pool);
+    let dir = tempfile::tempdir().unwrap();
+    let missing = dir.path().join("never-written.jsonl");
+
+    let pool_arc = Arc::clone(&pool);
+    let stats = jsonl::ingest_one(&pool_arc, &ing, &missing).await.unwrap();
+    assert_eq!(stats.records_errored, 1, "unreadable transcript counted as an error");
+
+    let conn = pool.get().unwrap();
+    let errs: i64 = conn
+        .query_row(
+            "SELECT COUNT(*) FROM jsonl_errors WHERE error_kind='io_error'",
+            [],
+            |r| r.get(0),
+        )
+        .unwrap();
+    assert_eq!(errs, 1, "I/O failure logged to jsonl_errors");
 }
 
 #[tokio::test]
