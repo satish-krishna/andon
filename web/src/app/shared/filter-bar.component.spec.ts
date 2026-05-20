@@ -16,7 +16,7 @@ function setup(): { fixture: ComponentFixture<FilterBarComponent>; filter: Filte
     imports: [FilterBarComponent],
     providers: [
       FilterService,
-      // Provide only the icons used by FilterBarComponent (calendar, layers, x).
+      // Provide only the icons used by FilterBarComponent (calendar, layers, refresh-cw, x).
       // Without this, LucideAngularComponent throws on ngOnChanges.
       importProvidersFrom(LucideAngularModule.pick({ Calendar, Layers, RefreshCw, X })),
     ],
