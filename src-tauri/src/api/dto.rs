@@ -194,6 +194,13 @@ pub struct JsonlIngestRunEntry {
     pub records_errored: i64,
 }
 
+#[derive(Debug, serde::Serialize)]
+pub struct CoverageGap {
+    pub session_id: String,
+    pub jsonl_calls: i64,
+    pub otlp_calls: i64,
+}
+
 // ---- Behaviour DTOs ----
 
 #[derive(Debug, serde::Serialize)]

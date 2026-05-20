@@ -66,6 +66,7 @@ pub fn router(state: ApiState) -> Router {
         .route("/api/jsonl/backfill", post(jsonl_backfill))
         .route("/api/jsonl/errors", get(jsonl_errors))
         .route("/api/jsonl/ingest-runs", get(jsonl_ingest_runs))
+        .route("/api/jsonl/coverage-gaps", get(jsonl_coverage_gaps))
         // Behaviour views (Plan C)
         .route("/api/behaviour/model-mix", get(behaviour_model_mix))
         .route("/api/behaviour/slash-commands", get(behaviour_slash_commands))
@@ -2298,6 +2299,44 @@ async fn jsonl_ingest_runs(
                 files_processed: r.get(4)?,
                 records_processed: r.get(5)?,
                 records_errored: r.get(6)?,
+            })
+        })
+        .map(|i| i.filter_map(|r| r.ok()).collect())
+        .unwrap_or_default()
+    })
+    .await
+    .unwrap_or_default();
+    Json(rows)
+}
+
+#[tracing::instrument(skip(state))]
+async fn jsonl_coverage_gaps(
+    State(state): State<ApiState>,
+) -> Json<Vec<crate::api::dto::CoverageGap>> {
+    let pool = state.pool.clone();
+    let rows = tokio::task::spawn_blocking(move || -> Vec<_> {
+        let Ok(conn) = pool.get() else { return vec![] };
+        // OTLP-covered sessions (otlp_calls > 0) whose transcript shows more API
+        // calls than OTLP recorded — a likely mid-session loss of OTel coverage.
+        let Ok(mut stmt) = conn.prepare(
+            "SELECT session_id, jsonl_calls, otlp_calls FROM (
+                 SELECT sjc.session_id AS session_id,
+                        sjc.api_calls  AS jsonl_calls,
+                        (SELECT COUNT(DISTINCT timestamp) FROM token_usage tu
+                         WHERE tu.session_id = sjc.session_id
+                           AND tu.request_id IS NULL) AS otlp_calls
+                 FROM session_jsonl_calls sjc
+             )
+             WHERE otlp_calls > 0 AND jsonl_calls > otlp_calls
+             ORDER BY (jsonl_calls - otlp_calls) DESC",
+        ) else {
+            return vec![];
+        };
+        stmt.query_map([], |r| {
+            Ok(crate::api::dto::CoverageGap {
+                session_id: r.get(0)?,
+                jsonl_calls: r.get(1)?,
+                otlp_calls: r.get(2)?,
             })
         })
         .map(|i| i.filter_map(|r| r.ok()).collect())
