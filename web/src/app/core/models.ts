@@ -1,3 +1,5 @@
+import { CostSource } from './cost-source';
+
 export interface OverviewToday {
   cost_usd: number;
   sessions: number;
@@ -44,6 +46,7 @@ export interface SessionSummary {
   repo_remote?: string | null;
   repo_branch?: string | null;
   repo_name?: string | null;
+  cost_source: CostSource;
 }
 
 export interface KeyValueNum {
