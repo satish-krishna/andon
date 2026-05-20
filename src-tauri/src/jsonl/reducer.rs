@@ -308,4 +308,21 @@ mod tests {
         let line = r#"{"type":"user","timestamp":"2026-05-19T10:00:00.000Z","message":{"role":"user","content":[]}}"#;
         assert!(r.reduce(&parse_line(line).unwrap()).is_empty());
     }
+
+    #[test]
+    fn string_content_user_record_emits_slash_command() {
+        let mut r = Reducer::new();
+        let line = r#"{"type":"user","sessionId":"s1","timestamp":"2026-05-19T10:00:00.000Z","message":{"role":"user","content":"<command-name>/review</command-name><command-args>PR 42</command-args>"}}"#;
+        let out = r.reduce(&parse_line(line).unwrap());
+        let sc = out
+            .iter()
+            .find_map(|e| match e {
+                DerivedEvent::SlashCommand { name, arg_count, .. } => {
+                    Some((name.clone(), *arg_count))
+                }
+                _ => None,
+            })
+            .expect("slash command emitted from string-form content");
+        assert_eq!(sc, ("review".to_string(), 2));
+    }
 }

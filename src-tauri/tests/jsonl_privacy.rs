@@ -62,4 +62,21 @@ proptest! {
         let d = dump(&out);
         prop_assert!(!d.contains(&text), "reducer leaked assistant text: {text:?}");
     }
+
+    #[test]
+    fn user_string_content_text_never_leaks(prompt in "[A-Za-z0-9 _.,;:!?/-]{20,200}") {
+        // Same guarantee as `user_text_never_leaks`, but the prompt is the
+        // raw string value of `message.content` rather than an array text block.
+        let rec_json = json!({
+            "type": "user",
+            "sessionId": "s1",
+            "timestamp": "2026-05-19T10:00:00.000Z",
+            "message": { "role": "user", "content": prompt }
+        });
+        let rec: JsonlRecord = serde_json::from_value(rec_json).unwrap();
+        let mut r = Reducer::new();
+        let out = r.reduce(&rec);
+        let d = dump(&out);
+        prop_assert!(!d.contains(&prompt), "reducer leaked string-content user text: {prompt:?}");
+    }
 }
