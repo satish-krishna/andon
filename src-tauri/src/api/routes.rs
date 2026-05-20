@@ -7,7 +7,7 @@ use axum::{
     response::IntoResponse,
     routing::{get, post},
 };
-use chrono::{Datelike, Local, NaiveDate, TimeZone};
+use chrono::{Datelike, Local, Months, NaiveDate, TimeZone};
 use rusqlite::params;
 use serde::Deserialize;
 use serde_json::json;
@@ -1237,36 +1237,23 @@ async fn reports_index(State(state): State<ApiState>) -> Json<serde_json::Value>
 // v2 — filterable endpoints
 // ============================================================================
 
-fn prev_month_same_day_window(from: i64) -> (i64, i64) {
-    // Compute "the same span, shifted back by ~1 month."
-    let now = Local::now();
-    let day_of_month = now.day();
-    let prev_month_start = now
-        .date_naive()
-        .with_day(1)
-        .and_then(|d| {
-            if d.month() == 1 {
-                NaiveDate::from_ymd_opt(d.year() - 1, 12, 1)
-            } else {
-                NaiveDate::from_ymd_opt(d.year(), d.month() - 1, 1)
-            }
-        })
-        .unwrap_or(now.date_naive());
-    let prev_month_target = prev_month_start
-        .with_day(day_of_month)
-        .unwrap_or(prev_month_start);
-    let prev_from = Local
-        .from_local_datetime(&prev_month_start.and_hms_opt(0, 0, 0).unwrap())
-        .single()
-        .map(|d| d.timestamp_millis())
-        .unwrap_or(0);
-    let prev_to = Local
-        .from_local_datetime(&prev_month_target.and_hms_opt(23, 59, 59).unwrap())
-        .single()
-        .map(|d| d.timestamp_millis())
-        .unwrap_or(0);
-    let _ = from;
-    (prev_from, prev_to)
+/// The selected `(from, to)` window shifted back by exactly one calendar
+/// month — the comparison window for the KPI strip's "vs last month" deltas.
+///
+/// Shifting the *actual* filter window (rather than a fixed month-to-date
+/// span) keeps the comparison honest: narrow the filter and the baseline
+/// narrows with it. `checked_sub_months` clamps day-of-month overflow (e.g.
+/// May 31 → Apr 30), so the result is always a valid instant.
+fn prev_period_window(from: i64, to: i64) -> (i64, i64) {
+    let shift = |ts: i64| -> i64 {
+        Local
+            .timestamp_millis_opt(ts)
+            .single()
+            .and_then(|dt| dt.checked_sub_months(Months::new(1)))
+            .map(|dt| dt.timestamp_millis())
+            .unwrap_or(ts)
+    };
+    (shift(from), shift(to))
 }
 
 fn delta_pct(current: f64, previous: f64) -> Option<f64> {
@@ -1345,7 +1332,7 @@ async fn v2_kpis(
     Query(q): Query<FilterQuery>,
 ) -> Result<Json<serde_json::Value>, ApiError> {
     let (from, to) = q.window();
-    let (prev_from, prev_to) = prev_month_same_day_window(from);
+    let (prev_from, prev_to) = prev_period_window(from, to);
     let conn = state.pool.get().map_err(ApiError::pool)?;
 
     let cost = sum_cost(&conn, from, to, &q);
@@ -2504,4 +2491,40 @@ async fn behaviour_subagents(
     .await
     .unwrap_or_default();
     Json(out)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn ms(y: i32, mo: u32, d: u32, h: u32, mi: u32) -> i64 {
+        Local
+            .with_ymd_and_hms(y, mo, d, h, mi, 0)
+            .single()
+            .expect("valid local datetime")
+            .timestamp_millis()
+    }
+
+    // The KPI strip compares the selected window against the same window one
+    // calendar month earlier — BOTH endpoints must shift, not just the start.
+    #[test]
+    fn prev_period_window_shifts_both_ends_back_one_month() {
+        let (pf, pt) = prev_period_window(ms(2026, 5, 1, 0, 0), ms(2026, 5, 20, 17, 30));
+        assert_eq!(pf, ms(2026, 4, 1, 0, 0));
+        assert_eq!(pt, ms(2026, 4, 20, 17, 30));
+    }
+
+    // Regression: prev_period_window's predecessor discarded its argument, so
+    // the "vs last month" deltas were frozen regardless of the filter window.
+    // Moving the filter's start must move the comparison window with it.
+    #[test]
+    fn prev_period_window_tracks_the_selected_window() {
+        let to = ms(2026, 5, 20, 0, 0);
+        let wide = prev_period_window(ms(2026, 5, 1, 0, 0), to);
+        let narrow = prev_period_window(ms(2026, 5, 18, 0, 0), to);
+        assert_ne!(
+            wide.0, narrow.0,
+            "previous-window start must follow the filter, not ignore it"
+        );
+    }
 }
