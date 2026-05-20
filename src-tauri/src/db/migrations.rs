@@ -159,11 +159,31 @@ CREATE TABLE jsonl_ingest_runs (
 );
 "#;
 
+const MIGRATION_V5: &str = r#"
+-- Per-API-call identity for JSONL-derived rows. NULL on OTLP-derived rows.
+ALTER TABLE cost_entries ADD COLUMN request_id TEXT;
+ALTER TABLE token_usage  ADD COLUMN request_id TEXT;
+
+-- Uniqueness enforced ONLY on JSONL rows; OTLP rows (request_id IS NULL) are unconstrained.
+CREATE UNIQUE INDEX idx_cost_request
+    ON cost_entries(request_id)            WHERE request_id IS NOT NULL;
+CREATE UNIQUE INDEX idx_token_request
+    ON token_usage(request_id, token_type) WHERE request_id IS NOT NULL;
+
+-- Per-session transcript API-call count; powers partial-OTLP detection.
+CREATE TABLE session_jsonl_calls (
+    session_id  TEXT PRIMARY KEY,
+    api_calls   INTEGER NOT NULL,
+    updated_at  INTEGER NOT NULL
+);
+"#;
+
 const MIGRATIONS: &[(i32, &str)] = &[
     (1, MIGRATION_V1),
     (2, MIGRATION_V2),
     (3, MIGRATION_V3),
     (4, MIGRATION_V4),
+    (5, MIGRATION_V5),
 ];
 
 pub fn apply(conn: &mut Connection) -> Result<()> {
@@ -231,7 +251,7 @@ mod tests {
         let v: i32 = conn.query_row(
             "SELECT MAX(version) FROM schema_version", [], |r| r.get(0)
         ).unwrap();
-        assert_eq!(v, 4);
+        assert_eq!(v, 5);
     }
 
     #[test]
@@ -242,7 +262,7 @@ mod tests {
         let v: i32 = conn.query_row(
             "SELECT MAX(version) FROM schema_version", [], |r| r.get(0)
         ).unwrap();
-        assert_eq!(v, 4);
+        assert_eq!(v, 5);
     }
 
     #[test]
@@ -273,6 +293,39 @@ mod tests {
         let v: i32 = conn.query_row(
             "SELECT MAX(version) FROM schema_version", [], |r| r.get(0),
         ).unwrap();
-        assert_eq!(v, 4);
+        assert_eq!(v, 5);
+    }
+
+    #[test]
+    fn v5_adds_request_id_and_coverage_table() {
+        let mut conn = Connection::open_in_memory().unwrap();
+        apply(&mut conn).unwrap();
+
+        for tbl in ["cost_entries", "token_usage"] {
+            let cols: Vec<String> = conn
+                .prepare(&format!("PRAGMA table_info({tbl})")).unwrap()
+                .query_map([], |r| r.get::<_, String>(1)).unwrap()
+                .map(|r| r.unwrap()).collect();
+            assert!(cols.contains(&"request_id".to_string()), "{tbl} missing request_id");
+        }
+
+        let n: i64 = conn.query_row(
+            "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='session_jsonl_calls'",
+            [], |r| r.get(0),
+        ).unwrap();
+        assert_eq!(n, 1, "session_jsonl_calls table missing");
+
+        for idx in ["idx_cost_request", "idx_token_request"] {
+            let n: i64 = conn.query_row(
+                "SELECT COUNT(*) FROM sqlite_master WHERE type='index' AND name=?1",
+                [idx], |r| r.get(0),
+            ).unwrap();
+            assert_eq!(n, 1, "missing index {idx}");
+        }
+
+        let v: i32 = conn.query_row(
+            "SELECT MAX(version) FROM schema_version", [], |r| r.get(0),
+        ).unwrap();
+        assert_eq!(v, 5);
     }
 }
