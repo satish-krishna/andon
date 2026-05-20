@@ -1,3 +1,7 @@
+> **SUPERSEDED (2026-05-19)** by `docs/superpowers/specs/2026-05-19-jsonl-cost-correctness-design.md`.
+> The per-row 5-second-window dedup described below could not catch the real
+> double-count (see that spec's Motivation). Kept for historical context only.
+
 # JSONL gap-filling for OTLP-partial sessions — Design (Plan C+)
 
 > Status: draft 2026-05-19 · author: SatishKrishna Pilla
