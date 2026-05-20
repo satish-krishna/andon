@@ -13,6 +13,8 @@ pub struct JsonlRecord {
     pub uuid: Option<String>,
     #[serde(rename = "parentUuid")]
     pub parent_uuid: Option<String>,
+    #[serde(rename = "requestId")]
+    pub request_id: Option<String>,
     pub timestamp: Option<String>,
     pub version: Option<String>,
     pub cwd: Option<String>,
@@ -151,5 +153,18 @@ mod tests {
         let line = r#"{"type":"user","sessionId":"s1","message":{"role":"user"}}"#;
         let msg = parse_line(line).expect("parse").message.expect("message");
         assert!(msg.content.is_empty(), "absent content -> empty vec");
+    }
+
+    #[test]
+    fn parses_request_id() {
+        let line = r#"{"type":"assistant","sessionId":"s1","requestId":"req_abc","message":{"role":"assistant","model":"claude-opus-4-7"}}"#;
+        let r = parse_line(line).expect("parse");
+        assert_eq!(r.request_id.as_deref(), Some("req_abc"));
+    }
+
+    #[test]
+    fn missing_request_id_is_none() {
+        let r = parse_line(r#"{"type":"assistant","sessionId":"s1"}"#).unwrap();
+        assert!(r.request_id.is_none());
     }
 }
