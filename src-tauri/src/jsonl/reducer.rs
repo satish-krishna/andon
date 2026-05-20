@@ -325,4 +325,17 @@ mod tests {
             .expect("slash command emitted from string-form content");
         assert_eq!(sc, ("review".to_string(), 2));
     }
+
+    #[test]
+    fn string_content_first_turn_emits_session_lifecycle() {
+        let mut r = Reducer::new();
+        // A session whose very first user record carries string-form content
+        // (previously a hard parse error, so the line was dropped entirely).
+        let line = r#"{"type":"user","sessionId":"s1","timestamp":"2026-05-19T10:00:00.000Z","cwd":"/r","gitBranch":"main","version":"2.1.0","message":{"role":"user","content":"<command-name>/config</command-name>"}}"#;
+        let out = r.reduce(&parse_line(line).unwrap());
+        let has_lifecycle = out
+            .iter()
+            .any(|e| matches!(e, DerivedEvent::SessionLifecycle { .. }));
+        assert!(has_lifecycle, "string-content first turn must emit SessionLifecycle");
+    }
 }

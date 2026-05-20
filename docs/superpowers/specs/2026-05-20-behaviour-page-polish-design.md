@@ -84,6 +84,16 @@ Implementation: a `deserialize_with` function on the `content` field using `serd
 
 After this lands, re-running Settings → "Ingest JSONL history" detects the real slash commands. No migration; `slash_commands` rows are additive and the `WHERE NOT EXISTS` idempotency guard prevents duplicates.
 
+A string-content user record was previously a hard parse error — the whole
+JSONL line was dropped. It now parses, so the reducer also runs `reduce_user`
+on it: if it is a session's first turn, a `SessionLifecycle` event is emitted
+that it previously was not. For a JSONL-only session whose first transcript
+line is a string-content record, this can move `started_at` earlier (to the
+true session start) and supply `cwd` / `git_branch` / `service_version` from
+that record. This is a correct retroactive fix; `INSERT OR IGNORE` means it
+applies only to freshly-ingested or never-seen sessions, not to sessions
+already in the database.
+
 ### Privacy
 
 The reducer now also reads string-form user content. This does not weaken the trust boundary: `reduce_user` still only extracts the `<command-name>` / `<command-args>` tag values and drops everything else when it returns. `DerivedEvent` carries no free text. The change is covered by extending the property test (Part 2 tests below).

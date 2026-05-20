@@ -80,3 +80,35 @@ proptest! {
         prop_assert!(!d.contains(&prompt), "reducer leaked string-content user text: {prompt:?}");
     }
 }
+
+/// A slash-command record exercises the tag-extraction path. The command
+/// name is metadata and may escape; the surrounding prompt text and the
+/// command-args text must not.
+#[test]
+fn slash_command_extraction_does_not_leak_surrounding_text() {
+    const LEADING: &str = "SENTINEL_LEADING_PROMPT_TEXT";
+    const TRAILING: &str = "SENTINEL_TRAILING_PROMPT_TEXT";
+    let content = format!(
+        "{LEADING} <command-name>/deploy</command-name> \
+         <command-args>argalpha argbeta</command-args> {TRAILING}"
+    );
+    let rec_json = json!({
+        "type": "user",
+        "sessionId": "s1",
+        "timestamp": "2026-05-19T10:00:00.000Z",
+        "message": { "role": "user", "content": content }
+    });
+    let rec: JsonlRecord = serde_json::from_value(rec_json).unwrap();
+    let mut r = Reducer::new();
+    let out = r.reduce(&rec);
+    let d = dump(&out);
+
+    // Sanity: the command was actually detected (otherwise the test proves nothing).
+    assert!(d.contains("deploy"), "expected the slash command to be detected");
+    // The surrounding prompt text must not leak.
+    assert!(!d.contains(LEADING), "reducer leaked leading prompt text");
+    assert!(!d.contains(TRAILING), "reducer leaked trailing prompt text");
+    // The command-args *text* must not leak — only an arg count escapes.
+    assert!(!d.contains("argalpha"), "reducer leaked command-args text");
+    assert!(!d.contains("argbeta"), "reducer leaked command-args text");
+}
