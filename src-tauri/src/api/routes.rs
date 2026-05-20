@@ -2318,6 +2318,8 @@ async fn jsonl_coverage_gaps(
         let Ok(conn) = pool.get() else { return vec![] };
         // OTLP-covered sessions (otlp_calls > 0) whose transcript shows more API
         // calls than OTLP recorded — a likely mid-session loss of OTel coverage.
+        // Note: otlp_calls counts distinct timestamps of OTLP-only token_usage rows,
+        // which can undercount if two API calls share the same millisecond (acceptable for diagnostics).
         let Ok(mut stmt) = conn.prepare(
             "SELECT session_id, jsonl_calls, otlp_calls FROM (
                  SELECT sjc.session_id AS session_id,
