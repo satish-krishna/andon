@@ -1,79 +1,114 @@
-<div class="p-6 space-y-8">
-  <h1 class="text-2xl font-semibold">Behaviour</h1>
+<div class="crumb">
+  <span class="flex items-center gap-1.5">
+    <lucide-icon name="brain" class="w-3.5 h-3.5"></lucide-icon>Behaviour
+  </span>
+</div>
 
-  <section>
-    <h2 class="text-lg font-medium mb-3">Model mix (by frequency)</h2>
-    @if (modelMix(); as mm) {
-      <div class="grid grid-cols-2 gap-6">
-        <div>
-          <h3 class="text-sm text-zinc-400 mb-2">Invocations per model</h3>
-          <ul class="space-y-1">
-            @for (m of mm.by_model; track m.model) {
-              <li class="flex justify-between text-sm">
-                <span>{{ m.model }}</span>
-                <span class="font-mono">{{ m.invocations | number }}</span>
-              </li>
-            }
-          </ul>
-        </div>
-        <div>
-          <h3 class="text-sm text-zinc-400 mb-2">Sessions per model</h3>
-          <ul class="space-y-1">
-            @for (m of mm.by_model; track m.model) {
-              <li class="flex justify-between text-sm">
-                <span>{{ m.model }}</span>
-                <span class="font-mono">{{ m.sessions | number }}</span>
-              </li>
-            }
-          </ul>
-        </div>
-      </div>
-      <div class="mt-6">
-        <h3 class="text-sm text-zinc-400 mb-2">Tools per model</h3>
-        <table class="text-xs">
-          <tbody>
-            @for (c of mm.by_model_tool; track $index) {
-              <tr>
-                <td class="font-mono pr-3">{{ c.model }}</td>
-                <td class="font-mono pr-3">{{ c.tool }}</td>
-                <td class="text-right text-zinc-400">{{ c.count | number }}</td>
-              </tr>
-            }
-          </tbody>
-        </table>
-      </div>
-    }
+<div class="mx-6 mt-4 border border-warn/40 bg-warn/5 rounded-md px-4 py-2.5 flex items-center gap-2.5">
+  <lucide-icon name="flask-conical" class="w-4 h-4 text-warn shrink-0"></lucide-icon>
+  <div class="text-xs">
+    <span class="text-warn font-medium">Experimental.</span>
+    <span class="text-muted">Behavioural views are derived from JSONL transcripts and may be
+    incomplete or change between releases.</span>
+  </div>
+</div>
+
+<div class="px-6 py-5 flex flex-col gap-4">
+
+  <!-- MODEL MIX -->
+  <section class="panel">
+    <div class="panel-title">Model mix</div>
+    <div class="panel-body">
+      @if (modelMix(); as mm) {
+        @if (mm.by_model.length === 0) {
+          <div class="text-muted text-xs font-mono py-4">No model data yet.</div>
+        } @else {
+          <div class="grid grid-cols-2 gap-6">
+            <div>
+              <div class="text-[10px] uppercase tracking-wider text-muted mb-2">Invocations per model</div>
+              @for (m of mm.by_model; track m.model) {
+                <div class="grid grid-cols-[110px_1fr_72px] gap-3 items-center font-mono text-xs py-1">
+                  <span class="text-muted truncate">{{ m.model }}</span>
+                  <div class="h-3.5 bg-border/60 rounded-sm overflow-hidden">
+                    <div class="h-full bg-accent" [style.width.%]="(m.invocations / invocationsMax()) * 100"></div>
+                  </div>
+                  <span class="text-right tabular-nums">{{ m.invocations | number }}</span>
+                </div>
+              }
+            </div>
+            <div>
+              <div class="text-[10px] uppercase tracking-wider text-muted mb-2">Sessions per model</div>
+              @for (m of mm.by_model; track m.model) {
+                <div class="grid grid-cols-[110px_1fr_72px] gap-3 items-center font-mono text-xs py-1">
+                  <span class="text-muted truncate">{{ m.model }}</span>
+                  <div class="h-3.5 bg-border/60 rounded-sm overflow-hidden">
+                    <div class="h-full bg-info" [style.width.%]="(m.sessions / sessionsMax()) * 100"></div>
+                  </div>
+                  <span class="text-right tabular-nums">{{ m.sessions | number }}</span>
+                </div>
+              }
+            </div>
+          </div>
+          <div class="mt-5">
+            <div class="text-[10px] uppercase tracking-wider text-muted mb-2">Tools per model</div>
+            <table class="w-full text-xs font-mono">
+              <thead>
+                <tr class="text-left text-[10px] uppercase text-muted">
+                  <th class="pb-1.5 font-medium">Model</th>
+                  <th class="pb-1.5 font-medium">Tool</th>
+                  <th class="pb-1.5 font-medium text-right">Count</th>
+                </tr>
+              </thead>
+              <tbody>
+                @for (c of mm.by_model_tool; track $index) {
+                  <tr class="border-t border-border/40">
+                    <td class="py-1 text-muted">{{ c.model }}</td>
+                    <td class="py-1">{{ c.tool }}</td>
+                    <td class="py-1 text-right tabular-nums">{{ c.count | number }}</td>
+                  </tr>
+                }
+              </tbody>
+            </table>
+          </div>
+        }
+      } @else {
+        <div class="text-muted text-xs font-mono py-4">Loading…</div>
+      }
+    </div>
   </section>
 
-  <section>
-    <h2 class="text-lg font-medium mb-3">Slash commands</h2>
-    @if (slash().length === 0) {
-      <p class="text-xs text-zinc-500">No slash commands detected yet.</p>
-    } @else {
-      <ul class="space-y-1">
+  <!-- SLASH COMMANDS -->
+  <section class="panel">
+    <div class="panel-title">Slash commands</div>
+    <div class="panel-body">
+      @if (slash().length === 0) {
+        <div class="text-muted text-xs font-mono py-4">No slash commands detected yet.</div>
+      } @else {
         @for (c of slash(); track c.name) {
-          <li class="flex justify-between text-sm">
-            <span class="font-mono">/{{ c.name }}</span>
-            <span class="text-zinc-400">{{ c.count | number }}</span>
-          </li>
+          <div class="flex justify-between items-center font-mono text-xs py-1 border-b border-border/30">
+            <span class="text-accent">/{{ c.name }}</span>
+            <span class="tabular-nums text-muted">{{ c.count | number }}</span>
+          </div>
         }
-      </ul>
-    }
+      }
+    </div>
   </section>
 
-  <section>
-    <h2 class="text-lg font-medium mb-3">Sub-agent usage</h2>
-    @if (subs().length === 0) {
-      <p class="text-xs text-zinc-500">No sub-agent (Task) invocations detected yet.</p>
-    } @else {
-      <ul class="space-y-1">
+  <!-- SUB-AGENTS -->
+  <section class="panel">
+    <div class="panel-title">Sub-agent usage</div>
+    <div class="panel-body">
+      @if (subs().length === 0) {
+        <div class="text-muted text-xs font-mono py-4">No sub-agent (Task) invocations detected yet.</div>
+      } @else {
         @for (a of subs(); track a.subagent_type) {
-          <li class="flex gap-4 text-sm">
-            <span class="font-mono">{{ a.subagent_type }}</span>
-            <span>{{ a.invocations | number }} invocations</span>
-          </li>
+          <div class="flex justify-between items-center font-mono text-xs py-1 border-b border-border/30">
+            <span>{{ a.subagent_type }}</span>
+            <span class="tabular-nums text-muted">{{ a.invocations | number }}</span>
+          </div>
         }
-      </ul>
-    }
+      }
+    </div>
   </section>
+
 </div>
