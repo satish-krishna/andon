@@ -81,9 +81,9 @@ async fn backfill_is_idempotent() {
     assert_eq!(sessions, 1, "session row not duplicated");
     assert_eq!(tokens, 2, "input + output rows; no duplicates from second run");
     assert_eq!(costs, 1, "single cost row");
-    assert!(s1.tokens_filled >= 2, "first run filled at least 2 token rows");
-    assert_eq!(s2.tokens_filled, 0, "second run filled nothing");
-    assert_eq!(s2.cost_filled, 0);
+    assert!(s1.tokens_written >= 2, "first run filled at least 2 token rows");
+    assert_eq!(s2.tokens_written, 0, "second run filled nothing");
+    assert_eq!(s2.cost_written, 0);
 }
 
 #[tokio::test]
@@ -150,4 +150,26 @@ async fn reingest_of_grown_transcript_adds_new_turns() {
         .query_row("SELECT COUNT(*) FROM cost_entries WHERE session_id='sG'", [], |r| r.get(0))
         .unwrap();
     assert_eq!(cost_rows, 2, "new turn ingested, old turn not duplicated");
+}
+
+#[tokio::test]
+async fn backfill_records_api_call_count() {
+    let (pool, _g) = fixture_pool();
+    let ing = test_ingestor(&pool);
+    let home = tempfile::tempdir().unwrap();
+    write_transcript(home.path(), "c", &[
+        r#"{"type":"user","sessionId":"sC","timestamp":"2026-05-19T10:00:00.000Z","message":{"role":"user","content":[]}}"#,
+        r#"{"type":"assistant","sessionId":"sC","requestId":"req_1","timestamp":"2026-05-19T10:00:01.000Z","message":{"role":"assistant","model":"claude-opus-4-7","usage":{"input_tokens":10,"output_tokens":20}}}"#,
+        r#"{"type":"assistant","sessionId":"sC","requestId":"req_1","timestamp":"2026-05-19T10:00:02.000Z","message":{"role":"assistant","model":"claude-opus-4-7","usage":{"input_tokens":10,"output_tokens":20}}}"#,
+        r#"{"type":"assistant","sessionId":"sC","requestId":"req_2","timestamp":"2026-05-19T10:00:03.000Z","message":{"role":"assistant","model":"claude-opus-4-7","usage":{"input_tokens":10,"output_tokens":20}}}"#,
+    ]);
+
+    let pool_arc = Arc::clone(&pool);
+    jsonl::backfill(&pool_arc, &ing, home.path()).await.unwrap();
+
+    let conn = pool.get().unwrap();
+    let api_calls: i64 = conn
+        .query_row("SELECT api_calls FROM session_jsonl_calls WHERE session_id='sC'", [], |r| r.get(0))
+        .unwrap();
+    assert_eq!(api_calls, 2, "two distinct requestIds across three records");
 }

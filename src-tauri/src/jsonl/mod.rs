@@ -22,8 +22,8 @@ pub struct IngestStats {
     pub records_processed: i64,
     pub records_errored: i64,
     pub sessions_added: i64,
-    pub tokens_filled: i64,
-    pub cost_filled: i64,
+    pub tokens_written: i64,
+    pub cost_written: i64,
     pub duration_ms: i64,
 }
 
@@ -44,8 +44,8 @@ pub async fn backfill(
                 stats.records_processed += s.records_processed;
                 stats.records_errored += s.records_errored;
                 stats.sessions_added += s.sessions_added;
-                stats.tokens_filled += s.tokens_filled;
-                stats.cost_filled += s.cost_filled;
+                stats.tokens_written += s.tokens_written;
+                stats.cost_written += s.cost_written;
             }
             Err(e) => {
                 tracing::error!(?path, error = ?e, "jsonl ingest failed");
@@ -140,21 +140,20 @@ async fn ingest_one_inner(
                 .unwrap_or(reconciler::Coverage::JsonlOnly);
             match fresh_ing.ingest_derived(&events, cov) {
                 Ok((tokens, cost)) => {
-                    stats.tokens_filled += tokens;
-                    stats.cost_filled += cost;
-                    // Only an OTLP-covered session can be "gap-filled" — for a
-                    // JSONL-only session these rows are the primary import, not gaps.
-                    if matches!(cov, reconciler::Coverage::Otlp) && tokens + cost > 0 {
-                        tracing::info!(
-                            sid,
-                            tokens_filled = tokens,
-                            cost_filled = cost,
-                            "JSONL gap-filled rows for OTLP-partial session"
-                        );
-                    }
+                    stats.tokens_written += tokens;
+                    stats.cost_written += cost;
                 }
                 Err(e) => tracing::error!(sid, error = ?e, "ingest_derived failed"),
             }
+            let api_calls = events
+                .iter()
+                .filter_map(|e| match e {
+                    reducer::DerivedEvent::TokenUsage { request_id, .. } => Some(request_id.clone()),
+                    _ => None,
+                })
+                .collect::<std::collections::HashSet<_>>()
+                .len() as i64;
+            record_jsonl_calls(&pool_clone, &sid, api_calls);
             stats.sessions_added += 1;
         }
         Ok::<_, anyhow::Error>(stats)
@@ -206,6 +205,16 @@ fn finalise_run(pool: &Arc<DbPool>, id: i64, s: &IngestStats) -> Result<()> {
         ],
     )?;
     Ok(())
+}
+
+fn record_jsonl_calls(pool: &Arc<DbPool>, session_id: &str, api_calls: i64) {
+    let Ok(conn) = pool.get() else { return };
+    let _ = conn.execute(
+        "INSERT INTO session_jsonl_calls (session_id, api_calls, updated_at)
+         VALUES (?1, ?2, ?3)
+         ON CONFLICT(session_id) DO UPDATE SET api_calls = ?2, updated_at = ?3",
+        params![session_id, api_calls, now_ms()],
+    );
 }
 
 fn log_jsonl_error(
