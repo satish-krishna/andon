@@ -1,6 +1,7 @@
 import { HttpClient, HttpParams } from '@angular/common/http';
 import { Injectable, inject } from '@angular/core';
 import { Observable } from 'rxjs';
+import { CostSource } from './cost-source';
 import {
   AcceptByLanguage,
   ActiveTimeToday,
@@ -101,6 +102,7 @@ export interface V2Session {
   repo_remote: string | null;
   repo_branch: string | null;
   cwd: string | null;
+  cost_source: CostSource;
 }
 
 export interface CoverageHint {

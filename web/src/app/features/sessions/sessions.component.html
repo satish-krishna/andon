@@ -74,6 +74,7 @@
               <th class="px-2 py-2 font-normal">Session</th>
               <th class="px-2 py-2 font-normal">Repo</th>
               <th class="px-2 py-2 font-normal">Model</th>
+              <th class="px-2 py-2 font-normal">Source</th>
               <th class="px-2 py-2 font-normal text-right">Cost</th>
               <th class="px-2 py-2 font-normal text-right">Tokens</th>
               <th class="px-2 py-2 font-normal text-right">Decisions</th>
@@ -83,7 +84,7 @@
           </thead>
           <tbody>
             @for (g of groupedRows(); track g.label) {
-              <tr><td colspan="10" class="px-4 pt-3 pb-1 text-[10px] uppercase tracking-wider text-muted">{{ g.label }}</td></tr>
+              <tr><td colspan="11" class="px-4 pt-3 pb-1 text-[10px] uppercase tracking-wider text-muted">{{ g.label }}</td></tr>
               @for (s of g.rows; track s.session_id) {
                 <tr class="border-t border-border row-hover cursor-pointer"
                     [class.bg-border]="expanded() === s.session_id"
@@ -112,6 +113,16 @@
                       {{ modelLabel(s.top_model) }}
                     </span>
                   </td>
+                  <td class="px-2 py-2">
+                    @if (s.cost_source) {
+                      <span class="inline-flex items-center gap-1.5" [title]="sourceTooltip(s.cost_source)">
+                        <span class="inline-block w-2 h-2 rounded-full" [ngClass]="sourceDotClass(s.cost_source)"></span>
+                        {{ sourceLabel(s.cost_source) }}
+                      </span>
+                    } @else {
+                      <span class="text-muted" [title]="sourceTooltip(null)">—</span>
+                    }
+                  </td>
                   <td class="px-2 py-2 text-right tabular-nums">${{ s.cost_usd | number : '1.2-2' }}</td>
                   <td class="px-2 py-2 text-right tabular-nums">{{ s.tokens_input | number }}<span class="text-muted">/</span>{{ s.tokens_output | number }}</td>
                   <td class="px-2 py-2 text-right">
@@ -135,7 +146,7 @@
 
                 @if (expanded() === s.session_id) {
                   <tr class="bg-bg/60">
-                    <td colspan="10" class="px-6 py-5">
+                    <td colspan="11" class="px-6 py-5">
                       <div class="flex items-center gap-4 mb-3 text-[11px] font-mono">
                         <span class="text-muted uppercase tracking-wider">Session</span>
                         <span class="text-accent">{{ s.session_id }}</span>
