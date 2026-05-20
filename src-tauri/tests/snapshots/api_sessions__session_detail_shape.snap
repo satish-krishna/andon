@@ -19,6 +19,7 @@ expression: "&body"
   ],
   "session": {
     "accepts": 2,
+    "cost_source": "otlp",
     "cost_usd": "[cost]",
     "cwd": null,
     "ended_at": "[ts]",

@@ -317,7 +317,12 @@ async fn list_sessions(
                 COALESCE((SELECT SUM(count) FROM token_usage WHERE session_id = s.session_id AND token_type='output'), 0),
                 COALESCE((SELECT COUNT(*) FROM tool_decisions WHERE session_id = s.session_id AND decision='accept'), 0),
                 COALESCE((SELECT COUNT(*) FROM tool_decisions WHERE session_id = s.session_id AND decision='reject'), 0),
-                s.cwd, s.repo_root, s.repo_remote, s.repo_branch, s.repo_name
+                s.cwd, s.repo_root, s.repo_remote, s.repo_branch, s.repo_name,
+                (CASE
+                   WHEN EXISTS(SELECT 1 FROM cost_entries WHERE session_id = s.session_id AND request_id IS NULL) THEN 'otlp'
+                   WHEN EXISTS(SELECT 1 FROM cost_entries WHERE session_id = s.session_id) THEN 'jsonl'
+                   ELSE NULL
+                 END) AS cost_source
          FROM sessions s
          WHERE s.started_at >= ?1 AND s.started_at <= ?2
          ORDER BY s.started_at DESC
@@ -341,6 +346,7 @@ async fn list_sessions(
             repo_remote: r.get(13)?,
             repo_branch: r.get(14)?,
             repo_name: r.get(15)?,
+            cost_source: r.get::<_, Option<String>>(16)?,
         })
     })?;
     Ok(Json(rows.flatten().collect()))
@@ -360,7 +366,12 @@ async fn session_detail(
                     COALESCE((SELECT SUM(count) FROM token_usage WHERE session_id = s.session_id AND token_type='output'), 0),
                     COALESCE((SELECT COUNT(*) FROM tool_decisions WHERE session_id = s.session_id AND decision='accept'), 0),
                     COALESCE((SELECT COUNT(*) FROM tool_decisions WHERE session_id = s.session_id AND decision='reject'), 0),
-                    s.cwd, s.repo_root, s.repo_remote, s.repo_branch, s.repo_name
+                    s.cwd, s.repo_root, s.repo_remote, s.repo_branch, s.repo_name,
+                    (CASE
+                       WHEN EXISTS(SELECT 1 FROM cost_entries WHERE session_id = s.session_id AND request_id IS NULL) THEN 'otlp'
+                       WHEN EXISTS(SELECT 1 FROM cost_entries WHERE session_id = s.session_id) THEN 'jsonl'
+                       ELSE NULL
+                     END) AS cost_source
              FROM sessions s WHERE s.session_id = ?1",
             params![id],
             |r| {
@@ -381,6 +392,7 @@ async fn session_detail(
                     repo_remote: r.get(13)?,
                     repo_branch: r.get(14)?,
                     repo_name: r.get(15)?,
+                    cost_source: r.get::<_, Option<String>>(16)?,
                 })
             },
         )
@@ -1663,7 +1675,12 @@ async fn v2_sessions(
                 ((SELECT COUNT(*) FROM tool_decisions WHERE session_id = s.session_id AND decision='accept')
                  + (SELECT COUNT(*) FROM tool_decisions WHERE session_id = s.session_id AND decision='reject')
                  + (SELECT COUNT(*) FROM tool_decisions WHERE session_id = s.session_id AND decision='abort')) AS decisions,
-                s.cwd, s.repo_root, s.repo_remote, s.repo_branch, s.repo_name
+                s.cwd, s.repo_root, s.repo_remote, s.repo_branch, s.repo_name,
+                (CASE
+                   WHEN EXISTS(SELECT 1 FROM cost_entries WHERE session_id = s.session_id AND request_id IS NULL) THEN 'otlp'
+                   WHEN EXISTS(SELECT 1 FROM cost_entries WHERE session_id = s.session_id) THEN 'jsonl'
+                   ELSE NULL
+                 END) AS cost_source
          FROM sessions s
          WHERE s.started_at >= ? AND s.started_at <= ?{model_filter_sql}{repo_filter_sql}{search_sql}
          {order}
@@ -1709,6 +1726,7 @@ async fn v2_sessions(
             "repo_remote":     r.get::<_, Option<String>>(18)?,
             "repo_branch":     r.get::<_, Option<String>>(19)?,
             "repo_name":       r.get::<_, Option<String>>(20)?,
+            "cost_source":     r.get::<_, Option<String>>(21)?,
         }))
     })?;
     let sessions: Vec<serde_json::Value> = rows.flatten().collect();

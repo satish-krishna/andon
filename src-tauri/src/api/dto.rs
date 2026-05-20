@@ -52,6 +52,7 @@ pub struct SessionSummary {
     #[serde(default)] pub repo_remote: Option<String>,
     #[serde(default)] pub repo_branch: Option<String>,
     #[serde(default)] pub repo_name: Option<String>,
+    #[serde(default)] pub cost_source: Option<String>,
 }
 
 #[derive(Serialize)]

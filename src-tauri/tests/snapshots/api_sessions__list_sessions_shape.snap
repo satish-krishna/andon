@@ -4,6 +4,7 @@ expression: "&sessions[0]"
 ---
 {
   "accepts": 1,
+  "cost_source": "otlp",
   "cost_usd": "[cost]",
   "cwd": null,
   "ended_at": "[ts]",

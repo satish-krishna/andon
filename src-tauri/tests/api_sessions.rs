@@ -450,3 +450,85 @@ async fn v2_sessions_limit_is_honored() {
     // ORDER BY started_at DESC → v2-lim-4 should be first
     assert_eq!(sessions[0]["session_id"], "v2-lim-4");
 }
+
+// ---------------------------------------------------------------------------
+// 9. cost_source_reflects_request_id
+// ---------------------------------------------------------------------------
+
+#[tokio::test]
+async fn cost_source_reflects_request_id() {
+    let (pool, _db_dir) = common::fixture_pool();
+
+    // OTLP session: seed_session inserts a cost row with request_id = NULL.
+    common::seed_session(
+        &pool,
+        &common::SeedOpts {
+            session_id: "src-otlp".into(),
+            started_at_ms: Some(anchor_ms()),
+            cost_usd: 1.0,
+            model: "claude-opus-4-7".into(),
+            ..Default::default()
+        },
+    );
+
+    // JSONL session: seeded with no cost row, then a cost row carrying a
+    // non-NULL request_id is inserted directly (as JSONL ingest would).
+    common::seed_session(
+        &pool,
+        &common::SeedOpts {
+            session_id: "src-jsonl".into(),
+            started_at_ms: Some(anchor_ms()),
+            model: "claude-opus-4-7".into(),
+            ..Default::default()
+        },
+    );
+    {
+        let conn = pool.get().unwrap();
+        conn.execute(
+            "INSERT INTO cost_entries (session_id, request_id, timestamp, model, cost_usd) \
+             VALUES ('src-jsonl', 'req_abc', 0, 'claude-opus-4-7', 0.5)",
+            [],
+        )
+        .unwrap();
+    }
+
+    // No-cost session: seed_session with cost_usd = 0.0 inserts no cost row.
+    common::seed_session(
+        &pool,
+        &common::SeedOpts {
+            session_id: "src-none".into(),
+            started_at_ms: Some(anchor_ms()),
+            model: "claude-opus-4-7".into(),
+            ..Default::default()
+        },
+    );
+
+    let from = ms_ago(5);
+    let to = anchor_ms() + 1000;
+
+    // --- v2 list endpoint ---
+    let (router, _rd) = common::test_router(&pool);
+    let (status, body) = get_json(router, &format!("/api/v2/sessions?from={from}&to={to}")).await;
+    assert_eq!(status, StatusCode::OK);
+    let pick = |id: &str| -> Value {
+        body["sessions"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|s| s["session_id"] == id)
+            .cloned()
+            .unwrap_or(Value::Null)
+    };
+    assert_eq!(pick("src-otlp")["cost_source"], "otlp");
+    assert_eq!(pick("src-jsonl")["cost_source"], "jsonl");
+    assert!(
+        pick("src-none")["cost_source"].is_null(),
+        "a session with no cost rows has a null cost_source"
+    );
+
+    // --- detail endpoint exposes the same field ---
+    let (router2, _rd2) = common::test_router(&pool);
+    let (status2, detail) = get_json(router2, "/api/sessions/src-jsonl").await;
+    assert_eq!(status2, StatusCode::OK);
+    assert_eq!(detail["session"]["cost_source"], "jsonl");
+}
