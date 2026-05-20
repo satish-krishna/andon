@@ -2139,7 +2139,6 @@ async fn list_repos(
                 COALESCE(repo_name,
                          CASE WHEN repo_remote IS NOT NULL THEN repo_remote ELSE NULL END,
                          repo_root, cwd, '—') AS label,
-                CASE WHEN repo_remote IS NOT NULL THEN 1 ELSE 0 END AS has_remote,
                 COUNT(*) AS n,
                 MAX(repo_root) AS rr
              FROM sessions
@@ -2152,9 +2151,8 @@ async fn list_repos(
             Ok(crate::api::dto::RepoSummary {
                 key: r.get::<_, String>(0)?,
                 label: r.get::<_, String>(1)?,
-                has_remote: r.get::<_, i64>(2)? != 0,
-                session_count: r.get::<_, i64>(3)?,
-                repo_root: r.get::<_, Option<String>>(4)?,
+                session_count: r.get::<_, i64>(2)?,
+                repo_root: r.get::<_, Option<String>>(3)?,
             })
         })?;
         rows.collect()

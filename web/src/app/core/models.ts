@@ -91,7 +91,6 @@ export interface DbStats {
 export interface RepoSummary {
   key: string;
   label: string;
-  has_remote: boolean;
   session_count: number;
   repo_root?: string | null;
 }

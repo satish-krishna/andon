@@ -117,8 +117,6 @@ pub struct RepoSummary {
     pub key: String,
     /// Display label: repo_name (preferred), else basename of key.
     pub label: String,
-    /// `true` when repo_remote is set.
-    pub has_remote: bool,
     pub session_count: i64,
     /// Any one repo_root observed for this group (MAX). Used by the Files page
     /// to derive relative paths when the user selects a remote-keyed repo chip.
