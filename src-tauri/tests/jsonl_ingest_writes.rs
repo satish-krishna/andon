@@ -43,60 +43,11 @@ fn writes_slash_and_subagent() {
 }
 
 #[test]
-fn dedups_token_usage_against_otlp_within_window() {
+fn otlp_coverage_skips_jsonl_cost_and_tokens() {
     let (pool, _g) = fixture_pool();
     let ing = test_ingestor(&pool);
     let conn = pool.get().unwrap();
-    conn.execute(
-        "INSERT INTO sessions (session_id, started_at, data_source) VALUES ('s1', 0, 'otlp')",
-        [],
-    )
-    .unwrap();
-    conn.execute(
-        "INSERT INTO token_usage (session_id, timestamp, model, token_type, count) \
-         VALUES ('s1', 10000, 'claude-opus-4-7', 'input', 500)",
-        [],
-    )
-    .unwrap();
-    drop(conn);
-
-    // JSONL turn at the same timestamp must NOT duplicate the existing OTLP row.
-    let events = vec![DerivedEvent::TokenUsage {
-        session_id: "s1".into(),
-        request_id: "req_test".into(),
-        ts: 10_000,
-        model: "claude-opus-4-7".into(),
-        input: 500,
-        output: 0,
-        cache_create: 0,
-        cache_read: 0,
-    }];
-    let (tokens_filled, _) = ing.ingest_derived(&events, Coverage::Otlp).unwrap();
-
-    let n: i64 = pool
-        .get()
-        .unwrap()
-        .query_row(
-            "SELECT COUNT(*) FROM token_usage WHERE session_id='s1' AND model='claude-opus-4-7' AND token_type='input'",
-            [],
-            |r| r.get(0),
-        )
-        .unwrap();
-    assert_eq!(n, 1, "JSONL must not duplicate the OTLP row");
-    assert_eq!(tokens_filled, 0);
-}
-
-#[test]
-fn gap_fills_when_otlp_partial() {
-    let (pool, _g) = fixture_pool();
-    let ing = test_ingestor(&pool);
-    let conn = pool.get().unwrap();
-    conn.execute(
-        "INSERT INTO sessions (session_id, started_at, data_source) VALUES ('s1', 0, 'otlp')",
-        [],
-    )
-    .unwrap();
-    // OTLP captured only the first turn at t=100ms.
+    // An OTLP token row exists for this session — it is OTLP-covered.
     conn.execute(
         "INSERT INTO token_usage (session_id, timestamp, model, token_type, count) \
          VALUES ('s1', 100, 'claude-opus-4-7', 'input', 500)",
@@ -105,86 +56,71 @@ fn gap_fills_when_otlp_partial() {
     .unwrap();
     drop(conn);
 
-    // JSONL has two turns: the captured one + a later gap turn at t=10_000ms.
     let events = vec![
         DerivedEvent::TokenUsage {
             session_id: "s1".into(),
-            request_id: "req_a".into(),
-            ts: 100,
-            model: "claude-opus-4-7".into(),
-            input: 500,
-            output: 0,
-            cache_create: 0,
-            cache_read: 0,
-        },
-        DerivedEvent::TokenUsage {
-            session_id: "s1".into(),
-            request_id: "req_b".into(),
-            ts: 10_000,
+            request_id: "req_x".into(),
+            ts: 9000,
             model: "claude-opus-4-7".into(),
             input: 1000,
             output: 2000,
             cache_create: 0,
-            cache_read: 50,
+            cache_read: 0,
+        },
+        DerivedEvent::CostEntry {
+            session_id: "s1".into(),
+            request_id: "req_x".into(),
+            ts: 9000,
+            model: "claude-opus-4-7".into(),
+            cost_usd: 0.42,
         },
     ];
-    let (tokens_filled, _) = ing.ingest_derived(&events, Coverage::Otlp).unwrap();
+    let (tokens_written, cost_written) = ing.ingest_derived(&events, Coverage::Otlp).unwrap();
+    assert_eq!((tokens_written, cost_written), (0, 0));
 
     let conn = pool.get().unwrap();
-    // Original OTLP row preserved.
-    let otlp_count: i64 = conn
-        .query_row(
-            "SELECT count FROM token_usage WHERE session_id='s1' AND timestamp=100 AND token_type='input'",
-            [],
-            |r| r.get(0),
-        )
+    let tok: i64 = conn
+        .query_row("SELECT COUNT(*) FROM token_usage WHERE session_id='s1'", [], |r| r.get(0))
         .unwrap();
-    assert_eq!(otlp_count, 500);
+    let cost: i64 = conn
+        .query_row("SELECT COUNT(*) FROM cost_entries WHERE session_id='s1'", [], |r| r.get(0))
+        .unwrap();
+    assert_eq!(tok, 1, "only the original OTLP token row remains");
+    assert_eq!(cost, 0, "no JSONL cost written for an OTLP-covered session");
+}
 
-    // Gap-turn input/output/cacheRead all written.
-    let gap_input: i64 = conn
-        .query_row(
-            "SELECT count FROM token_usage WHERE session_id='s1' AND timestamp=10000 AND token_type='input'",
-            [], |r| r.get(0),
-        )
-        .unwrap();
-    let gap_output: i64 = conn
-        .query_row(
-            "SELECT count FROM token_usage WHERE session_id='s1' AND timestamp=10000 AND token_type='output'",
-            [], |r| r.get(0),
-        )
-        .unwrap();
-    let gap_cache_read: i64 = conn
-        .query_row(
-            "SELECT count FROM token_usage WHERE session_id='s1' AND timestamp=10000 AND token_type='cacheRead'",
-            [], |r| r.get(0),
-        )
-        .unwrap();
-    assert_eq!(gap_input, 1000);
-    assert_eq!(gap_output, 2000);
-    assert_eq!(gap_cache_read, 50);
+#[test]
+fn jsonl_only_writes_cost_and_tokens_with_request_id() {
+    let (pool, _g) = fixture_pool();
+    let ing = test_ingestor(&pool);
+    let events = vec![
+        DerivedEvent::TokenUsage {
+            session_id: "s2".into(),
+            request_id: "req_y".into(),
+            ts: 100,
+            model: "claude-opus-4-7".into(),
+            input: 1000,
+            output: 500,
+            cache_create: 0,
+            cache_read: 0,
+        },
+        DerivedEvent::CostEntry {
+            session_id: "s2".into(),
+            request_id: "req_y".into(),
+            ts: 100,
+            model: "claude-opus-4-7".into(),
+            cost_usd: 0.05,
+        },
+    ];
+    let (tokens_written, cost_written) = ing.ingest_derived(&events, Coverage::JsonlOnly).unwrap();
+    assert_eq!(tokens_written, 2, "input + output rows");
+    assert_eq!(cost_written, 1);
 
-    // No cacheCreation row (count was 0, skipped).
-    let cache_create_n: i64 = conn
-        .query_row(
-            "SELECT COUNT(*) FROM token_usage WHERE session_id='s1' AND timestamp=10000 AND token_type='cacheCreation'",
-            [], |r| r.get(0),
-        )
+    let conn = pool.get().unwrap();
+    let rid: String = conn
+        .query_row("SELECT request_id FROM cost_entries WHERE session_id='s2'", [], |r| r.get(0))
         .unwrap();
-    assert_eq!(cache_create_n, 0);
-
-    // 3 rows filled.
-    assert_eq!(tokens_filled, 3);
-
-    // data_source flipped from 'otlp' to 'mixed' once JSONL contributed.
-    let data_source: String = conn
-        .query_row(
-            "SELECT data_source FROM sessions WHERE session_id='s1'",
-            [],
-            |r| r.get(0),
-        )
-        .unwrap();
-    assert_eq!(data_source, "mixed");
+    assert_eq!(rid, "req_y");
 }
 
 #[test]
@@ -212,53 +148,41 @@ fn writes_tool_decisions_for_jsonl_only_session() {
 }
 
 #[test]
-fn gap_fills_cost_when_otlp_partial() {
+fn jsonl_reingest_is_idempotent_via_request_id() {
     let (pool, _g) = fixture_pool();
     let ing = test_ingestor(&pool);
-    let conn = pool.get().unwrap();
-    conn.execute(
-        "INSERT INTO sessions (session_id, started_at, data_source) VALUES ('s1', 0, 'otlp')",
-        [],
-    )
-    .unwrap();
-    conn.execute(
-        "INSERT INTO cost_entries (session_id, timestamp, model, cost_usd) \
-         VALUES ('s1', 100, 'claude-opus-4-7', 0.01)",
-        [],
-    )
-    .unwrap();
-    drop(conn);
-
     let events = vec![
-        // Overlap with the OTLP row — must NOT duplicate.
-        DerivedEvent::CostEntry {
-            session_id: "s1".into(),
-            request_id: "req_a".into(),
+        DerivedEvent::TokenUsage {
+            session_id: "s3".into(),
+            request_id: "req_z".into(),
             ts: 100,
             model: "claude-opus-4-7".into(),
-            cost_usd: 0.01,
+            input: 1000,
+            output: 500,
+            cache_create: 0,
+            cache_read: 0,
         },
-        // Gap — must be written.
         DerivedEvent::CostEntry {
-            session_id: "s1".into(),
-            request_id: "req_b".into(),
-            ts: 10_000,
+            session_id: "s3".into(),
+            request_id: "req_z".into(),
+            ts: 100,
             model: "claude-opus-4-7".into(),
             cost_usd: 0.05,
         },
     ];
-    let (_, cost_filled) = ing.ingest_derived(&events, Coverage::Otlp).unwrap();
-    assert_eq!(cost_filled, 1);
+    ing.ingest_derived(&events, Coverage::JsonlOnly).unwrap();
+    let (t2, c2) = ing.ingest_derived(&events, Coverage::JsonlOnly).unwrap();
+    assert_eq!((t2, c2), (0, 0), "second ingest writes nothing");
 
     let conn = pool.get().unwrap();
-    let total: f64 = conn
-        .query_row(
-            "SELECT COALESCE(SUM(cost_usd), 0) FROM cost_entries WHERE session_id='s1'",
-            [],
-            |r| r.get(0),
-        )
+    let cost: i64 = conn
+        .query_row("SELECT COUNT(*) FROM cost_entries WHERE session_id='s3'", [], |r| r.get(0))
         .unwrap();
-    assert!((total - 0.06).abs() < 1e-9);
+    let tok: i64 = conn
+        .query_row("SELECT COUNT(*) FROM token_usage WHERE session_id='s3'", [], |r| r.get(0))
+        .unwrap();
+    assert_eq!(cost, 1);
+    assert_eq!(tok, 2);
 }
 
 #[test]
