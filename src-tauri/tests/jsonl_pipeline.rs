@@ -85,3 +85,69 @@ async fn backfill_is_idempotent() {
     assert_eq!(s2.tokens_filled, 0, "second run filled nothing");
     assert_eq!(s2.cost_filled, 0);
 }
+
+#[tokio::test]
+async fn backfill_counts_multi_record_request_once() {
+    let (pool, _g) = fixture_pool();
+    let ing = test_ingestor(&pool);
+    let home = tempfile::tempdir().unwrap();
+    // One API call (req_M) split across three assistant records, each carrying
+    // the identical usage — exactly how Claude Code writes transcripts.
+    write_transcript(home.path(), "m", &[
+        r#"{"type":"user","sessionId":"sM","timestamp":"2026-05-19T10:00:00.000Z","message":{"role":"user","content":[]}}"#,
+        r#"{"type":"assistant","sessionId":"sM","requestId":"req_M","timestamp":"2026-05-19T10:00:01.000Z","message":{"role":"assistant","model":"claude-opus-4-7","usage":{"input_tokens":1000000,"output_tokens":0},"content":[{"type":"text","text":"x"}]}}"#,
+        r#"{"type":"assistant","sessionId":"sM","requestId":"req_M","timestamp":"2026-05-19T10:00:02.000Z","message":{"role":"assistant","model":"claude-opus-4-7","usage":{"input_tokens":1000000,"output_tokens":0},"content":[{"type":"tool_use","id":"t1","name":"Read","input":{}}]}}"#,
+        r#"{"type":"assistant","sessionId":"sM","requestId":"req_M","timestamp":"2026-05-19T10:00:03.000Z","message":{"role":"assistant","model":"claude-opus-4-7","usage":{"input_tokens":1000000,"output_tokens":0},"content":[{"type":"tool_use","id":"t2","name":"Grep","input":{}}]}}"#,
+    ]);
+
+    let pool_arc = Arc::clone(&pool);
+    jsonl::backfill(&pool_arc, &ing, home.path()).await.unwrap();
+    jsonl::backfill(&pool_arc, &ing, home.path()).await.unwrap();
+
+    let conn = pool.get().unwrap();
+    // 1M input tokens of opus-4-7 = $15.00, counted exactly once despite 3 records
+    // and 2 backfill runs.
+    let cost: f64 = conn
+        .query_row("SELECT COALESCE(SUM(cost_usd), 0) FROM cost_entries WHERE session_id='sM'", [], |r| r.get(0))
+        .unwrap();
+    assert!((cost - 15.0).abs() < 1e-6, "expected $15.00, got {cost}");
+    let cost_rows: i64 = conn
+        .query_row("SELECT COUNT(*) FROM cost_entries WHERE session_id='sM'", [], |r| r.get(0))
+        .unwrap();
+    assert_eq!(cost_rows, 1, "one cost row per API call");
+    let input_tokens: i64 = conn
+        .query_row("SELECT COALESCE(SUM(count), 0) FROM token_usage WHERE session_id='sM' AND token_type='input'", [], |r| r.get(0))
+        .unwrap();
+    assert_eq!(input_tokens, 1_000_000, "input tokens counted once");
+}
+
+#[tokio::test]
+async fn reingest_of_grown_transcript_adds_new_turns() {
+    // A JSONL-only session must stay JSONL-only across re-ingests: the second
+    // backfill picks up the new turn (req_g2) without duplicating req_g1.
+    // Guards the `coverage_for` `request_id IS NULL` refinement from Task 4.
+    let (pool, _g) = fixture_pool();
+    let ing = test_ingestor(&pool);
+    let home = tempfile::tempdir().unwrap();
+
+    write_transcript(home.path(), "g", &[
+        r#"{"type":"user","sessionId":"sG","timestamp":"2026-05-19T10:00:00.000Z","message":{"role":"user","content":[]}}"#,
+        r#"{"type":"assistant","sessionId":"sG","requestId":"req_g1","timestamp":"2026-05-19T10:00:01.000Z","message":{"role":"assistant","model":"claude-opus-4-7","usage":{"input_tokens":1000000,"output_tokens":0}}}"#,
+    ]);
+    let pool_arc = Arc::clone(&pool);
+    jsonl::backfill(&pool_arc, &ing, home.path()).await.unwrap();
+
+    // The session resumes — the transcript file grows a second API call.
+    write_transcript(home.path(), "g", &[
+        r#"{"type":"user","sessionId":"sG","timestamp":"2026-05-19T10:00:00.000Z","message":{"role":"user","content":[]}}"#,
+        r#"{"type":"assistant","sessionId":"sG","requestId":"req_g1","timestamp":"2026-05-19T10:00:01.000Z","message":{"role":"assistant","model":"claude-opus-4-7","usage":{"input_tokens":1000000,"output_tokens":0}}}"#,
+        r#"{"type":"assistant","sessionId":"sG","requestId":"req_g2","timestamp":"2026-05-19T10:00:02.000Z","message":{"role":"assistant","model":"claude-opus-4-7","usage":{"input_tokens":1000000,"output_tokens":0}}}"#,
+    ]);
+    jsonl::backfill(&pool_arc, &ing, home.path()).await.unwrap();
+
+    let conn = pool.get().unwrap();
+    let cost_rows: i64 = conn
+        .query_row("SELECT COUNT(*) FROM cost_entries WHERE session_id='sG'", [], |r| r.get(0))
+        .unwrap();
+    assert_eq!(cost_rows, 2, "new turn ingested, old turn not duplicated");
+}
