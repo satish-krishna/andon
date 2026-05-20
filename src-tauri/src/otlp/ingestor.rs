@@ -286,6 +286,7 @@ impl Ingestor {
                 }
                 E::TokenUsage {
                     session_id,
+                    request_id: _,
                     ts,
                     model,
                     input,
@@ -328,6 +329,7 @@ impl Ingestor {
                 }
                 E::CostEntry {
                     session_id,
+                    request_id: _,
                     ts,
                     model,
                     cost_usd,

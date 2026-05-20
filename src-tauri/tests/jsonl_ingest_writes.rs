@@ -63,6 +63,7 @@ fn dedups_token_usage_against_otlp_within_window() {
     // JSONL turn at the same timestamp must NOT duplicate the existing OTLP row.
     let events = vec![DerivedEvent::TokenUsage {
         session_id: "s1".into(),
+        request_id: "req_test".into(),
         ts: 10_000,
         model: "claude-opus-4-7".into(),
         input: 500,
@@ -108,6 +109,7 @@ fn gap_fills_when_otlp_partial() {
     let events = vec![
         DerivedEvent::TokenUsage {
             session_id: "s1".into(),
+            request_id: "req_a".into(),
             ts: 100,
             model: "claude-opus-4-7".into(),
             input: 500,
@@ -117,6 +119,7 @@ fn gap_fills_when_otlp_partial() {
         },
         DerivedEvent::TokenUsage {
             session_id: "s1".into(),
+            request_id: "req_b".into(),
             ts: 10_000,
             model: "claude-opus-4-7".into(),
             input: 1000,
@@ -230,6 +233,7 @@ fn gap_fills_cost_when_otlp_partial() {
         // Overlap with the OTLP row — must NOT duplicate.
         DerivedEvent::CostEntry {
             session_id: "s1".into(),
+            request_id: "req_a".into(),
             ts: 100,
             model: "claude-opus-4-7".into(),
             cost_usd: 0.01,
@@ -237,6 +241,7 @@ fn gap_fills_cost_when_otlp_partial() {
         // Gap — must be written.
         DerivedEvent::CostEntry {
             session_id: "s1".into(),
+            request_id: "req_b".into(),
             ts: 10_000,
             model: "claude-opus-4-7".into(),
             cost_usd: 0.05,

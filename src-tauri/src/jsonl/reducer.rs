@@ -20,6 +20,7 @@ pub enum DerivedEvent {
     },
     TokenUsage {
         session_id: String,
+        request_id: String,
         ts: i64,
         model: String,
         input: i64,
@@ -29,6 +30,7 @@ pub enum DerivedEvent {
     },
     CostEntry {
         session_id: String,
+        request_id: String,
         ts: i64,
         model: String,
         cost_usd: f64,
@@ -57,6 +59,7 @@ pub enum DerivedEvent {
 #[derive(Default)]
 pub struct Reducer {
     first_turn_seen: bool,
+    seen_requests: std::collections::HashSet<String>,
 }
 
 impl Reducer {
@@ -109,10 +112,18 @@ impl Reducer {
         };
         let model = msg.model.clone().unwrap_or_else(|| "unknown".into());
 
-        if let Some(u) = msg.usage.as_ref() {
-            if u.input_tokens + u.output_tokens + u.cache_read + u.cache_creation > 0 {
+        // Claude Code writes one assistant record per content block; every record
+        // of an API call carries the same requestId and the identical usage.
+        // Emit token/cost exactly once per requestId, at its first-seen record.
+        // Records with no requestId (synthetic / api-error) carry no priceable
+        // usage and are skipped — they cannot be safely deduplicated.
+        if let (Some(request_id), Some(u)) = (rec.request_id.as_deref(), msg.usage.as_ref()) {
+            if self.seen_requests.insert(request_id.to_string())
+                && u.input_tokens + u.output_tokens + u.cache_read + u.cache_creation > 0
+            {
                 out.push(DerivedEvent::TokenUsage {
                     session_id: sid.to_string(),
+                    request_id: request_id.to_string(),
                     ts,
                     model: model.clone(),
                     input: u.input_tokens,
@@ -130,6 +141,7 @@ impl Reducer {
                     if cost > 0.0 {
                         out.push(DerivedEvent::CostEntry {
                             session_id: sid.to_string(),
+                            request_id: request_id.to_string(),
                             ts,
                             model: model.clone(),
                             cost_usd: cost,
@@ -234,7 +246,7 @@ mod tests {
     #[test]
     fn assistant_emits_token_usage_and_cost() {
         let mut r = Reducer::new();
-        let line = r#"{"type":"assistant","sessionId":"s1","timestamp":"2026-05-19T10:00:01.000Z","message":{"role":"assistant","model":"claude-opus-4-7","usage":{"input_tokens":1000000,"output_tokens":0}}}"#;
+        let line = r#"{"type":"assistant","sessionId":"s1","requestId":"req_emit","timestamp":"2026-05-19T10:00:01.000Z","message":{"role":"assistant","model":"claude-opus-4-7","usage":{"input_tokens":1000000,"output_tokens":0}}}"#;
         let out = r.reduce(&parse_line(line).unwrap());
         let has_tok = out
             .iter()
@@ -307,6 +319,37 @@ mod tests {
         let mut r = Reducer::new();
         let line = r#"{"type":"user","timestamp":"2026-05-19T10:00:00.000Z","message":{"role":"user","content":[]}}"#;
         assert!(r.reduce(&parse_line(line).unwrap()).is_empty());
+    }
+
+    #[test]
+    fn multi_record_request_emits_usage_once() {
+        // Claude Code splits one API call across multiple records, each carrying
+        // the same requestId and identical usage. Usage must be counted once;
+        // every tool_use block must still produce a ToolCall.
+        let mut r = Reducer::new();
+        let rec1 = r#"{"type":"assistant","sessionId":"s1","requestId":"req_A","timestamp":"2026-05-19T10:00:01.000Z","message":{"role":"assistant","model":"claude-opus-4-7","usage":{"input_tokens":1000000,"output_tokens":0},"content":[{"type":"text","text":"hi"}]}}"#;
+        let rec2 = r#"{"type":"assistant","sessionId":"s1","requestId":"req_A","timestamp":"2026-05-19T10:00:02.000Z","message":{"role":"assistant","model":"claude-opus-4-7","usage":{"input_tokens":1000000,"output_tokens":0},"content":[{"type":"tool_use","id":"t1","name":"Read","input":{"file_path":"a.rs"}}]}}"#;
+        let rec3 = r#"{"type":"assistant","sessionId":"s1","requestId":"req_A","timestamp":"2026-05-19T10:00:03.000Z","message":{"role":"assistant","model":"claude-opus-4-7","usage":{"input_tokens":1000000,"output_tokens":0},"content":[{"type":"tool_use","id":"t2","name":"Grep","input":{}}]}}"#;
+        let mut all = vec![];
+        for line in [rec1, rec2, rec3] {
+            all.extend(r.reduce(&parse_line(line).unwrap()));
+        }
+        let tok = all.iter().filter(|e| matches!(e, DerivedEvent::TokenUsage { .. })).count();
+        let cost = all.iter().filter(|e| matches!(e, DerivedEvent::CostEntry { .. })).count();
+        let tools = all.iter().filter(|e| matches!(e, DerivedEvent::ToolCall { .. })).count();
+        assert_eq!(tok, 1, "usage counted once per requestId");
+        assert_eq!(cost, 1, "cost counted once per requestId");
+        assert_eq!(tools, 2, "every tool_use block still recorded");
+    }
+
+    #[test]
+    fn assistant_without_request_id_emits_no_usage() {
+        let mut r = Reducer::new();
+        let line = r#"{"type":"assistant","sessionId":"s1","timestamp":"2026-05-19T10:00:01.000Z","message":{"role":"assistant","model":"claude-opus-4-7","usage":{"input_tokens":1000,"output_tokens":2000}}}"#;
+        let out = r.reduce(&parse_line(line).unwrap());
+        assert!(!out.iter().any(|e| matches!(
+            e, DerivedEvent::TokenUsage { .. } | DerivedEvent::CostEntry { .. }
+        )));
     }
 
     #[test]

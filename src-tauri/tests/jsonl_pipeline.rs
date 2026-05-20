@@ -60,7 +60,7 @@ async fn backfill_is_idempotent() {
         "x",
         &[
             r#"{"type":"user","sessionId":"sIDP","timestamp":"2026-05-19T10:00:00.000Z","message":{"role":"user","content":[]}}"#,
-            r#"{"type":"assistant","sessionId":"sIDP","timestamp":"2026-05-19T10:00:01.000Z","message":{"role":"assistant","model":"claude-opus-4-7","usage":{"input_tokens":100,"output_tokens":200}}}"#,
+            r#"{"type":"assistant","sessionId":"sIDP","requestId":"req_idp","timestamp":"2026-05-19T10:00:01.000Z","message":{"role":"assistant","model":"claude-opus-4-7","usage":{"input_tokens":100,"output_tokens":200}}}"#,
         ],
     );
     let pool_arc = Arc::clone(&pool);
