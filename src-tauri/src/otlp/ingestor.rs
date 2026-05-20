@@ -268,6 +268,8 @@ impl Ingestor {
                     cwd,
                     git_branch,
                 } => {
+                    // Binary routing: a JSONL-only session is 'jsonl'; an
+                    // OTLP-covered session keeps 'otlp'. 'mixed' is no longer used.
                     let _ = tx.execute(
                         "INSERT OR IGNORE INTO sessions
                            (session_id, started_at, ended_at, service_version, cwd, repo_branch, data_source)
@@ -293,16 +295,22 @@ impl Ingestor {
                             ("cacheCreation", *cache_create),
                         ] {
                             if n > 0 {
-                                let affected = tx
-                                    .execute(
-                                        "INSERT INTO token_usage
-                                           (session_id, request_id, timestamp, model, token_type, count)
-                                         VALUES (?1, ?2, ?3, ?4, ?5, ?6)
-                                         ON CONFLICT(request_id, token_type)
-                                           WHERE request_id IS NOT NULL DO NOTHING",
-                                        params![session_id, request_id, ts, model, kind, n],
-                                    )
-                                    .unwrap_or(0);
+                                let affected = match tx.execute(
+                                    "INSERT INTO token_usage
+                                       (session_id, request_id, timestamp, model, token_type, count)
+                                     VALUES (?1, ?2, ?3, ?4, ?5, ?6)
+                                     ON CONFLICT(request_id, token_type)
+                                       WHERE request_id IS NOT NULL DO NOTHING",
+                                    params![session_id, request_id, ts, model, kind, n],
+                                ) {
+                                    Ok(rows) => rows,
+                                    Err(e) => {
+                                        // ON CONFLICT DO NOTHING yields Ok(0) on a duplicate, so any Err
+                                        // here is a genuine insert failure — log it, never surface it.
+                                        tracing::warn!(error = ?e, session_id, "JSONL token_usage insert failed");
+                                        0
+                                    }
+                                };
                                 tokens_written += affected as i64;
                             }
                         }
@@ -316,16 +324,22 @@ impl Ingestor {
                     cost_usd,
                 } => {
                     if matches!(coverage, Coverage::JsonlOnly) && *cost_usd > 0.0 {
-                        let affected = tx
-                            .execute(
-                                "INSERT INTO cost_entries
-                                   (session_id, request_id, timestamp, model, cost_usd)
-                                 VALUES (?1, ?2, ?3, ?4, ?5)
-                                 ON CONFLICT(request_id)
-                                   WHERE request_id IS NOT NULL DO NOTHING",
-                                params![session_id, request_id, ts, model, cost_usd],
-                            )
-                            .unwrap_or(0);
+                        let affected = match tx.execute(
+                            "INSERT INTO cost_entries
+                               (session_id, request_id, timestamp, model, cost_usd)
+                             VALUES (?1, ?2, ?3, ?4, ?5)
+                             ON CONFLICT(request_id)
+                               WHERE request_id IS NOT NULL DO NOTHING",
+                            params![session_id, request_id, ts, model, cost_usd],
+                        ) {
+                            Ok(rows) => rows,
+                            Err(e) => {
+                                // ON CONFLICT DO NOTHING yields Ok(0) on a duplicate, so any Err
+                                // here is a genuine insert failure — log it, never surface it.
+                                tracing::warn!(error = ?e, session_id, "JSONL cost_entries insert failed");
+                                0
+                            }
+                        };
                         cost_written += affected as i64;
                     }
                 }

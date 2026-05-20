@@ -49,6 +49,11 @@ fn otlp_coverage_skips_jsonl_cost_and_tokens() {
     let conn = pool.get().unwrap();
     // An OTLP token row exists for this session — it is OTLP-covered.
     conn.execute(
+        "INSERT INTO sessions (session_id, started_at) VALUES ('s1', 0)",
+        [],
+    )
+    .unwrap();
+    conn.execute(
         "INSERT INTO token_usage (session_id, timestamp, model, token_type, count) \
          VALUES ('s1', 100, 'claude-opus-4-7', 'input', 500)",
         [],

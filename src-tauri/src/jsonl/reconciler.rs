@@ -16,9 +16,7 @@ pub fn coverage_for(pool: &Arc<DbPool>, session_id: &str) -> Result<Coverage> {
     let conn = pool.get()?;
     let n: i64 = conn
         .query_row(
-            "SELECT COUNT(*) FROM token_usage
-             WHERE session_id = ?1 AND request_id IS NULL
-             LIMIT 1",
+            "SELECT EXISTS(SELECT 1 FROM token_usage WHERE session_id = ?1 AND request_id IS NULL)",
             params![session_id],
             |r| r.get(0),
         )
