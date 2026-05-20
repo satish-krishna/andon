@@ -123,8 +123,11 @@ constructed per file in `ingest_one_inner`).
 
 `reconciler.rs`:
 
-- **Keep** `coverage_for` (`Coverage::Otlp` iff any `token_usage` row exists for the
-  session) and the `Coverage` enum.
+- **Refine** `coverage_for`: a session is `Coverage::Otlp` iff an *OTLP-written*
+  `token_usage` row exists — one with `request_id IS NULL`. JSONL's own rows carry a
+  non-NULL `request_id`, so they must not make a JSONL-only session look OTLP-covered
+  when its transcript is re-ingested (e.g. a `SessionEnd` re-read of a grown file).
+  Keep the `Coverage` enum.
 - **Delete** `token_row_already_covered` and `cost_row_already_covered` — the
   5-second-window helpers are gone.
 
@@ -132,15 +135,17 @@ constructed per file in `ingest_one_inner`).
 
 | Event | `Coverage::Otlp` | `Coverage::JsonlOnly` |
 |---|---|---|
-| `TokenUsage` | skip (OTLP authoritative) | `INSERT … ON CONFLICT(request_id, token_type) DO NOTHING` |
-| `CostEntry` | skip (OTLP authoritative) | `INSERT … ON CONFLICT(request_id) DO NOTHING` |
+| `TokenUsage` | skip (OTLP authoritative) | `INSERT … ON CONFLICT(request_id, token_type) WHERE request_id IS NOT NULL DO NOTHING` |
+| `CostEntry` | skip (OTLP authoritative) | `INSERT … ON CONFLICT(request_id) WHERE request_id IS NOT NULL DO NOTHING` |
 | `ToolCall` | skip (unchanged) | `INSERT` (`source='jsonl'`, unchanged) |
 | `SlashCommand` | `INSERT … WHERE NOT EXISTS` (unchanged) | same |
 | `SubAgentCall` | `INSERT … WHERE NOT EXISTS` (unchanged) | same |
 | `SessionLifecycle` | `INSERT OR IGNORE` | `INSERT OR IGNORE` (`data_source='jsonl'`) |
 
 - The `ON CONFLICT` clauses make re-ingest — a repeated backfill, or the `SessionEnd`
-  hook re-reading a grown transcript — idempotent with no time logic.
+  hook re-reading a grown transcript — idempotent with no time logic. The
+  `WHERE request_id IS NOT NULL` in the conflict target is mandatory: SQLite upsert
+  against a *partial* unique index must restate the index predicate.
 - The `data_source = 'mixed'` updates are **removed**. Cost is never mixed now: a
   JSONL-only session is `'jsonl'`, an OTLP session stays `'otlp'`.
 - `ingest_derived` continues to return `(tokens_written, cost_written)` counts.
@@ -304,7 +309,7 @@ TDD — failing test first.
 | 1 | `src-tauri/src/db/migrations.rs` | Add `MIGRATION_V5`; register `(5, …)`; add v5 test; bump the three existing `MAX(version) == 4` assertions to `5`. |
 | 2 | `src-tauri/src/jsonl/record.rs` | Add `request_id` to `JsonlRecord`. |
 | 3 | `src-tauri/src/jsonl/reducer.rs` | `seen_requests` set; per-request usage emission; `request_id` on `TokenUsage` / `CostEntry`; regression tests. |
-| 4 | `src-tauri/src/jsonl/reconciler.rs` | Delete the two window helpers; keep `coverage_for`. |
+| 4 | `src-tauri/src/jsonl/reconciler.rs` | Refine `coverage_for`'s query to `request_id IS NULL`; delete the two window helpers. |
 | 5 | `src-tauri/src/otlp/ingestor.rs` | Binary routing in `ingest_derived`; `ON CONFLICT` inserts with `request_id`; drop `data_source='mixed'` flips. |
 | 6 | `src-tauri/src/jsonl/mod.rs` | Upsert `session_jsonl_calls`; rename `IngestStats` fields to `tokens_written` / `cost_written`; remove the now-dead `"JSONL gap-filled rows for OTLP-partial session"` log line (binary routing returns `(0,0)` for OTLP sessions). |
 | 7 | `src-tauri/src/api/dto.rs` | Rename the two `JsonlBackfillResponse` fields; add `CoverageGap` DTO. |
