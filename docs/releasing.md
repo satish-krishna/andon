@@ -28,39 +28,34 @@ Versioning:
 
 Commit message: `chore: bump version to X.Y.Z (<short reason>)`, then push.
 
-### 3. Build installers
+### 3. Build the release artifacts
 
 ```powershell
-cd src-tauri
-cargo tauri build
+pwsh scripts/build-release.ps1
 ```
 
-Takes 5–10 minutes. Outputs:
+Takes 5–10 minutes. The script verifies the `Cargo.toml` / `tauri.conf.json`
+versions match, checks no `andon.exe` is running (the link step fails with
+`Access is denied` otherwise), builds the frontend and the Tauri bundle, stages
+the portable binary, and prints a summary of the three artifacts:
 
 | Artefact | Path |
 |---|---|
-| Raw binary | `src-tauri/target/release/andon.exe` |
 | NSIS installer | `src-tauri/target/release/bundle/nsis/andon_X.Y.Z_x64-setup.exe` |
 | MSI installer | `src-tauri/target/release/bundle/msi/andon_X.Y.Z_x64_en-US.msi` |
+| Portable binary | `src-tauri/target/release/andon_X.Y.Z_x64_portable.exe` |
 
-> Make sure no `andon.exe` instance is running before the build, or the link step fails with `Access is denied` on the `.exe` file.
+The script builds artifacts only — it does not bump the version, tag, or
+publish. Those remain the manual steps below.
 
-### 4. Stage the portable binary
-
-Just a rename of the raw binary so users can tell what version it is:
-
-```powershell
-cp src-tauri/target/release/andon.exe src-tauri/target/release/andon_X.Y.Z_x64_portable.exe
-```
-
-### 5. Tag and push
+### 4. Tag and push
 
 ```powershell
 git tag vX.Y.Z
 git push origin vX.Y.Z
 ```
 
-### 6. Create the GitHub release
+### 5. Create the GitHub release
 
 ```powershell
 gh release create vX.Y.Z `
