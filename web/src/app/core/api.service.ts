@@ -5,6 +5,7 @@ import {
   AcceptByLanguage,
   ActiveTimeToday,
   BackfillResult,
+  CoverageGap,
   DailySeries,
   DbStats,
   FileHeatmapRow,
@@ -316,6 +317,9 @@ export class ApiService {
   }
   jsonlIngestRuns(): Observable<JsonlIngestRun[]> {
     return this.http.get<JsonlIngestRun[]>(`${BASE}/api/jsonl/ingest-runs`);
+  }
+  jsonlCoverageGaps(): Observable<CoverageGap[]> {
+    return this.http.get<CoverageGap[]>(`${BASE}/api/jsonl/coverage-gaps`);
   }
   ingestJsonl(): Observable<JsonlBackfillResponse> {
     return this.http.post<JsonlBackfillResponse>(`${BASE}/api/jsonl/backfill`, {});

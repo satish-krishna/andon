@@ -57,8 +57,8 @@ export class SettingsComponent implements OnInit {
       next: (s) => {
         const summary =
           `Ingested ${s.records_processed} records from ${s.files_processed} files`;
-        const filled = s.tokens_filled + s.cost_filled;
-        const tail = filled > 0 ? ` · filled ${filled} gap rows from JSONL` : '';
+        const written = s.tokens_written + s.cost_written;
+        const tail = written > 0 ? ` · wrote ${written} cost/token rows from JSONL` : '';
         this.jsonlToast.set({
           msg: `${summary}${tail} (${s.records_errored} errors).`,
           kind: 'ok',

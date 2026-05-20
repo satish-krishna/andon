@@ -123,5 +123,9 @@ export interface JsonlIngestRun {
 }
 export interface JsonlBackfillResponse {
   files_processed: number; records_processed: number; records_errored: number;
-  sessions_added: number; tokens_filled: number; cost_filled: number; duration_ms: number;
+  sessions_added: number; tokens_written: number; cost_written: number; duration_ms: number;
+}
+
+export interface CoverageGap {
+  session_id: string; jsonl_calls: number; otlp_calls: number;
 }
