@@ -60,7 +60,23 @@ git tag vX.Y.Z
 git push origin vX.Y.Z
 ```
 
-### 5. Create the GitHub release
+### 5. Capture release screenshots
+
+For an illustrated release, capture the dashboard pages. Needs **andon
+running** (so its API answers on `:8765`) and the frontend built (step 3):
+
+```powershell
+cd scripts; npm install            # one-time — pulls puppeteer-core
+node capture-release-screenshots.js
+```
+
+It reads the version from `tauri.conf.json`, drives headless Chrome through
+the running app, blurs every dollar cost, and writes one PNG per page to
+`docs/images/release/v<version>/`. Repo paths, token counts and session IDs
+are left intact — review the PNGs, re-blur or crop anything sensitive, then
+commit them.
+
+### 6. Create the GitHub release
 
 ```powershell
 gh release create vX.Y.Z `
@@ -96,4 +112,11 @@ See prior releases on GitHub for tone. Skeleton:
 - **andon_X.Y.Z_x64-setup.exe** — NSIS installer (recommended)
 - **andon_X.Y.Z_x64_en-US.msi** — MSI installer (group-policy friendly; stable releases only)
 - **andon_X.Y.Z_x64_portable.exe** — portable single binary, no install
+```
+
+Embed the step-5 screenshots with raw-GitHub URLs pinned to the commit that
+added them, so the notes never rot as files move:
+
+```markdown
+![Overview](https://raw.githubusercontent.com/<owner>/andon/<commit>/docs/images/release/v<version>/01-overview.png)
 ```
