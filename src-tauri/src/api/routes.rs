@@ -2434,13 +2434,18 @@ async fn behaviour_model_mix(
     // "Invocations by model" tile tracks the filter. With no `from`/`to` — the
     // unfiltered Behaviour page — it stays all-time.
     let (m_sql, m_vals) = q.model_clause("model");
-    let (time_sql, time_vals): (String, Vec<i64>) = match (q.from, q.to) {
-        (Some(from), Some(to)) => (
-            " AND timestamp >= ? AND timestamp < ?".to_string(),
-            vec![from, to],
-        ),
-        _ => (String::new(), vec![]),
-    };
+    // Apply each bound independently — a lone `from` or `to` still filters
+    // (no bounds at all = the all-time Behaviour-page case above).
+    let mut time_sql = String::new();
+    let mut time_vals: Vec<i64> = Vec::new();
+    if let Some(from) = q.from {
+        time_sql.push_str(" AND timestamp >= ?");
+        time_vals.push(from);
+    }
+    if let Some(to) = q.to {
+        time_sql.push_str(" AND timestamp < ?");
+        time_vals.push(to);
+    }
     let out = tokio::task::spawn_blocking(move || {
         let conn = pool.get().ok()?;
 

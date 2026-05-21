@@ -52,19 +52,39 @@ async fn model_mix_respects_the_filter_window() {
         },
     );
 
+    // tool_decisions rows with a non-NULL `model` so the by_model_tool half of
+    // the response — and the window filter applied to it — is exercised too.
+    {
+        let conn = pool.get().expect("checkout connection");
+        for (session_id, ts) in [("old", old_ms), ("recent", recent_ms)] {
+            conn.execute(
+                "INSERT INTO tool_decisions \
+                 (session_id, timestamp, tool_name, decision, model) \
+                 VALUES (?, ?, 'Edit', 'accept', 'claude-opus-4-7')",
+                rusqlite::params![session_id, ts],
+            )
+            .expect("insert tool_decisions");
+        }
+    }
+
     let (router, _router_dir) = common::test_router(&pool);
 
-    // No window → all-time → both sessions counted.
+    // No window → all-time → both sessions counted on each half of the
+    // response (by_model from token_usage, by_model_tool from tool_decisions).
     let (status, all) = get_json(router.clone(), "/api/behaviour/model-mix").await;
     assert_eq!(status, StatusCode::OK, "body: {all}");
     assert_eq!(
         all["by_model"][0]["invocations"], 2,
         "all-time model-mix must count both sessions: {all}"
     );
+    assert_eq!(
+        all["by_model_tool"][0]["count"], 2,
+        "all-time model-mix must count both tool decisions: {all}"
+    );
 
-    // Windowed to the recent session only → just that one.
+    // Windowed to the recent session only → just that one, on each half.
     let (status, win) = get_json(
-        router,
+        router.clone(),
         &format!(
             "/api/behaviour/model-mix?from={}&to={}",
             recent_ms,
@@ -76,5 +96,23 @@ async fn model_mix_respects_the_filter_window() {
     assert_eq!(
         win["by_model"][0]["invocations"], 1,
         "windowed model-mix must count only the in-window session: {win}"
+    );
+    assert_eq!(
+        win["by_model_tool"][0]["count"], 1,
+        "windowed model-mix must count only the in-window tool decision: {win}"
+    );
+
+    // A lone `from` bound is applied on its own — not ignored as all-time:
+    // the recent session onward, excluding the old one, on each half.
+    let (status, from_only) =
+        get_json(router, &format!("/api/behaviour/model-mix?from={recent_ms}")).await;
+    assert_eq!(status, StatusCode::OK, "body: {from_only}");
+    assert_eq!(
+        from_only["by_model"][0]["invocations"], 1,
+        "a from-only window must exclude the old session: {from_only}"
+    );
+    assert_eq!(
+        from_only["by_model_tool"][0]["count"], 1,
+        "a from-only window must exclude the old tool decision: {from_only}"
     );
 }
