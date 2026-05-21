@@ -60,9 +60,12 @@ fn tick(
     let budget = settings.budget();
     let now = Local::now();
 
+    // A single small SUM query on a 30-minute cadence — run inline rather
+    // than via spawn_blocking; the runtime stall is sub-millisecond and the
+    // connection is dropped before this fn returns (no await is ever crossed).
     let conn = pool.get()?;
     let mtd_cost = queries::month_to_date_cost(&conn, month_start_ms(now), now.timestamp_millis())?;
-    drop(conn); // never hold a DB connection past this point
+    drop(conn);
 
     let prior = load_state(state_path);
     let outcome = evaluate_once(mtd_cost, budget.monthly_usd, now, prior);
