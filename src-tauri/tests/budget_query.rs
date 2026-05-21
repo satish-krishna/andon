@@ -37,10 +37,23 @@ fn month_to_date_cost_sums_cost_entries_in_window() {
             ..Default::default()
         },
     );
+    // Exactly at to_ms — the window is half-open [from, to), so this is excluded.
+    common::seed_session(
+        &pool,
+        &common::SeedOpts {
+            session_id: "at-upper-bound".into(),
+            started_at_ms: Some(1_700_001_000_000),
+            model: "claude-opus-4-7".into(),
+            cost_usd: 88.0,
+            ..Default::default()
+        },
+    );
 
     let conn = pool.get().expect("checkout connection");
     let total = month_to_date_cost(&conn, 1_700_000_000_000, 1_700_001_000_000)
         .expect("query month_to_date_cost");
 
+    // Only the two in-window rows count; the before-window and at-upper-bound
+    // rows are excluded by the half-open window.
     assert!((total - 20.0).abs() < 1e-9, "expected 20.0, got {total}");
 }
