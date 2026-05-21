@@ -1351,16 +1351,17 @@ async fn v2_kpis(
     let now = Local::now();
     let day_of_month = now.day() as i64;
     let days_in_month = days_in_current_month();
-    let projected_eom = if day_of_month > 0 {
-        (cost / day_of_month as f64) * days_in_month as f64
-    } else {
-        cost
-    };
+    let projected_eom =
+        crate::budget::project_eom(cost, day_of_month as u32, days_in_month as u32);
     let session_pace = if day_of_month > 0 {
         (sessions as f64 / day_of_month as f64) * days_in_month as f64
     } else {
         sessions as f64
     };
+
+    let budget = state.settings.budget();
+    let budget_status =
+        crate::budget::evaluate(projected_eom, budget.monthly_usd, day_of_month as u32);
 
     Ok(Json(json!({
         "window": { "from": from, "to": to, "label": format!("{:04}-{:02}", now.year(), now.month()) },
@@ -1371,6 +1372,10 @@ async fn v2_kpis(
             "projected_eom": round4(projected_eom),
             "day_of_month": day_of_month,
             "days_in_month": days_in_month,
+            "budget": {
+                "monthly_usd": budget.monthly_usd,
+                "status": budget_status.as_str(),
+            },
         },
         "sessions": {
             "current": sessions,
