@@ -39,6 +39,21 @@
           <div class="mt-2 text-[11px] text-muted">
             Projected EOM · <span class="font-mono text-text">${{ k.cost.projected_eom | number : '1.2-2' }}</span> at current pace
           </div>
+          @if (k.cost.budget.monthly_usd > 0) {
+            <div class="mt-2">
+              <div class="flex items-center justify-between text-[11px]">
+                <span class="text-muted">Budget</span>
+                <span class="font-mono" [class]="budgetTextClass(k.cost.budget.status)">
+                  ${{ k.cost.projected_eom | number : '1.2-2' }} / ${{ k.cost.budget.monthly_usd | number : '1.2-2' }}
+                  · {{ k.cost.projected_eom / k.cost.budget.monthly_usd | percent : '1.0-0' }}
+                </span>
+              </div>
+              <div class="mt-1 h-1 bg-border rounded-sm overflow-hidden">
+                <div class="h-full" [class]="budgetBarClass(k.cost.budget.status)"
+                     [style.width.%]="Math.min(100, k.cost.projected_eom / k.cost.budget.monthly_usd * 100)"></div>
+              </div>
+            </div>
+          }
         } @else {
           <div class="text-5xl font-mono tabular-nums text-muted">$ —</div>
         }
