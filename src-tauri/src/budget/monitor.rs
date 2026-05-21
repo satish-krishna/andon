@@ -115,7 +115,7 @@ fn save_state(path: &Path, state: &AlertState) {
                     "failed to write budget-alerts.json");
             }
         }
-        Err(e) => tracing::warn!(error = ?e, "failed to serialise AlertState"),
+        Err(e) => tracing::warn!(error = ?e, "failed to serialize AlertState"),
     }
 }
 

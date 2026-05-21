@@ -1,6 +1,6 @@
 import type { BudgetStatus } from '../../core/api.service';
 
-/** Tailwind text-colour class for a budget status. */
+/** Tailwind text-color class for a budget status. */
 export function budgetTextClass(status: BudgetStatus): string {
   switch (status) {
     case 'red':
@@ -12,7 +12,7 @@ export function budgetTextClass(status: BudgetStatus): string {
   }
 }
 
-/** Tailwind background-colour class for the budget progress bar. */
+/** Tailwind background-color class for the budget progress bar. */
 export function budgetBarClass(status: BudgetStatus): string {
   switch (status) {
     case 'red':

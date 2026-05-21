@@ -1,7 +1,7 @@
 import { budgetTextClass, budgetBarClass } from './budget-indicator';
 
 describe('budget-indicator', () => {
-  it('maps status to a text-colour class', () => {
+  it('maps status to a text-color class', () => {
     expect(budgetTextClass('neutral')).toBe('text-muted');
     expect(budgetTextClass('amber')).toBe('text-warn');
     expect(budgetTextClass('red')).toBe('text-err');

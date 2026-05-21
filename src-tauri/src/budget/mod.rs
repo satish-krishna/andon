@@ -107,7 +107,7 @@ pub struct AlertState {
 /// The result of one budget evaluation.
 #[derive(Debug, Clone, PartialEq)]
 pub struct EvalOutcome {
-    /// The live status — drives the tray colour. Moves freely up and down.
+    /// The live status — drives the tray color. Moves freely up and down.
     pub status: BudgetStatus,
     /// Projected end-of-month cost the status was derived from.
     pub projected_eom: f64,
