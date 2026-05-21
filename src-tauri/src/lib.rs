@@ -52,6 +52,7 @@ use tauri::{
 use tracing_subscriber::{EnvFilter, prelude::*};
 
 const MAIN_WINDOW: &str = "main";
+const TRAY_ID: &str = "andon-tray";
 
 struct AppState {
     control: otlp::IngestionControl,
@@ -134,6 +135,10 @@ pub fn run() {
         control: control.clone(),
     };
 
+    let monitor_pool = pool.clone();
+    let monitor_settings = settings_store.clone();
+    let monitor_data_dir = paths.data_dir.clone();
+
     tauri::Builder::default()
         .plugin(tauri_plugin_single_instance::init(|app, _argv, _cwd| {
             if let Some(window) = app.get_webview_window(MAIN_WINDOW) {
@@ -183,13 +188,25 @@ pub fn run() {
                 .default_window_icon()
                 .cloned()
                 .expect("default window icon must be configured in tauri.conf.json");
-            let _tray = TrayIconBuilder::with_id("andon-tray")
+            let _tray = TrayIconBuilder::with_id(TRAY_ID)
                 .icon(tray_icon)
                 .tooltip("andon — Claude Code dashboard")
                 .menu(&menu)
                 .on_menu_event(handle_menu_event)
                 .on_tray_icon_event(handle_tray_event)
                 .build(app)?;
+
+            // Budget-alert monitor
+            let monitor_app = app.handle().clone();
+            tauri::async_runtime::spawn(async move {
+                budget::monitor::run_monitor(
+                    monitor_app,
+                    monitor_settings,
+                    monitor_pool,
+                    monitor_data_dir,
+                )
+                .await;
+            });
 
             // Start hidden — user opens via tray.
             if let Some(w) = app.get_webview_window(MAIN_WINDOW) {

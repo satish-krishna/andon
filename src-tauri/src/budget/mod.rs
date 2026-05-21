@@ -2,6 +2,8 @@
 //! user. This module is pure — no clock, no database, no filesystem. The I/O
 //! shell that drives it lives in `monitor.rs`.
 
+pub mod monitor;
+
 use chrono::{DateTime, Datelike, Local, NaiveDate};
 use serde::{Deserialize, Serialize};
 
