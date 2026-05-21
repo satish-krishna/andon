@@ -90,8 +90,14 @@ export class FilterService {
       }
       case '30d':
         return `last 30d · ${fmt(from)} – ${fmt(to)}`;
-      case 'custom':
+      case 'custom': {
+        // A single-day custom window (e.g. a tape day-select) has from and to
+        // on the same calendar day — drop the redundant second date.
+        if (from.toDateString() === to.toDateString()) {
+          return `custom · ${fmt(from)}`;
+        }
         return `custom · ${fmt(from)} – ${fmt(to)}`;
+      }
     }
   });
 
@@ -117,6 +123,18 @@ export class FilterService {
     const cur = this.customRange() ?? this.window();
     const next = ms < cur.fromMs ? { fromMs: ms, toMs: cur.fromMs } : { fromMs: cur.fromMs, toMs: ms };
     this.customRange.set(next);
+  }
+
+  /**
+   * Narrow the filter to a single day — a 1-day `custom` window spanning that
+   * day's start-of-day to end-of-day. Used by the Overview tape's day-select.
+   */
+  selectDay(day: Date) {
+    this.customRange.set({
+      fromMs: startOfDay(day).getTime(),
+      toMs: endOfDay(day).getTime(),
+    });
+    this.range.set('custom');
   }
 
   toggleModel(m: string) {
