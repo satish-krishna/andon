@@ -3,7 +3,7 @@
 //! covered by `#[cfg(test)]` unit-test blocks added directly to those source
 //! files; see `src/autostart.rs` and `src/config.rs`.
 
-use andon_lib::settings::{AppSettings, ForwarderSettings, SettingsStore};
+use andon_lib::settings::{AppSettings, BudgetSettings, ForwarderSettings, SettingsStore};
 use std::collections::BTreeMap;
 use tempfile::TempDir;
 
@@ -202,4 +202,69 @@ fn settings_default_values() {
     assert!(defaults.forwarder.endpoint.is_empty(), "endpoint empty by default");
     assert_eq!(defaults.forwarder.timeout_ms, 2000, "default timeout 2000 ms");
     assert!(defaults.forwarder.headers.is_empty(), "no headers by default");
+}
+
+// ---------------------------------------------------------------------------
+// 6. Budget round-trip: save a budget, reload, value matches
+// ---------------------------------------------------------------------------
+
+#[test]
+fn budget_round_trip() {
+    let dir = tmp();
+    let path = settings_path(&dir);
+    let store = SettingsStore::load(path.clone()).expect("initial load");
+
+    store
+        .save_budget(BudgetSettings { monthly_usd: 250.0 })
+        .expect("save_budget");
+
+    let reloaded = SettingsStore::load(path).expect("reload");
+    assert_eq!(reloaded.budget().monthly_usd, 250.0, "budget round-trip");
+}
+
+// ---------------------------------------------------------------------------
+// 7. A legacy settings.json with no `budget` key loads cleanly (no backup)
+// ---------------------------------------------------------------------------
+
+/// CRITICAL REGRESSION GUARD. Existing installs have a settings.json written
+/// before the `budget` field existed. Without `#[serde(default)]` on
+/// `AppSettings.budget`, parsing fails, the loader treats the file as corrupt,
+/// and overwrites it with defaults — wiping the user's forwarder config.
+#[test]
+fn settings_without_budget_key_loads_without_backup() {
+    let dir = tmp();
+    let path = settings_path(&dir);
+
+    // An old settings.json: version + forwarder only, no `budget` key.
+    std::fs::write(
+        &path,
+        r#"{
+  "version": 1,
+  "forwarder": {
+    "enabled": true,
+    "endpoint": "http://otel.example.com:4318",
+    "timeout_ms": 3000,
+    "headers": {}
+  }
+}"#,
+    )
+    .expect("write legacy settings file");
+
+    let store = SettingsStore::load(path).expect("legacy file must load");
+
+    // The missing `budget` key falls back to the default — not a corrupt wipe.
+    assert_eq!(store.budget(), BudgetSettings::default(), "budget defaults");
+    // The forwarder config survived — proof the file was parsed, not discarded.
+    assert_eq!(
+        store.forwarder().endpoint,
+        "http://otel.example.com:4318",
+        "forwarder config must survive a budget-less file",
+    );
+    // No `corrupt-*` backup must exist.
+    let backups: Vec<_> = std::fs::read_dir(dir.path())
+        .expect("read tempdir")
+        .flatten()
+        .filter(|e| e.file_name().to_string_lossy().contains("corrupt-"))
+        .collect();
+    assert_eq!(backups.len(), 0, "a budget-less file is valid, not corrupt");
 }
