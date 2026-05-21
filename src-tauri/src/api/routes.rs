@@ -2427,12 +2427,35 @@ async fn jsonl_coverage_gaps(
 
 async fn behaviour_model_mix(
     State(state): State<ApiState>,
+    Query(q): Query<FilterQuery>,
 ) -> Json<crate::api::dto::ModelMixResponse> {
     let pool = state.pool.clone();
+    // Model-mix is filterable: the Overview passes the dashboard window so its
+    // "Invocations by model" tile tracks the filter. With no `from`/`to` — the
+    // unfiltered Behaviour page — it stays all-time.
+    let (m_sql, m_vals) = q.model_clause("model");
+    let (time_sql, time_vals): (String, Vec<i64>) = match (q.from, q.to) {
+        (Some(from), Some(to)) => (
+            " AND timestamp >= ? AND timestamp < ?".to_string(),
+            vec![from, to],
+        ),
+        _ => (String::new(), vec![]),
+    };
     let out = tokio::task::spawn_blocking(move || {
         let conn = pool.get().ok()?;
+
+        // The same WHERE fragment and bind parameters drive both queries.
+        let mut params: Vec<Box<dyn rusqlite::ToSql>> = Vec::new();
+        for v in &time_vals {
+            params.push(Box::new(*v));
+        }
+        for v in &m_vals {
+            params.push(Box::new(v.clone()));
+        }
+        let refs: Vec<&dyn rusqlite::ToSql> = params.iter().map(|b| &**b).collect();
+
         let by_model: Vec<crate::api::dto::ModelMixEntry> = conn
-            .prepare(
+            .prepare(&format!(
                 // One API call writes several token_usage rows (input/output/
                 // cacheRead/cacheCreation), so COUNT(*) would inflate
                 // invocations ~2-4x. Count distinct calls instead: request_id
@@ -2440,10 +2463,11 @@ async fn behaviour_model_mix(
                 "SELECT model,
                         COUNT(DISTINCT COALESCE(request_id, timestamp)),
                         COUNT(DISTINCT session_id)
-                 FROM token_usage GROUP BY model ORDER BY 2 DESC",
-            )
+                 FROM token_usage WHERE 1=1{time_sql}{m_sql}
+                 GROUP BY model ORDER BY 2 DESC"
+            ))
             .ok()?
-            .query_map([], |r| {
+            .query_map(refs.as_slice(), |r| {
                 Ok(crate::api::dto::ModelMixEntry {
                     model: r.get(0)?,
                     invocations: r.get(1)?,
@@ -2454,13 +2478,13 @@ async fn behaviour_model_mix(
             .filter_map(|r| r.ok())
             .collect();
         let by_model_tool: Vec<crate::api::dto::ModelToolCell> = conn
-            .prepare(
+            .prepare(&format!(
                 "SELECT model, tool_name, COUNT(*)
-                 FROM tool_decisions WHERE model IS NOT NULL
-                 GROUP BY model, tool_name ORDER BY 3 DESC",
-            )
+                 FROM tool_decisions WHERE model IS NOT NULL{time_sql}{m_sql}
+                 GROUP BY model, tool_name ORDER BY 3 DESC"
+            ))
             .ok()?
-            .query_map([], |r| {
+            .query_map(refs.as_slice(), |r| {
                 Ok(crate::api::dto::ModelToolCell {
                     model: r.get(0)?,
                     tool: r.get(1)?,
