@@ -4,11 +4,15 @@
 
 .DESCRIPTION
     Runs the frontend build, the Tauri production build, and stages the
-    portable binary - producing the three release downloadables:
+    portable binary - producing the release downloadables:
 
       - andon_X.Y.Z_x64-setup.exe    (NSIS installer)
-      - andon_X.Y.Z_x64_en-US.msi    (MSI installer)
+      - andon_X.Y.Z_x64_en-US.msi    (MSI installer; stable releases only)
       - andon_X.Y.Z_x64_portable.exe (raw binary, renamed)
+
+    Pre-release versions (e.g. 0.5.0-rc.2) skip the MSI: the Windows
+    Installer format rejects non-numeric pre-release identifiers. The
+    script detects this from the version string and builds NSIS only.
 
     Every run writes a complete, timestamped transcript to
     scripts/build-release.log. On any failure the script prints which step
@@ -95,6 +99,15 @@ try {
     $Version = $cargoVersion
     Log "version $Version (Cargo.toml and tauri.conf.json agree)" 'Green'
 
+    # A SemVer pre-release version carries an identifier after '-' (e.g.
+    # 0.5.0-rc.2). The MSI target cannot bundle one - the Windows Installer
+    # format requires a numeric-only pre-release segment - so pre-release
+    # builds ship the NSIS installer + portable binary only.
+    $IsPrerelease = $Version -match '-'
+    if ($IsPrerelease) {
+        Log 'pre-release version - the MSI target will be skipped' 'Yellow'
+    }
+
     # --- 2. Pre-flight ------------------------------------------------------
     Step 'Pre-flight checks'
 
@@ -141,8 +154,14 @@ try {
 
     Push-Location $SrcTauri
     try {
-        Log 'running: cargo tauri build (this takes several minutes)'
-        & cargo tauri build
+        if ($IsPrerelease) {
+            Log 'running: cargo tauri build --bundles nsis (this takes several minutes)'
+            & cargo tauri build --bundles nsis
+        }
+        else {
+            Log 'running: cargo tauri build (this takes several minutes)'
+            & cargo tauri build
+        }
         Assert-ExitCode 'cargo tauri build'
     }
     finally {
@@ -165,12 +184,18 @@ try {
     Step 'Collecting release artifacts'
 
     $nsis = Get-ChildItem -Path (Join-Path $ReleaseDir 'bundle\nsis') -Filter '*-setup.exe' -ErrorAction SilentlyContinue
-    $msi  = Get-ChildItem -Path (Join-Path $ReleaseDir 'bundle\msi')  -Filter '*.msi'        -ErrorAction SilentlyContinue
     if (-not $nsis) { throw 'No NSIS installer (*-setup.exe) found under target/release/bundle/nsis.' }
-    if (-not $msi)  { throw 'No MSI installer (*.msi) found under target/release/bundle/msi.' }
+
+    # Stable releases must also carry an MSI; pre-releases never build one.
+    $artifacts = @($nsis)
+    if (-not $IsPrerelease) {
+        $msi = Get-ChildItem -Path (Join-Path $ReleaseDir 'bundle\msi') -Filter '*.msi' -ErrorAction SilentlyContinue
+        if (-not $msi) { throw 'No MSI installer (*.msi) found under target/release/bundle/msi.' }
+        $artifacts += @($msi)
+    }
 
     # The Modified column makes it obvious whether the artifacts are fresh.
-    $artifacts = @($nsis) + @($msi) + @(Get-Item $portableExe)
+    $artifacts += @(Get-Item $portableExe)
     $table = $artifacts |
         Select-Object `
             @{ Name = 'Artifact'; Expression = { $_.Name } },
