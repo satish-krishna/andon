@@ -59,6 +59,7 @@ pub fn router(state: ApiState) -> Router {
         .route("/api/settings", get(get_settings))
         .route("/api/settings/forwarder", axum::routing::put(put_forwarder))
         .route("/api/settings/forwarder/test", post(test_forwarder))
+        .route("/api/settings/budget", axum::routing::put(put_budget))
         .route("/api/repo/backfill", post(repo_backfill))
         .route("/api/repos", get(list_repos))
         .route("/api/overview/top-repos", get(overview_top_repos))
@@ -801,6 +802,41 @@ async fn test_forwarder(
         Ok(resp) => Json(json!({ "ok": resp.status().is_success(), "status": resp.status().as_u16() })),
         Err(e) => Json(json!({ "ok": false, "error": format!("{e}") })),
     }
+}
+
+#[derive(Deserialize)]
+struct BudgetPayload {
+    monthly_usd: f64,
+}
+
+fn validate_budget(p: &BudgetPayload) -> Result<(), String> {
+    if !p.monthly_usd.is_finite() || p.monthly_usd < 0.0 {
+        return Err("monthly_usd must be zero or a positive number".into());
+    }
+    if p.monthly_usd > 1_000_000.0 {
+        return Err("monthly_usd must not exceed 1000000".into());
+    }
+    Ok(())
+}
+
+async fn put_budget(
+    State(state): State<ApiState>,
+    Json(p): Json<BudgetPayload>,
+) -> Result<Json<serde_json::Value>, ApiError> {
+    if let Err(msg) = validate_budget(&p) {
+        return Err(ApiError {
+            status: StatusCode::BAD_REQUEST,
+            message: msg,
+        });
+    }
+    let new = crate::settings::BudgetSettings {
+        monthly_usd: p.monthly_usd,
+    };
+    let saved = state.settings.save_budget(new).map_err(|e| ApiError {
+        status: StatusCode::INTERNAL_SERVER_ERROR,
+        message: format!("{e:#}"),
+    })?;
+    Ok(Json(serde_json::to_value(saved).unwrap_or_else(|_| json!({}))))
 }
 
 // ---------- error ----------
