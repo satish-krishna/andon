@@ -45,6 +45,11 @@ the portable binary, and prints a summary of the three artifacts:
 | MSI installer | `src-tauri/target/release/bundle/msi/andon_X.Y.Z_x64_en-US.msi` |
 | Portable binary | `src-tauri/target/release/andon_X.Y.Z_x64_portable.exe` |
 
+> **Pre-releases skip the MSI.** A version with a pre-release identifier
+> (e.g. `0.5.0-rc.2`) cannot be bundled as an MSI — the Windows Installer
+> format rejects non-numeric pre-release segments. The script detects this
+> from the version string and builds NSIS + portable only.
+
 The script builds artifacts only — it does not bump the version, tag, or
 publish. Those remain the manual steps below.
 
@@ -66,6 +71,17 @@ gh release create vX.Y.Z `
   src-tauri/target/release/andon_X.Y.Z_x64_portable.exe
 ```
 
+For a **pre-release**, add `--prerelease` and omit the MSI asset — the build
+produced none:
+
+```powershell
+gh release create vX.Y.Z-rc.N --prerelease `
+  --title "vX.Y.Z-rc.N — <short title>" `
+  --notes "..." `
+  src-tauri/target/release/bundle/nsis/andon_X.Y.Z-rc.N_x64-setup.exe `
+  src-tauri/target/release/andon_X.Y.Z-rc.N_x64_portable.exe
+```
+
 ### Release notes structure
 
 See prior releases on GitHub for tone. Skeleton:
@@ -78,6 +94,6 @@ See prior releases on GitHub for tone. Skeleton:
 
 ### Downloads
 - **andon_X.Y.Z_x64-setup.exe** — NSIS installer (recommended)
-- **andon_X.Y.Z_x64_en-US.msi** — MSI installer (group-policy friendly)
+- **andon_X.Y.Z_x64_en-US.msi** — MSI installer (group-policy friendly; stable releases only)
 - **andon_X.Y.Z_x64_portable.exe** — portable single binary, no install
 ```
