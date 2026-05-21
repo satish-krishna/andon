@@ -35,6 +35,9 @@ pub async fn run_monitor(
     let state_path = data_dir.join("budget-alerts.json");
     let mut last_status: Option<BudgetStatus> = None;
     let mut interval = tokio::time::interval(MONITOR_INTERVAL);
+    // After a system sleep, skip missed ticks rather than firing a catch-up
+    // burst of redundant evaluations.
+    interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
 
     loop {
         interval.tick().await;
@@ -99,7 +102,13 @@ fn load_state(path: &Path) -> AlertState {
             tracing::warn!(error = ?e, "budget-alerts.json unparseable; treating as empty");
             AlertState::default()
         }),
-        Err(_) => AlertState::default(),
+        // A missing file on first run is expected; any other read error
+        // (permissions, disk) is worth a log line before falling back.
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => AlertState::default(),
+        Err(e) => {
+            tracing::warn!(error = ?e, "failed to read budget-alerts.json; treating as empty");
+            AlertState::default()
+        }
     }
 }
 
