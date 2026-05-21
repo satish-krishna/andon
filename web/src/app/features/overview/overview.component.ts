@@ -17,6 +17,7 @@ import { FilterService } from '../../core/filter.service';
 import { FilterBarComponent } from '../../shared/filter-bar.component';
 import { TopReposTileComponent } from './top-repos-tile.component';
 import { budgetTextClass, budgetBarClass } from './budget-indicator';
+import { selectedTapeDay, tapeDayDate } from './tape-selection';
 
 // Model names come in like "claude-opus-4-7" or "claude-haiku-4-5-20251001".
 // Substring match keeps it forward-compatible with new versions.
@@ -72,6 +73,12 @@ export class OverviewComponent implements OnInit {
     return Math.max(1, ...t.previous);
   });
 
+  // The 0-based tape day-bar the filter currently isolates, or null.
+  // Drives the tape highlight and the click-to-deselect toggle.
+  selectedDayIndex = computed(() =>
+    selectedTapeDay(this.filter.range(), this.filter.window(), this.tape()?.month ?? null),
+  );
+
   modelColor(m: string | null): string {
     if (!m) return '#7b8794';
     const lower = m.toLowerCase();
@@ -90,6 +97,42 @@ export class OverviewComponent implements OnInit {
     return m
       .replace(/^claude-/, '')
       .replace(/-(\d+)-(\d+)(?:-\d+)?$/, ' $1.$2');
+  }
+
+  /**
+   * Click on tape day-bar `i` (0-based). Future days have no data and are
+   * ignored. Clicking the already-selected day toggles back to "This month";
+   * clicking any other past-or-today day narrows the filter to that day.
+   */
+  onTapeDayClick(i: number) {
+    const t = this.tape();
+    if (!t) return;
+    // Future days are not selectable — mirrors the template's `today_day ?? 31`.
+    if (i + 1 > (t.today_day ?? 31)) return;
+    if (i === this.selectedDayIndex()) {
+      this.filter.setRange('month'); // toggle the selection off
+    } else {
+      this.filter.selectDay(tapeDayDate(t.month, i));
+    }
+  }
+
+  /**
+   * Tailwind classes for tape day-bar `i`. Selected takes visual priority over
+   * the today marker; a selected today keeps today's top border so the bar and
+   * its `↑` day label stay consistent.
+   */
+  tapeBarClass(i: number, t: V2Tape): string {
+    const today = i + 1 === t.today_day;
+    if (i === this.selectedDayIndex()) {
+      return today
+        ? 'bg-accent ring-2 ring-yellow-200 border-t border-yellow-200'
+        : 'bg-accent ring-2 ring-yellow-200';
+    }
+    if (today) return 'bg-accent border-t border-yellow-200';
+    if (i + 1 > (t.today_day ?? 31)) {
+      return 'border-t border-l border-r border-dashed border-border-bright';
+    }
+    return 'bg-accent/40 border-t border-accent/70 group-hover:bg-accent';
   }
 
   constructor() {
