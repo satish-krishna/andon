@@ -16,6 +16,7 @@ import { ModelMixResponse } from '../../core/models';
 import { FilterService } from '../../core/filter.service';
 import { FilterBarComponent } from '../../shared/filter-bar.component';
 import { TopReposTileComponent } from './top-repos-tile.component';
+import { budgetTextClass, budgetBarClass } from './budget-indicator';
 
 // Model names come in like "claude-opus-4-7" or "claude-haiku-4-5-20251001".
 // Substring match keeps it forward-compatible with new versions.
@@ -142,5 +143,7 @@ export class OverviewComponent implements OnInit {
   tapeMax_ = this.tapeMax; // expose to template
   prevMax_ = this.prevMax; // expose to template
   Math = Math; // template access
+  budgetTextClass = budgetTextClass; // template access
+  budgetBarClass = budgetBarClass; // template access
   now() { return Date.now(); }
 }

@@ -10,7 +10,7 @@ The default landing page. Designed to be the one place you check each morning.
 
 - **Range selector** — Today / This week / This month / Last 30 days / Custom. Every other chart on the page respects it.
 - **Model filter** — toggle Opus / Sonnet / Haiku to isolate spend per model family.
-- **Top KPIs** — month-to-date cost (with last-month-same-day comparison and end-of-month projection at current pace), session count, and a split token breakdown (input / output / cache).
+- **Top KPIs** — month-to-date cost (with last-month-same-day comparison and end-of-month projection at current pace), session count, and a split token breakdown (input / output / cache). When a monthly budget is set (Settings → Monthly budget), the cost tile also shows projected spend as a percentage of that budget, with a progress bar that turns amber at 80% and red at 100%.
 - **The Tape** — a calendar-as-row visualisation of daily cost across the month. Today is marked, the y-axis is a money scale, future days are blanked.
 - **Cost by model** — period total broken down by model so you can see the Opus-vs-Sonnet mix.
 - **Accept rate by language** — horizontal bars sorted descending, with raw edit counts.
@@ -86,6 +86,7 @@ Configuration, integration status, and danger zone. Sections are anchor-linked f
 - **Ingestion** — global pause toggle. When paused, OTLP listeners stay bound but drop incoming payloads (so Claude Code never sees an error).
 - **OTel forwarder** — opt-in re-emitter. Configure a downstream HTTP/protobuf endpoint, timeout, and custom headers. Test the connection before saving.
 - **Data** — DB file path, "Open folder" button, and live row counts per table. *New in v0.4.0:* a **Backfill repo info** button that runs inference (LCA of file paths → walk up for `.git`) over up to 50 sessions per call with NULL `repo_root`. Useful for sessions that predate the SessionStart hook.
+- **Monthly budget** — a monthly cost budget in USD. When the projected end-of-month spend crosses 80% / 100% of it, Andon shifts the tray icon to amber / red and fires one desktop notification per threshold per month. Set to 0 to disable. Alerts are suppressed for the first two days of each month, when the projection is too volatile to trust.
 - **App** — launch-at-logon toggle (writes to `HKCU\Run`, no admin needed).
 - **About** — version, stack, repo link.
 - **Danger zone** — unpatch `settings.json` (revert the env vars and all three andon hooks) or restore from the `.andon-backup` snapshot andon took at first patch.

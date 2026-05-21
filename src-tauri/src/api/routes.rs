@@ -59,6 +59,7 @@ pub fn router(state: ApiState) -> Router {
         .route("/api/settings", get(get_settings))
         .route("/api/settings/forwarder", axum::routing::put(put_forwarder))
         .route("/api/settings/forwarder/test", post(test_forwarder))
+        .route("/api/settings/budget", axum::routing::put(put_budget))
         .route("/api/repo/backfill", post(repo_backfill))
         .route("/api/repos", get(list_repos))
         .route("/api/overview/top-repos", get(overview_top_repos))
@@ -803,6 +804,44 @@ async fn test_forwarder(
     }
 }
 
+#[derive(Deserialize)]
+struct BudgetPayload {
+    monthly_usd: f64,
+}
+
+fn validate_budget(p: &BudgetPayload) -> Result<(), String> {
+    if !p.monthly_usd.is_finite() || p.monthly_usd < 0.0 {
+        return Err("monthly_usd must be zero or a positive number".into());
+    }
+    if p.monthly_usd > 1_000_000.0 {
+        return Err("monthly_usd must not exceed 1000000".into());
+    }
+    Ok(())
+}
+
+async fn put_budget(
+    State(state): State<ApiState>,
+    Json(p): Json<BudgetPayload>,
+) -> Result<Json<serde_json::Value>, ApiError> {
+    if let Err(msg) = validate_budget(&p) {
+        return Err(ApiError {
+            status: StatusCode::BAD_REQUEST,
+            message: msg,
+        });
+    }
+    let new = crate::settings::BudgetSettings {
+        monthly_usd: p.monthly_usd,
+    };
+    let saved = state.settings.save_budget(new).map_err(|e| ApiError {
+        status: StatusCode::INTERNAL_SERVER_ERROR,
+        message: format!("{e:#}"),
+    })?;
+    // Wake the budget monitor so the tray and notifications reflect the new
+    // budget immediately, rather than at the next 30-minute tick.
+    state.budget_changed.notify_one();
+    Ok(Json(serde_json::to_value(saved).unwrap_or_else(|_| json!({}))))
+}
+
 // ---------- error ----------
 
 pub struct ApiError {
@@ -1347,20 +1386,29 @@ async fn v2_kpis(
     let prev_tok_in = sum_tokens(&conn, prev_from, prev_to, "input", &q);
     let prev_tok_out = sum_tokens(&conn, prev_from, prev_to, "output", &q);
 
-    // pace + projection (only meaningful for monthly window)
+    // Pace and projection are month-end figures — always computed over the
+    // true current-month window, never the period filter `q`. Using `q`'s
+    // window would make a non-month filter yield a nonsensical projection,
+    // budget status, and session pace.
     let now = Local::now();
     let day_of_month = now.day() as i64;
     let days_in_month = days_in_current_month();
-    let projected_eom = if day_of_month > 0 {
-        (cost / day_of_month as f64) * days_in_month as f64
-    } else {
-        cost
-    };
+    let month_start = crate::budget::month_start_ms(now);
+    let now_ms = now.timestamp_millis();
+    let mtd_cost =
+        crate::db::queries::month_to_date_cost(&conn, month_start, now_ms).unwrap_or(0.0);
+    let mtd_sessions = count_sessions(&conn, month_start, now_ms, &q);
+    let projected_eom =
+        crate::budget::project_eom(mtd_cost, day_of_month as u32, days_in_month as u32);
     let session_pace = if day_of_month > 0 {
-        (sessions as f64 / day_of_month as f64) * days_in_month as f64
+        (mtd_sessions as f64 / day_of_month as f64) * days_in_month as f64
     } else {
-        sessions as f64
+        mtd_sessions as f64
     };
+
+    let budget = state.settings.budget();
+    let budget_status =
+        crate::budget::evaluate(projected_eom, budget.monthly_usd, day_of_month as u32);
 
     Ok(Json(json!({
         "window": { "from": from, "to": to, "label": format!("{:04}-{:02}", now.year(), now.month()) },
@@ -1371,6 +1419,10 @@ async fn v2_kpis(
             "projected_eom": round4(projected_eom),
             "day_of_month": day_of_month,
             "days_in_month": days_in_month,
+            "budget": {
+                "monthly_usd": budget.monthly_usd,
+                "status": budget_status.as_str(),
+            },
         },
         "sessions": {
             "current": sessions,
@@ -1388,14 +1440,7 @@ async fn v2_kpis(
 }
 
 fn days_in_current_month() -> i64 {
-    let now = Local::now().date_naive();
-    let first = now.with_day(1).unwrap();
-    let next = if first.month() == 12 {
-        NaiveDate::from_ymd_opt(first.year() + 1, 1, 1).unwrap()
-    } else {
-        NaiveDate::from_ymd_opt(first.year(), first.month() + 1, 1).unwrap()
-    };
-    (next - first).num_days()
+    crate::budget::days_in_month(Local::now().date_naive()) as i64
 }
 
 #[derive(Deserialize)]

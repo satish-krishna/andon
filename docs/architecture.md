@@ -38,6 +38,7 @@ flowchart TB
   - `:4318` — axum routes `POST /v1/metrics` and `POST /v1/logs` accepting `application/x-protobuf` with the same decoders.
   - `:8765` — axum JSON API consumed by the SPA. CORS allow-any so a browser pointed at a built `dist/` also works for development.
 - **Window is optional.** Closing it hides to tray; quitting from the tray shuts the runtime down cleanly.
+- **Budget monitor.** A background task wakes every 30 minutes (and once at startup), projects month-end cost from `cost_entries`, compares it to the user's monthly budget, repaints the tray icon, and fires desktop notifications. Notification de-dup state is persisted to `budget-alerts.json` in the data directory; the budget amount itself lives in `settings.json` under the `budget` key.
 
 ## Ingestion path
 

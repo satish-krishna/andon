@@ -31,6 +31,9 @@ pub struct ApiState {
     pub settings: Arc<SettingsStore>,
     pub forwarder: Arc<Forwarder>,
     pub reports_dir: PathBuf,
+    /// Pinged when the monthly budget changes, so the budget monitor can
+    /// re-evaluate immediately instead of waiting for its next timed tick.
+    pub budget_changed: Arc<tokio::sync::Notify>,
 }
 
 pub async fn serve(state: ApiState) -> Result<()> {

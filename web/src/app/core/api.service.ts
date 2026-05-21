@@ -45,6 +45,7 @@ export interface V2Kpis {
     projected_eom: number;
     day_of_month: number;
     days_in_month: number;
+    budget: { monthly_usd: number; status: BudgetStatus };
   };
   sessions: { current: number; previous: number; delta_pct: number | null; pace: number };
   tokens: {
@@ -132,6 +133,12 @@ export interface V2FilesResponse {
   totals: { files: number; edits: number; added: number; removed: number };
 }
 
+export type BudgetStatus = 'neutral' | 'amber' | 'red';
+
+export interface BudgetSettings {
+  monthly_usd: number;
+}
+
 export interface ForwarderSettings {
   enabled: boolean;
   endpoint: string;
@@ -142,6 +149,7 @@ export interface ForwarderSettings {
 export interface AppSettings {
   version: number;
   forwarder: ForwarderSettings;
+  budget: BudgetSettings;
 }
 
 function toParams(args?: FilterArgs): HttpParams {
@@ -227,6 +235,9 @@ export class ApiService {
   }
   saveForwarder(f: ForwarderSettings): Observable<ForwarderSettings> {
     return this.http.put<ForwarderSettings>(`${BASE}/api/settings/forwarder`, f);
+  }
+  saveBudget(b: BudgetSettings): Observable<BudgetSettings> {
+    return this.http.put<BudgetSettings>(`${BASE}/api/settings/budget`, b);
   }
   testForwarder(f: ForwarderSettings): Observable<{ ok: boolean; status?: number; error?: string }> {
     return this.http.post<any>(`${BASE}/api/settings/forwarder/test`, f);
