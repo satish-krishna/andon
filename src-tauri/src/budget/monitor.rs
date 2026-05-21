@@ -7,12 +7,12 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::Duration;
 
-use chrono::{DateTime, Datelike, Local, TimeZone};
+use chrono::Local;
 use tauri::image::Image;
 use tauri::AppHandle;
 use tauri_plugin_notification::NotificationExt;
 
-use super::{evaluate_once, AlertState, BudgetStatus};
+use super::{evaluate_once, month_start_ms, AlertState, BudgetStatus};
 use crate::db::{queries, DbPool};
 use crate::settings::SettingsStore;
 
@@ -82,19 +82,6 @@ fn tick(
 
     save_state(state_path, &outcome.next_state);
     Ok(())
-}
-
-/// Unix-ms of 00:00 local time on the first of `now`'s month.
-fn month_start_ms(now: DateTime<Local>) -> i64 {
-    let first = now.date_naive().with_day(1).unwrap_or(now.date_naive());
-    match first.and_hms_opt(0, 0, 0) {
-        Some(naive) => Local
-            .from_local_datetime(&naive)
-            .single()
-            .map(|dt| dt.timestamp_millis())
-            .unwrap_or_else(|| now.timestamp_millis()),
-        None => now.timestamp_millis(),
-    }
 }
 
 /// Read the persisted `AlertState`; a missing or unparseable file yields the

@@ -4,7 +4,7 @@
 
 pub mod monitor;
 
-use chrono::{DateTime, Datelike, Local, NaiveDate};
+use chrono::{DateTime, Datelike, Local, NaiveDate, TimeZone};
 use serde::{Deserialize, Serialize};
 
 /// Alerts are suppressed for the first two days of the month — the linear
@@ -41,6 +41,21 @@ pub fn days_in_month(date: NaiveDate) -> u32 {
         2 if date.leap_year() => 29,
         2 => 28,
         _ => 30, // unreachable: month() is always 1..=12
+    }
+}
+
+/// Unix-ms of 00:00 local time on the first of `now`'s month — the start of
+/// the month-to-date window. Shared by the API and the monitor so both
+/// project against an identical window.
+pub fn month_start_ms(now: DateTime<Local>) -> i64 {
+    let first = now.date_naive().with_day(1).unwrap_or(now.date_naive());
+    match first.and_hms_opt(0, 0, 0) {
+        Some(naive) => Local
+            .from_local_datetime(&naive)
+            .single()
+            .map(|dt| dt.timestamp_millis())
+            .unwrap_or_else(|| now.timestamp_millis()),
+        None => now.timestamp_millis(),
     }
 }
 
@@ -171,6 +186,19 @@ mod tests {
         assert_eq!(days_in_month(date(2026, 4, 1)), 30);
         assert_eq!(days_in_month(date(2026, 2, 10)), 28);
         assert_eq!(days_in_month(date(2024, 2, 10)), 29); // leap year
+    }
+
+    #[test]
+    fn month_start_ms_is_first_of_month_local_midnight() {
+        let now = Local
+            .with_ymd_and_hms(2026, 5, 21, 14, 30, 0)
+            .single()
+            .expect("valid now");
+        let expected = Local
+            .with_ymd_and_hms(2026, 5, 1, 0, 0, 0)
+            .single()
+            .expect("valid month start");
+        assert_eq!(month_start_ms(now), expected.timestamp_millis());
     }
 
     #[test]

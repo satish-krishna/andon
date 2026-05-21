@@ -84,3 +84,73 @@ async fn put_budget_rejects_negative() {
         put_json(router, "/api/settings/budget", json!({ "monthly_usd": -5.0 })).await;
     assert_eq!(status, StatusCode::BAD_REQUEST, "body: {body}");
 }
+
+/// `projected_eom` is a month-end figure: it must reflect the true
+/// month-to-date spend, never the dashboard's period filter. Two requests
+/// with different `from`/`to` windows must report the same projection.
+#[tokio::test]
+async fn v2_kpis_projection_is_independent_of_filter_window() {
+    use chrono::{Datelike, Local, TimeZone};
+
+    let (pool, _db_dir) = common::fixture_pool();
+
+    let now = Local::now();
+    let now_ms = now.timestamp_millis();
+    // Two cost rows a second apart — both in the current month.
+    common::seed_session(
+        &pool,
+        &common::SeedOpts {
+            session_id: "cost-a".into(),
+            started_at_ms: Some(now_ms - 1_000),
+            model: "claude-opus-4-7".into(),
+            cost_usd: 40.0,
+            ..Default::default()
+        },
+    );
+    common::seed_session(
+        &pool,
+        &common::SeedOpts {
+            session_id: "cost-b".into(),
+            started_at_ms: Some(now_ms - 2_000),
+            model: "claude-opus-4-7".into(),
+            cost_usd: 25.0,
+            ..Default::default()
+        },
+    );
+
+    let (router, _dir) = common::test_router(&pool);
+
+    let month_start = Local
+        .with_ymd_and_hms(now.year(), now.month(), 1, 0, 0, 0)
+        .single()
+        .expect("valid month start")
+        .timestamp_millis();
+
+    // FULL window captures both rows; NARROW captures only the newer one.
+    let (_s1, full) = get_json(
+        router.clone(),
+        &format!("/api/v2/kpis?from={month_start}&to={}", now_ms + 1),
+    )
+    .await;
+    let (_s2, narrow) = get_json(
+        router,
+        &format!("/api/v2/kpis?from={}&to={}", now_ms - 1_500, now_ms + 1),
+    )
+    .await;
+
+    // Precondition: the filter genuinely changes the windowed cost.
+    assert_ne!(
+        full["cost"]["current"], narrow["cost"]["current"],
+        "the two windows must capture different cost for this test to mean anything"
+    );
+    // The fix: the month-end projection must NOT depend on the filter window.
+    assert_eq!(
+        full["cost"]["projected_eom"], narrow["cost"]["projected_eom"],
+        "projected_eom must be the month-to-date projection regardless of filter"
+    );
+    // ...and neither does the session pace.
+    assert_eq!(
+        full["sessions"]["pace"], narrow["sessions"]["pace"],
+        "session pace must be the month-to-date pace regardless of filter"
+    );
+}

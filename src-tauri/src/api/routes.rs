@@ -1383,16 +1383,24 @@ async fn v2_kpis(
     let prev_tok_in = sum_tokens(&conn, prev_from, prev_to, "input", &q);
     let prev_tok_out = sum_tokens(&conn, prev_from, prev_to, "output", &q);
 
-    // pace + projection (only meaningful for monthly window)
+    // Pace and projection are month-end figures — always computed over the
+    // true current-month window, never the period filter `q`. Using `q`'s
+    // window would make a non-month filter yield a nonsensical projection,
+    // budget status, and session pace.
     let now = Local::now();
     let day_of_month = now.day() as i64;
     let days_in_month = days_in_current_month();
+    let month_start = crate::budget::month_start_ms(now);
+    let now_ms = now.timestamp_millis();
+    let mtd_cost =
+        crate::db::queries::month_to_date_cost(&conn, month_start, now_ms).unwrap_or(0.0);
+    let mtd_sessions = count_sessions(&conn, month_start, now_ms, &q);
     let projected_eom =
-        crate::budget::project_eom(cost, day_of_month as u32, days_in_month as u32);
+        crate::budget::project_eom(mtd_cost, day_of_month as u32, days_in_month as u32);
     let session_pace = if day_of_month > 0 {
-        (sessions as f64 / day_of_month as f64) * days_in_month as f64
+        (mtd_sessions as f64 / day_of_month as f64) * days_in_month as f64
     } else {
-        sessions as f64
+        mtd_sessions as f64
     };
 
     let budget = state.settings.budget();
