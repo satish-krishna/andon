@@ -202,6 +202,7 @@ fn settings_default_values() {
     assert!(defaults.forwarder.endpoint.is_empty(), "endpoint empty by default");
     assert_eq!(defaults.forwarder.timeout_ms, 2000, "default timeout 2000 ms");
     assert!(defaults.forwarder.headers.is_empty(), "no headers by default");
+    assert_eq!(defaults.budget.monthly_usd, 0.0, "budget disabled by default");
 }
 
 // ---------------------------------------------------------------------------
