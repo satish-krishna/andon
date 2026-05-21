@@ -1393,14 +1393,7 @@ async fn v2_kpis(
 }
 
 fn days_in_current_month() -> i64 {
-    let now = Local::now().date_naive();
-    let first = now.with_day(1).unwrap();
-    let next = if first.month() == 12 {
-        NaiveDate::from_ymd_opt(first.year() + 1, 1, 1).unwrap()
-    } else {
-        NaiveDate::from_ymd_opt(first.year(), first.month() + 1, 1).unwrap()
-    };
-    (next - first).num_days()
+    crate::budget::days_in_month(Local::now().date_naive()) as i64
 }
 
 #[derive(Deserialize)]
