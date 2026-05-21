@@ -836,6 +836,9 @@ async fn put_budget(
         status: StatusCode::INTERNAL_SERVER_ERROR,
         message: format!("{e:#}"),
     })?;
+    // Wake the budget monitor so the tray and notifications reflect the new
+    // budget immediately, rather than at the next 30-minute tick.
+    state.budget_changed.notify_one();
     Ok(Json(serde_json::to_value(saved).unwrap_or_else(|_| json!({}))))
 }
 

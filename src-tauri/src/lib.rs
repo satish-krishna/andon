@@ -120,6 +120,8 @@ pub fn run() {
 
     let reports_dir = paths.data_dir.join("reports");
 
+    let budget_changed = Arc::new(tokio::sync::Notify::new());
+
     let api_state = api::ApiState {
         pool: pool.clone(),
         db_path: paths.db_path.clone(),
@@ -129,6 +131,7 @@ pub fn run() {
         settings: settings_store.clone(),
         forwarder: forwarder.clone(),
         reports_dir: reports_dir.clone(),
+        budget_changed: budget_changed.clone(),
     };
 
     let app_state = AppState {
@@ -138,6 +141,7 @@ pub fn run() {
     let monitor_pool = pool.clone();
     let monitor_settings = settings_store.clone();
     let monitor_data_dir = paths.data_dir.clone();
+    let monitor_budget_changed = budget_changed.clone();
 
     tauri::Builder::default()
         .plugin(tauri_plugin_single_instance::init(|app, _argv, _cwd| {
@@ -204,6 +208,7 @@ pub fn run() {
                     monitor_settings,
                     monitor_pool,
                     monitor_data_dir,
+                    monitor_budget_changed,
                 )
                 .await;
             });

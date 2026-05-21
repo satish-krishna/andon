@@ -176,6 +176,7 @@ pub fn test_router_with(
         settings,
         forwarder,
         reports_dir,
+        budget_changed: Arc::new(tokio::sync::Notify::new()),
     };
 
     let router = routes::router(state);
@@ -186,6 +187,16 @@ pub fn test_router_with(
 /// Returns `(Router, TempDir)` — drop the `TempDir` only after the router is
 /// no longer needed (it backs the settings file and reports directory).
 pub fn test_router(pool: &Arc<DbPool>) -> (Router, TempDir) {
+    let (router, _budget_changed, dir) = test_router_with_signal(pool);
+    (router, dir)
+}
+
+/// Like `test_router` but also returns the `Notify` the API pings when the
+/// budget changes — lets tests assert that `PUT /api/settings/budget` wakes
+/// the budget monitor.
+pub fn test_router_with_signal(
+    pool: &Arc<DbPool>,
+) -> (Router, Arc<tokio::sync::Notify>, TempDir) {
     let dir = tempfile::tempdir().expect("create router tempdir");
 
     let settings_path = dir.path().join("settings.json");
@@ -196,6 +207,7 @@ pub fn test_router(pool: &Arc<DbPool>) -> (Router, TempDir) {
     let reports_dir = dir.path().join("reports");
     std::fs::create_dir_all(&reports_dir).expect("create reports dir");
 
+    let budget_changed = Arc::new(tokio::sync::Notify::new());
     let state = ApiState {
         pool: Arc::clone(pool),
         db_path: dir.path().join("test.db"),
@@ -207,10 +219,11 @@ pub fn test_router(pool: &Arc<DbPool>) -> (Router, TempDir) {
         settings,
         forwarder,
         reports_dir,
+        budget_changed: Arc::clone(&budget_changed),
     };
 
     let router = routes::router(state);
-    (router, dir)
+    (router, budget_changed, dir)
 }
 
 // ---------------------------------------------------------------------------

@@ -11,6 +11,7 @@ use chrono::Local;
 use tauri::image::Image;
 use tauri::AppHandle;
 use tauri_plugin_notification::NotificationExt;
+use tokio::sync::Notify;
 
 use super::{evaluate_once, month_start_ms, AlertState, BudgetStatus};
 use crate::db::{queries, DbPool};
@@ -31,17 +32,22 @@ pub async fn run_monitor(
     settings: Arc<SettingsStore>,
     pool: Arc<DbPool>,
     data_dir: PathBuf,
+    budget_changed: Arc<Notify>,
 ) {
     let state_path = data_dir.join("budget-alerts.json");
-    let mut last_status: Option<BudgetStatus> = None;
     let mut interval = tokio::time::interval(MONITOR_INTERVAL);
     // After a system sleep, skip missed ticks rather than firing a catch-up
     // burst of redundant evaluations.
     interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
 
     loop {
-        interval.tick().await;
-        if let Err(e) = tick(&app, &settings, &pool, &state_path, &mut last_status) {
+        // Evaluate on the timer — and immediately whenever the budget changes,
+        // so the tray and notifications never lag a budget edit.
+        tokio::select! {
+            _ = interval.tick() => {}
+            _ = budget_changed.notified() => {}
+        }
+        if let Err(e) = tick(&app, &settings, &pool, &state_path) {
             tracing::warn!(error = ?e, "budget monitor tick failed; will retry");
         }
     }
@@ -55,7 +61,6 @@ fn tick(
     settings: &SettingsStore,
     pool: &DbPool,
     state_path: &Path,
-    last_status: &mut Option<BudgetStatus>,
 ) -> anyhow::Result<()> {
     let budget = settings.budget();
     let now = Local::now();
@@ -70,11 +75,9 @@ fn tick(
     let prior = load_state(state_path);
     let outcome = evaluate_once(mtd_cost, budget.monthly_usd, now, prior);
 
-    // The tray is a live gauge — repaint only when the status actually changed.
-    if *last_status != Some(outcome.status) {
-        apply_tray(app, outcome.status, outcome.projected_eom, budget.monthly_usd);
-        *last_status = Some(outcome.status);
-    }
+    // Always repaint: the tooltip carries live figures (projected spend and
+    // budget) that change even when the status band does not.
+    apply_tray(app, outcome.status, outcome.projected_eom, budget.monthly_usd);
 
     if let Some(level) = outcome.notify {
         fire_notification(app, level, outcome.projected_eom, budget.monthly_usd);

@@ -154,3 +154,24 @@ async fn v2_kpis_projection_is_independent_of_filter_window() {
         "session pace must be the month-to-date pace regardless of filter"
     );
 }
+
+/// `PUT /api/settings/budget` must wake the budget monitor immediately, so the
+/// tray icon, tooltip, and notifications reflect the new budget without waiting
+/// for the next 30-minute tick.
+#[tokio::test]
+async fn put_budget_signals_the_monitor() {
+    let (pool, _db_dir) = common::fixture_pool();
+    let (router, budget_changed, _router_dir) = common::test_router_with_signal(&pool);
+
+    let (status, _body) =
+        put_json(router, "/api/settings/budget", json!({ "monthly_usd": 250.0 })).await;
+    assert_eq!(status, StatusCode::OK);
+
+    // The monitor's budget-changed signal must have fired during the PUT.
+    tokio::time::timeout(
+        std::time::Duration::from_millis(500),
+        budget_changed.notified(),
+    )
+    .await
+    .expect("PUT /api/settings/budget must signal the budget monitor");
+}
