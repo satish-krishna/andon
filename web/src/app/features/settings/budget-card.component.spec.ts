@@ -48,4 +48,15 @@ describe('BudgetCardComponent', () => {
     cmp.save();
     expect(sent).toEqual([250]);
   });
+
+  it('typing in the input updates the signal and marks the card dirty', () => {
+    const { fixture } = setup();
+    const cmp = fixture.componentInstance;
+    const input: HTMLInputElement =
+      fixture.nativeElement.querySelector('input[type="number"]');
+    input.value = '200';
+    input.dispatchEvent(new Event('input'));
+    expect(cmp.monthly()).toBe(200);
+    expect(cmp.dirty()).toBe(true);
+  });
 });
