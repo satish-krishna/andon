@@ -63,6 +63,14 @@ export class OverviewComponent implements OnInit {
     return Math.max(1, ...t.current, ...t.previous);
   });
 
+  // The previous-month row scales to its own max so last month's daily
+  // pattern stays legible regardless of the current month's spikes.
+  prevMax = computed(() => {
+    const t = this.tape();
+    if (!t) return 1;
+    return Math.max(1, ...t.previous);
+  });
+
   modelColor(m: string | null): string {
     if (!m) return '#7b8794';
     const lower = m.toLowerCase();
@@ -132,6 +140,7 @@ export class OverviewComponent implements OnInit {
   }
 
   tapeMax_ = this.tapeMax; // expose to template
+  prevMax_ = this.prevMax; // expose to template
   Math = Math; // template access
   now() { return Date.now(); }
 }
