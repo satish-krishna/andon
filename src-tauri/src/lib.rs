@@ -3,6 +3,7 @@ mod autostart;
 mod config;
 pub mod db;
 pub mod jsonl;
+mod budget;
 
 #[cfg(feature = "test-support")]
 pub mod diagnostics;
