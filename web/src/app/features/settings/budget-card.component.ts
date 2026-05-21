@@ -1,6 +1,5 @@
 import { CommonModule } from '@angular/common';
 import { Component, OnInit, inject, signal } from '@angular/core';
-import { FormsModule } from '@angular/forms';
 import { LucideAngularModule } from 'lucide-angular';
 
 import { ApiService } from '../../core/api.service';
@@ -8,7 +7,7 @@ import { ApiService } from '../../core/api.service';
 @Component({
   selector: 'app-budget-card',
   standalone: true,
-  imports: [CommonModule, FormsModule, LucideAngularModule],
+  imports: [CommonModule, LucideAngularModule],
   template: `
   <section class="panel" id="budget">
     <div class="panel-title">
@@ -28,7 +27,7 @@ import { ApiService } from '../../core/api.service';
           <input class="w-40 bg-bg border border-border rounded px-2 py-1 text-[12px] font-mono"
                  type="number" min="0" max="1000000" step="1"
                  [value]="monthly()"
-                 (change)="onInputChange($event)" />
+                 (input)="onInputChange($event)" />
         </label>
         <button class="filter-chip" [disabled]="!dirty()" (click)="save()"
                 [attr.data-active]="dirty() ? 'true' : null">save</button>
