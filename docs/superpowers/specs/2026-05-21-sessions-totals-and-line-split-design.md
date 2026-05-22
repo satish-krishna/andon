@@ -120,8 +120,9 @@ Each row's JSON gains `lines_added` and `lines_removed`.
 
 Marshalling the *returned ids* (rather than re-running the filter predicate as a
 subquery) guarantees the totals match exactly the rows on screen — same filter,
-same `LIMIT`, same ordering. The id list is at most `limit` (≤ 1000) entries,
-well within SQLite's `IN` capacity.
+same `LIMIT`, same ordering. `limit` is clamped to **999** so the `IN (...)`
+placeholder list never exceeds SQLite's most conservative host-parameter limit
+(`SQLITE_MAX_VARIABLE_NUMBER`, 999).
 
 `change_kind` classification reuses `lang_from_path`, so it must be defined in or
 visible to `routes.rs`. No `unwrap` / `expect`; the handler is synchronous

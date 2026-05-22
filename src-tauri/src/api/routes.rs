@@ -1680,7 +1680,10 @@ async fn v2_sessions(
         models: q.models.clone(),
     };
     let (from, to) = filt.window();
-    let limit = q.limit.clamp(1, 1000);
+    // Capped at 999: the totals-split query below lists one bound parameter
+    // per returned session id, and 999 is SQLite's most conservative
+    // SQLITE_MAX_VARIABLE_NUMBER, so the `IN (...)` list can never overflow it.
+    let limit = q.limit.clamp(1, 999);
     let conn = state.pool.get().map_err(ApiError::pool)?;
 
     let repo_list: Vec<String> = q
@@ -1828,6 +1831,8 @@ async fn v2_sessions(
     }
 
     // Code/Docs/Other split: one query over exactly the returned session ids.
+    // The id list is bounded by `limit` (<= 999, see the clamp above), so the
+    // `IN (?, ...)` placeholder list stays within SQLite's parameter limit.
     let mut split = LineSplit::default();
     let ids: Vec<String> = sessions
         .iter()
