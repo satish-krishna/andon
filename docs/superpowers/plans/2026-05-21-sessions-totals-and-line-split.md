@@ -41,7 +41,7 @@
 
 All commands in this task run from the `src-tauri/` directory.
 
-- [ ] **Step 1: Write the failing classifier unit test**
+- [x] **Step 1: Write the failing classifier unit test**
 
 In `src-tauri/src/api/routes.rs`, inside the existing `#[cfg(test)] mod tests { ... }` block (starts ~line 2570), add this test as the last item before the closing `}`:
 
@@ -64,12 +64,12 @@ In `src-tauri/src/api/routes.rs`, inside the existing `#[cfg(test)] mod tests { 
     }
 ```
 
-- [ ] **Step 2: Run the test to verify it fails**
+- [x] **Step 2: Run the test to verify it fails**
 
 Run: `cargo test --features test-support change_kind_buckets_paths_three_ways`
 Expected: FAIL — compile error, `cannot find function change_kind` / `cannot find type ChangeKind`.
 
-- [ ] **Step 3: Add the `ChangeKind` enum and `change_kind()` function**
+- [x] **Step 3: Add the `ChangeKind` enum and `change_kind()` function**
 
 In `src-tauri/src/api/routes.rs`, immediately **after** the closing `}` of `fn lang_from_path` (the function ends ~line 2001), add:
 
@@ -99,19 +99,19 @@ fn change_kind(path: &str) -> ChangeKind {
 }
 ```
 
-- [ ] **Step 4: Run the test to verify it passes**
+- [x] **Step 4: Run the test to verify it passes**
 
 Run: `cargo test --features test-support change_kind_buckets_paths_three_ways`
 Expected: PASS.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add src-tauri/src/api/routes.rs
 git commit -m "feat(api): add change_kind() file classifier"
 ```
 
-- [ ] **Step 6: Write the failing integration tests**
+- [x] **Step 6: Write the failing integration tests**
 
 In `src-tauri/tests/api_sessions.rs`, append after the last test (after the closing `}` of `cost_source_reflects_request_id`, ~line 535):
 
@@ -235,12 +235,12 @@ async fn v2_sessions_totals_are_zero_without_file_changes() {
 }
 ```
 
-- [ ] **Step 7: Run the new tests to verify they fail**
+- [x] **Step 7: Run the new tests to verify they fail**
 
 Run: `cargo test --features test-support v2_sessions_reports_line_totals_and_split v2_sessions_totals_are_zero_without_file_changes`
 Expected: FAIL — `body["totals"]` is `Null`, so the `t["sessions"]` / `t["lines"]...` assertions fail (and `lines_added` on rows is missing).
 
-- [ ] **Step 8: Add the DTOs**
+- [x] **Step 8: Add the DTOs**
 
 In `src-tauri/src/api/dto.rs`, replace the `SessionListResponse` struct (~lines 142-146):
 
@@ -296,7 +296,7 @@ pub struct SessionListResponse {
 
 (`routes.rs` imports `dto::*`, so the new types need no import change there.)
 
-- [ ] **Step 9: Add per-row lines to the `v2_sessions` SQL**
+- [x] **Step 9: Add per-row lines to the `v2_sessions` SQL**
 
 In `src-tauri/src/api/routes.rs`, in `v2_sessions`, find the end of the main `SELECT` (~lines 1737-1742) and replace:
 
@@ -322,7 +322,7 @@ with:
          FROM sessions s
 ```
 
-- [ ] **Step 10: Add the two new columns to the row JSON closure**
+- [x] **Step 10: Add the two new columns to the row JSON closure**
 
 In the same function, find the end of the `query_map` closure (~lines 1787-1789) and replace:
 
@@ -342,7 +342,7 @@ with:
     })?;
 ```
 
-- [ ] **Step 11: Compute the totals and return them**
+- [x] **Step 11: Compute the totals and return them**
 
 In the same function, find the final return (~lines 1804-1808):
 
@@ -437,17 +437,17 @@ Replace it with:
 }
 ```
 
-- [ ] **Step 12: Run the new integration tests to verify they pass**
+- [x] **Step 12: Run the new integration tests to verify they pass**
 
 Run: `cargo test --features test-support v2_sessions_reports_line_totals_and_split v2_sessions_totals_are_zero_without_file_changes`
 Expected: PASS (both).
 
-- [ ] **Step 13: Run the full `api_sessions` suite — the snapshot test will fail**
+- [x] **Step 13: Run the full `api_sessions` suite — the snapshot test will fail**
 
 Run: `cargo test --features test-support --test api_sessions`
 Expected: `v2_sessions_returns_sessions_and_coverage` FAILS — the response shape changed (each session now has `lines_added`/`lines_removed`, and there is a new top-level `totals` object). insta writes `src-tauri/tests/snapshots/api_sessions__v2_sessions_shape.snap.new`.
 
-- [ ] **Step 14: Review and accept the regenerated snapshot**
+- [x] **Step 14: Review and accept the regenerated snapshot**
 
 Open `src-tauri/tests/snapshots/api_sessions__v2_sessions_shape.snap.new` and confirm the only differences from the old snapshot are: (a) `lines_added: 0` and `lines_removed: 0` on each session, and (b) a new `totals` object with `lines.{code,docs,other}` all zero (that test seeds no `file_changes`).
 
@@ -456,12 +456,12 @@ Then accept it:
 Run: `cargo insta accept`
 (If `cargo insta` is not installed: `cargo install cargo-insta`, then re-run.)
 
-- [ ] **Step 15: Run the full `api_sessions` suite to verify it passes**
+- [x] **Step 15: Run the full `api_sessions` suite to verify it passes**
 
 Run: `cargo test --features test-support --test api_sessions`
 Expected: PASS (all tests).
 
-- [ ] **Step 16: Commit**
+- [x] **Step 16: Commit**
 
 ```bash
 git add src-tauri/src/api/dto.rs src-tauri/src/api/routes.rs src-tauri/tests/api_sessions.rs src-tauri/tests/snapshots/api_sessions__v2_sessions_shape.snap
