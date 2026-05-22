@@ -510,3 +510,51 @@ async fn v2_model_efficiency_respects_model_filter() {
     assert_eq!(rows.len(), 1, "model filter should leave only the opus family");
     assert_eq!(rows[0]["family"], "opus");
 }
+
+// ---------------------------------------------------------------------------
+// 12. v2_cache_efficiency_respects_model_filter
+// ---------------------------------------------------------------------------
+
+#[tokio::test]
+async fn v2_cache_efficiency_respects_model_filter() {
+    let (pool, _db_dir) = common::fixture_pool();
+    let now = chrono::Utc::now().timestamp_millis();
+
+    common::seed_session(
+        &pool,
+        &common::SeedOpts {
+            session_id: "cf-opus".into(),
+            started_at_ms: Some(now),
+            model: "claude-opus-4-7".into(),
+            input_tokens: 1_000_000,
+            cache_read_tokens: 1_000_000,
+            cache_create_tokens: 1_000_000,
+            cost_usd: 5.0,
+            ..Default::default()
+        },
+    );
+    common::seed_session(
+        &pool,
+        &common::SeedOpts {
+            session_id: "cf-haiku".into(),
+            started_at_ms: Some(now),
+            model: "claude-haiku-4-5".into(),
+            input_tokens: 2_000_000,
+            cache_read_tokens: 2_000_000,
+            cache_create_tokens: 2_000_000,
+            cost_usd: 1.0,
+            ..Default::default()
+        },
+    );
+
+    let (router, _router_dir) = common::test_router(&pool);
+    let (status, body) = get_json(router, "/api/v2/cache-efficiency?models=opus").await;
+
+    assert_eq!(status, StatusCode::OK);
+    // Only the opus session's cache tokens should be counted (haiku excluded).
+    assert_eq!(body["tokens"]["cache_read"].as_i64().unwrap(), 1_000_000);
+    assert_eq!(body["tokens"]["cache_create"].as_i64().unwrap(), 1_000_000);
+    // net savings = opus only: gross 13.50 - creation overhead 3.75 = 9.75
+    let net = body["savings"]["net"].as_f64().unwrap();
+    assert!((net - 9.75).abs() < 1e-6, "net was {net}");
+}
