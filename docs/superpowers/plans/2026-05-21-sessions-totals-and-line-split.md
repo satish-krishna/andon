@@ -553,7 +553,7 @@ git commit -m "feat(web): add line/totals types to the sessions response"
 
 All commands in this task run from the `web/` directory.
 
-- [ ] **Step 1: Write the failing test**
+- [x] **Step 1: Write the failing test**
 
 Create `web/src/app/features/sessions/line-split.spec.ts` (Vitest globals are enabled in this repo — no `import { describe, ... }` needed, matching `tape-selection.spec.ts`):
 
@@ -602,12 +602,12 @@ describe('lineSplitSegments', () => {
 });
 ```
 
-- [ ] **Step 2: Run the test to verify it fails**
+- [x] **Step 2: Run the test to verify it fails**
 
 Run: `npx vitest run src/app/features/sessions/line-split.spec.ts`
 Expected: FAIL — `Cannot find module './line-split'`.
 
-- [ ] **Step 3: Create the helper**
+- [x] **Step 3: Create the helper**
 
 Create `web/src/app/features/sessions/line-split.ts`:
 
@@ -650,12 +650,12 @@ export function lineSplitSegments(split: LineSplit): LineSegment[] {
 }
 ```
 
-- [ ] **Step 4: Run the test to verify it passes**
+- [x] **Step 4: Run the test to verify it passes**
 
 Run: `npx vitest run src/app/features/sessions/line-split.spec.ts`
 Expected: PASS (4 tests).
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add web/src/app/features/sessions/line-split.ts web/src/app/features/sessions/line-split.spec.ts
