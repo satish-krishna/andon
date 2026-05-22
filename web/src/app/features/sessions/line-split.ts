@@ -1,4 +1,4 @@
-import { LineSplit } from '../../core/api.service';
+import type { LineSplit } from '../../core/api.service';
 
 export type ChangeKind = 'code' | 'docs' | 'other';
 

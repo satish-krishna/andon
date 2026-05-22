@@ -1,5 +1,5 @@
 import { lineSplitSegments } from './line-split';
-import { LineSplit } from '../../core/api.service';
+import type { LineSplit } from '../../core/api.service';
 
 function split(
   code: [number, number],
