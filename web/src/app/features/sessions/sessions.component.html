@@ -241,8 +241,12 @@
                   <td class="px-2 py-2 text-right tabular-nums">${{ t.cost_usd | number : '1.2-2' }}</td>
                   <td class="px-2 py-2 text-right tabular-nums">{{ t.tokens_input | number }}<span class="text-muted">/</span>{{ t.tokens_output | number }}</td>
                   <td class="px-2 py-2 text-right tabular-nums">
-                    <span class="text-ok">+{{ t.lines_added | number }}</span>
-                    <span class="text-err ml-1">−{{ t.lines_removed | number }}</span>
+                    @if (hasLineData()) {
+                      <span class="text-ok">+{{ t.lines_added | number }}</span>
+                      <span class="text-err ml-1">−{{ t.lines_removed | number }}</span>
+                    } @else {
+                      <span class="text-muted">—</span>
+                    }
                   </td>
                   <td class="px-2 py-2 text-right tabular-nums">{{ t.decisions | number }}</td>
                   <td class="px-2 py-2 text-right tabular-nums text-muted">{{ fmtDuration(t.duration_seconds) }}</td>
