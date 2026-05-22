@@ -672,7 +672,7 @@ git commit -m "feat(web): add line-split helper for the totals bar"
 
 All commands in this task run from the `web/` directory. This component has no unit test (consistent with the repo's treatment of heavy feature components); it is verified by `npm run build` plus a manual check.
 
-- [ ] **Step 1: Update the component imports**
+- [x] **Step 1: Update the component imports**
 
 In `web/src/app/features/sessions/sessions.component.ts`, replace the import line (line 7):
 
@@ -687,7 +687,7 @@ import { ApiService, CoverageHint, SessionTotals, V2Session, V2FileRow } from '.
 import { ChangeKind, LineSegment, lineSplitSegments } from './line-split';
 ```
 
-- [ ] **Step 2: Add the `totals` signal**
+- [x] **Step 2: Add the `totals` signal**
 
 In the same file, after the `coverage = signal<CoverageHint | null>(null);` line (line 32), add:
 
@@ -695,7 +695,7 @@ In the same file, after the `coverage = signal<CoverageHint | null>(null);` line
   totals = signal<SessionTotals | null>(null);
 ```
 
-- [ ] **Step 3: Add the totals computeds**
+- [x] **Step 3: Add the totals computeds**
 
 After the `missingRepoPct` computed block (ends ~line 38, before `searchInput = '';`), add:
 
@@ -718,7 +718,7 @@ After the `missingRepoPct` computed block (ends ~line 38, before `searchInput = 
   });
 ```
 
-- [ ] **Step 4: Replace the constructor with a `loadSessions()` extraction**
+- [x] **Step 4: Replace the constructor with a `loadSessions()` extraction**
 
 Replace the entire `constructor()` block (lines 42-58):
 
@@ -781,7 +781,7 @@ with:
 
 (`loadSessions()` reads `filter.window()`, `filter.modelsCsv()`, `filter.reposCsv()` and `sort()` — so calling it inside the `effect()` keeps all the same reactive dependencies the old inline code had.)
 
-- [ ] **Step 5: Simplify `onSearch` and `runBackfill` to use `loadSessions()`**
+- [x] **Step 5: Simplify `onSearch` and `runBackfill` to use `loadSessions()`**
 
 Replace `onSearch` (lines 68-79):
 
@@ -834,7 +834,7 @@ with:
   }
 ```
 
-- [ ] **Step 6: Add the `segmentColor` helper**
+- [x] **Step 6: Add the `segmentColor` helper**
 
 In the same file, after the `modelColor` method (ends ~line 165, before the final closing `}` of the class), add:
 
@@ -851,7 +851,7 @@ In the same file, after the `modelColor` method (ends ~line 165, before the fina
   }
 ```
 
-- [ ] **Step 7: Add the Lines column header**
+- [x] **Step 7: Add the Lines column header**
 
 In `web/src/app/features/sessions/sessions.component.html`, in the `<thead>` row, after the Tokens header (line 76: `<th class="px-2 py-2 font-normal text-right">Tokens</th>`), add:
 
@@ -859,7 +859,7 @@ In `web/src/app/features/sessions/sessions.component.html`, in the `<thead>` row
               <th class="px-2 py-2 font-normal text-right">Lines</th>
 ```
 
-- [ ] **Step 8: Add the per-row Lines cell**
+- [x] **Step 8: Add the per-row Lines cell**
 
 In the body row, after the Tokens `<td>` (line 121, the one with `{{ s.tokens_input | number }}`), add:
 
@@ -874,7 +874,7 @@ In the body row, after the Tokens `<td>` (line 121, the one with `{{ s.tokens_in
                   </td>
 ```
 
-- [ ] **Step 9: Bump the two `colspan="11"` to `colspan="12"`**
+- [x] **Step 9: Bump the two `colspan="11"` to `colspan="12"`**
 
 The table now has 12 columns. There are exactly two occurrences of `colspan="11"`:
 - The day-group header row (~line 84): `<tr><td colspan="11" class="px-4 pt-3 pb-1 ...">`
@@ -882,7 +882,7 @@ The table now has 12 columns. There are exactly two occurrences of `colspan="11"
 
 Change both to `colspan="12"`.
 
-- [ ] **Step 10: Add the `<tfoot>`**
+- [x] **Step 10: Add the `<tfoot>`**
 
 In the same file, immediately after the `</tbody>` closing tag and before `</table>` (~line 224), insert:
 
@@ -939,7 +939,7 @@ In the same file, immediately after the `</tbody>` closing tag and before `</tab
           }
 ```
 
-- [ ] **Step 11: Build and verify**
+- [x] **Step 11: Build and verify**
 
 Run (from `web/`): `npm run build`
 Expected: PASS — build completes without errors.
@@ -952,7 +952,7 @@ Start the app (`cargo tauri dev` from the repo root) and open the Sessions page.
 - Below it, either a **segmented Code/Docs/Other bar with a legend** (when there is line data) or the muted **"No file-change data"** hint.
 - With a filter that matches no sessions, no totals row renders.
 
-- [ ] **Step 13: Commit**
+- [x] **Step 13: Commit**
 
 ```bash
 git add web/src/app/features/sessions/sessions.component.ts web/src/app/features/sessions/sessions.component.html
