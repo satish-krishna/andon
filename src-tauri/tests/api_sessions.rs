@@ -221,6 +221,7 @@ async fn session_detail_returns_correct_data() {
                 added: 10,
                 removed: 3,
             }],
+            ..Default::default()
         },
     );
 
