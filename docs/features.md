@@ -18,6 +18,23 @@ The default landing page. Designed to be the one place you check each morning.
 - **Active time** — wall-clock minutes you spent vs. minutes Claude Code spent computing.
 - **Recent sessions** — last 6 sessions, click-through to detail.
 
+## Efficiency
+
+A filterable page answering "am I spending tokens well?".
+
+- **Cache hit ratio** — the share of prompt tokens (`input + cacheCreation +
+  cacheRead`) served from cache, with a percentage-point delta vs. the previous
+  period.
+- **Net cache savings** — gross read savings minus the cache-creation premium,
+  computed per model from the built-in price table. The gross figure and the
+  premium are shown so the mechanic is visible. Tokens on models not in the
+  price table are excluded and footnoted.
+- **Model cost-efficiency** — per model family (`opus` / `sonnet` / `haiku`),
+  the cost per session and cost per 1k output tokens. Each session is
+  attributed wholly to the family that spent the most in it.
+
+All figures respect the global filter bar (window + model chips).
+
 ## Sessions
 
 Every Claude Code session andon has seen, filterable and sortable.
