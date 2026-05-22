@@ -31,6 +31,7 @@ pub fn router(state: ApiState) -> Router {
         .route("/api/v2/tape", get(v2_tape))
         .route("/api/v2/cost-by-model", get(v2_cost_by_model))
         .route("/api/v2/cache-efficiency", get(v2_cache_efficiency))
+        .route("/api/v2/model-efficiency", get(v2_model_efficiency))
         .route("/api/v2/accept-by-language", get(v2_accept_by_language))
         .route("/api/v2/active-time", get(v2_active_time))
         .route("/api/v2/sessions", get(v2_sessions))
@@ -1646,6 +1647,66 @@ async fn v2_cache_efficiency(
         net_prev: round4(net_prev),
         unpriced_cache_tokens: savings.unpriced_cache_tokens,
     }))
+}
+
+async fn v2_model_efficiency(
+    State(state): State<ApiState>,
+    Query(q): Query<FilterQuery>,
+) -> Result<Json<Vec<ModelEfficiencyRow>>, ApiError> {
+    let (from, to) = q.window();
+    let conn = state.pool.get().map_err(ApiError::pool)?;
+    let (m_sql, m_vals) = q.model_clause("model");
+
+    // (session_id, model, cost) — folded into per-family-per-session costs.
+    let cost_sql = format!(
+        "SELECT session_id, model, SUM(cost_usd)
+         FROM cost_entries
+         WHERE timestamp >= ? AND timestamp < ?{m_sql}
+         GROUP BY session_id, model"
+    );
+    let mut cp: Vec<Box<dyn rusqlite::ToSql>> = vec![Box::new(from), Box::new(to)];
+    for v in &m_vals {
+        cp.push(Box::new(v.clone()));
+    }
+    let crefs: Vec<&dyn rusqlite::ToSql> = cp.iter().map(|b| &**b).collect();
+    let mut cost_rows: Vec<(String, String, f64)> = Vec::new();
+    if let Ok(mut stmt) = conn.prepare(&cost_sql) {
+        if let Ok(mapped) = stmt.query_map(crefs.as_slice(), |r| {
+            Ok((
+                r.get::<_, String>(0)?,
+                r.get::<_, String>(1)?,
+                r.get::<_, f64>(2).unwrap_or(0.0),
+            ))
+        }) {
+            cost_rows = mapped.flatten().collect();
+        }
+    }
+
+    // (session_id, output tokens)
+    let out_sql = format!(
+        "SELECT session_id, SUM(count)
+         FROM token_usage
+         WHERE token_type = 'output' AND timestamp >= ? AND timestamp < ?{m_sql}
+         GROUP BY session_id"
+    );
+    let mut op: Vec<Box<dyn rusqlite::ToSql>> = vec![Box::new(from), Box::new(to)];
+    for v in &m_vals {
+        op.push(Box::new(v.clone()));
+    }
+    let orefs: Vec<&dyn rusqlite::ToSql> = op.iter().map(|b| &**b).collect();
+    let mut output_rows: Vec<(String, i64)> = Vec::new();
+    if let Ok(mut stmt) = conn.prepare(&out_sql) {
+        if let Ok(mapped) = stmt.query_map(orefs.as_slice(), |r| {
+            Ok((r.get::<_, String>(0)?, r.get::<_, i64>(1).unwrap_or(0)))
+        }) {
+            output_rows = mapped.flatten().collect();
+        }
+    }
+
+    Ok(Json(crate::api::efficiency::aggregate_model_efficiency(
+        &cost_rows,
+        &output_rows,
+    )))
 }
 
 async fn v2_accept_by_language(
