@@ -2000,6 +2000,30 @@ fn lang_from_path(path: &str) -> &'static str {
     }
 }
 
+/// Coarse category for a changed file, derived from its path extension.
+/// Used by `v2_sessions` to split aggregate line changes three ways.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ChangeKind {
+    Code,
+    Docs,
+    Other,
+}
+
+/// Bucket a file path into Code / Docs / Other.
+///
+/// Docs = prose file extensions. Other = anything `lang_from_path` cannot
+/// name. Everything else — including config files like `.toml` / `.json` —
+/// is Code. Classification is case-insensitive.
+fn change_kind(path: &str) -> ChangeKind {
+    let lower = path.to_lowercase();
+    let ext = lower.rsplit('.').next().unwrap_or("");
+    match ext {
+        "md" | "markdown" | "mdx" | "txt" | "rst" | "adoc" | "asciidoc" => ChangeKind::Docs,
+        _ if lang_from_path(path) == "other" => ChangeKind::Other,
+        _ => ChangeKind::Code,
+    }
+}
+
 // ---------- integration: unpatch + restore ----------
 
 // ---------- autostart ----------
@@ -2600,5 +2624,22 @@ mod tests {
             wide.0, narrow.0,
             "previous-window start must follow the filter, not ignore it"
         );
+    }
+
+    #[test]
+    fn change_kind_buckets_paths_three_ways() {
+        // Code: named languages, including config files.
+        assert_eq!(change_kind("src/main.rs"), ChangeKind::Code);
+        assert_eq!(change_kind("Cargo.toml"), ChangeKind::Code);
+        assert_eq!(change_kind("web/package.json"), ChangeKind::Code);
+        assert_eq!(change_kind("a.b.rs"), ChangeKind::Code);
+        // Docs: prose extensions, case-insensitive.
+        assert_eq!(change_kind("README.md"), ChangeKind::Docs);
+        assert_eq!(change_kind("notes.txt"), ChangeKind::Docs);
+        assert_eq!(change_kind("docs/guide.rst"), ChangeKind::Docs);
+        assert_eq!(change_kind("CHANGELOG.MD"), ChangeKind::Docs);
+        // Other: nothing lang_from_path can name.
+        assert_eq!(change_kind("Makefile"), ChangeKind::Other);
+        assert_eq!(change_kind("data.xyz"), ChangeKind::Other);
     }
 }
