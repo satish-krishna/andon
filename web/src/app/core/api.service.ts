@@ -104,6 +104,8 @@ export interface V2Session {
   repo_branch: string | null;
   cwd: string | null;
   cost_source: CostSource;
+  lines_added: number;
+  lines_removed: number;
 }
 
 export interface CoverageHint {
@@ -111,9 +113,36 @@ export interface CoverageHint {
   with_repo: number;
 }
 
+export interface LinePair {
+  added: number;
+  removed: number;
+}
+
+export interface LineSplit {
+  code: LinePair;
+  docs: LinePair;
+  other: LinePair;
+}
+
+export interface SessionTotals {
+  sessions: number;
+  cost_usd: number;
+  tokens_input: number;
+  tokens_output: number;
+  accepts: number;
+  rejects: number;
+  aborts: number;
+  decisions: number;
+  duration_seconds: number;
+  lines_added: number;
+  lines_removed: number;
+  lines: LineSplit;
+}
+
 export interface SessionListResponse {
   sessions: V2Session[];
   coverage: CoverageHint;
+  totals: SessionTotals;
 }
 
 export interface V2FileRow {
