@@ -1814,6 +1814,8 @@ async fn v2_sessions(
     let mut t_aborts = 0_i64;
     let mut t_decisions = 0_i64;
     let mut t_duration = 0.0_f64;
+    // cost_usd is summed from the already round4'd per-row values, so the
+    // total matches what the table shows.
     for s in &sessions {
         t_cost += s["cost_usd"].as_f64().unwrap_or(0.0);
         t_tok_in += s["tokens_input"].as_i64().unwrap_or(0);
@@ -2095,6 +2097,8 @@ fn change_kind(path: &str) -> ChangeKind {
     let lower = path.to_lowercase();
     let ext = lower.rsplit('.').next().unwrap_or("");
     match ext {
+        // `md` / `markdown` also resolve to a named language in lang_from_path;
+        // this Docs arm runs first and intentionally takes priority.
         "md" | "markdown" | "mdx" | "txt" | "rst" | "adoc" | "asciidoc" => ChangeKind::Docs,
         _ if lang_from_path(path) == "other" => ChangeKind::Other,
         _ => ChangeKind::Code,
@@ -2714,6 +2718,7 @@ mod tests {
         assert_eq!(change_kind("README.md"), ChangeKind::Docs);
         assert_eq!(change_kind("notes.txt"), ChangeKind::Docs);
         assert_eq!(change_kind("docs/guide.rst"), ChangeKind::Docs);
+        assert_eq!(change_kind("guide.markdown"), ChangeKind::Docs);
         assert_eq!(change_kind("CHANGELOG.MD"), ChangeKind::Docs);
         // Other: nothing lang_from_path can name.
         assert_eq!(change_kind("Makefile"), ChangeKind::Other);
