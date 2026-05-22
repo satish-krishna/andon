@@ -69,6 +69,24 @@ export interface V2CostByModel {
   cost_usd: number;
 }
 
+export interface V2CacheEfficiency {
+  hit_ratio: number;
+  hit_ratio_prev: number;
+  tokens: { input: number; output: number; cache_read: number; cache_create: number };
+  savings: { net: number; gross: number; creation_overhead: number };
+  net_prev: number;
+  unpriced_cache_tokens: number;
+}
+
+export interface V2ModelEfficiency {
+  family: string;
+  sessions: number;
+  total_cost_usd: number;
+  cost_per_session: number;
+  output_tokens: number;
+  cost_per_1k_output: number;
+}
+
 export interface V2AcceptLang {
   language: string;
   accept_rate: number;
@@ -211,6 +229,16 @@ export class ApiService {
   }
   costByModel(args?: FilterArgs): Observable<V2CostByModel[]> {
     return this.http.get<V2CostByModel[]>(`${BASE}/api/v2/cost-by-model`, { params: toParams(args) });
+  }
+  cacheEfficiency(args?: FilterArgs): Observable<V2CacheEfficiency> {
+    return this.http.get<V2CacheEfficiency>(`${BASE}/api/v2/cache-efficiency`, {
+      params: toParams(args),
+    });
+  }
+  modelEfficiency(args?: FilterArgs): Observable<V2ModelEfficiency[]> {
+    return this.http.get<V2ModelEfficiency[]>(`${BASE}/api/v2/model-efficiency`, {
+      params: toParams(args),
+    });
   }
   acceptByLanguageV2(args?: FilterArgs): Observable<V2AcceptLang[]> {
     return this.http.get<V2AcceptLang[]>(`${BASE}/api/v2/accept-by-language`, { params: toParams(args) });
