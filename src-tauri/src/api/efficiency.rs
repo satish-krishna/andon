@@ -78,6 +78,9 @@ fn round4(v: f64) -> f64 {
 
 /// The family that spent the most in a session. Ties are broken toward the
 /// fixed order opus > sonnet > haiku > other (strict `>` keeps the first).
+///
+/// Expects `costs` to be non-empty (every `aggregate_model_efficiency` session
+/// has at least one cost row); returns `"other"` as a safe sentinel if not.
 fn dominant_family(costs: &HashMap<&'static str, f64>) -> &'static str {
     const ORDER: [&str; 4] = ["opus", "sonnet", "haiku", "other"];
     let mut best: &'static str = "other";
