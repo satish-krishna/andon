@@ -1,4 +1,4 @@
-import { CommonModule, DecimalPipe, PercentPipe } from '@angular/common';
+import { DecimalPipe, PercentPipe } from '@angular/common';
 import { ChangeDetectionStrategy, Component, effect, inject, signal } from '@angular/core';
 import { LucideAngularModule } from 'lucide-angular';
 
@@ -17,7 +17,7 @@ const FAMILY_COLORS: Record<string, string> = {
 @Component({
   selector: 'app-efficiency',
   standalone: true,
-  imports: [CommonModule, DecimalPipe, PercentPipe, FilterBarComponent, LucideAngularModule],
+  imports: [DecimalPipe, PercentPipe, FilterBarComponent, LucideAngularModule],
   changeDetection: ChangeDetectionStrategy.OnPush,
   templateUrl: './efficiency.component.html',
 })

@@ -62,4 +62,9 @@ describe('EfficiencyComponent', () => {
     const { fixture } = setup(CACHE, []);
     expect(fixture.nativeElement.textContent).toContain('No data');
   });
+
+  it('shows the unpriced footnote when unpriced_cache_tokens is non-zero', () => {
+    const { fixture } = setup({ ...CACHE, unpriced_cache_tokens: 5000 }, MODELS);
+    expect(fixture.nativeElement.textContent).toContain('5.0k tokens on un-priced models');
+  });
 });
