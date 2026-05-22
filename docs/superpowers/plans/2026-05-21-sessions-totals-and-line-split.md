@@ -475,7 +475,7 @@ git commit -m "feat(api): v2/sessions returns per-row lines and a totals block"
 **Files:**
 - Modify: `web/src/app/core/api.service.ts` (`V2Session` ~lines 84-107; `SessionListResponse` ~lines 114-117)
 
-- [ ] **Step 1: Add `lines_added` / `lines_removed` to `V2Session`**
+- [x] **Step 1: Add `lines_added` / `lines_removed` to `V2Session`**
 
 In `web/src/app/core/api.service.ts`, in the `V2Session` interface, after the `cost_source: CostSource;` line, add:
 
@@ -484,7 +484,7 @@ In `web/src/app/core/api.service.ts`, in the `V2Session` interface, after the `c
   lines_removed: number;
 ```
 
-- [ ] **Step 2: Add the totals interfaces and extend `SessionListResponse`**
+- [x] **Step 2: Add the totals interfaces and extend `SessionListResponse`**
 
 In the same file, replace the `SessionListResponse` interface (~lines 114-117):
 
@@ -531,12 +531,12 @@ export interface SessionListResponse {
 }
 ```
 
-- [ ] **Step 3: Verify the project still type-checks**
+- [x] **Step 3: Verify the project still type-checks**
 
 Run (from `web/`): `npm run build`
 Expected: PASS — the build completes without TypeScript errors.
 
-- [ ] **Step 4: Commit**
+- [x] **Step 4: Commit**
 
 ```bash
 git add web/src/app/core/api.service.ts
