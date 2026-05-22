@@ -139,10 +139,42 @@ pub struct CoverageHint {
     pub with_repo: i64,
 }
 
+#[derive(serde::Serialize, Default, Clone, Copy)]
+pub struct LinePair {
+    pub added: i64,
+    pub removed: i64,
+}
+
+#[derive(serde::Serialize, Default)]
+pub struct LineSplit {
+    pub code: LinePair,
+    pub docs: LinePair,
+    pub other: LinePair,
+}
+
+#[derive(serde::Serialize)]
+pub struct SessionTotals {
+    pub sessions: i64,
+    pub cost_usd: f64,
+    pub tokens_input: i64,
+    pub tokens_output: i64,
+    pub accepts: i64,
+    pub rejects: i64,
+    pub aborts: i64,
+    pub decisions: i64,
+    pub duration_seconds: f64,
+    /// Sum of all three buckets' `added`.
+    pub lines_added: i64,
+    /// Sum of all three buckets' `removed`.
+    pub lines_removed: i64,
+    pub lines: LineSplit,
+}
+
 #[derive(serde::Serialize)]
 pub struct SessionListResponse {
     pub sessions: Vec<serde_json::Value>,
     pub coverage: CoverageHint,
+    pub totals: SessionTotals,
 }
 
 // ---- JSONL ingest DTOs ----

@@ -1680,7 +1680,10 @@ async fn v2_sessions(
         models: q.models.clone(),
     };
     let (from, to) = filt.window();
-    let limit = q.limit.clamp(1, 1000);
+    // Capped at 999: the totals-split query below lists one bound parameter
+    // per returned session id, and 999 is SQLite's most conservative
+    // SQLITE_MAX_VARIABLE_NUMBER, so the `IN (...)` list can never overflow it.
+    let limit = q.limit.clamp(1, 999);
     let conn = state.pool.get().map_err(ApiError::pool)?;
 
     let repo_list: Vec<String> = q
@@ -1738,7 +1741,9 @@ async fn v2_sessions(
                    WHEN EXISTS(SELECT 1 FROM cost_entries WHERE session_id = s.session_id AND request_id IS NULL) THEN 'otlp'
                    WHEN EXISTS(SELECT 1 FROM cost_entries WHERE session_id = s.session_id) THEN 'jsonl'
                    ELSE NULL
-                 END) AS cost_source
+                 END) AS cost_source,
+                COALESCE((SELECT SUM(lines_added)   FROM file_changes WHERE session_id = s.session_id), 0) AS lines_added,
+                COALESCE((SELECT SUM(lines_removed) FROM file_changes WHERE session_id = s.session_id), 0) AS lines_removed
          FROM sessions s
          WHERE s.started_at >= ? AND s.started_at <= ?{model_filter_sql}{repo_filter_sql}{search_sql}
          {order}
@@ -1785,6 +1790,8 @@ async fn v2_sessions(
             "repo_branch":     r.get::<_, Option<String>>(19)?,
             "repo_name":       r.get::<_, Option<String>>(20)?,
             "cost_source":     r.get::<_, Option<String>>(21)?,
+            "lines_added":     r.get::<_, i64>(22)?,
+            "lines_removed":   r.get::<_, i64>(23)?,
         }))
     })?;
     let sessions: Vec<serde_json::Value> = rows.flatten().collect();
@@ -1801,9 +1808,86 @@ async fn v2_sessions(
         })?
     };
 
+    // ---- Totals over exactly the rows just returned ----
+    let mut t_cost = 0.0_f64;
+    let mut t_tok_in = 0_i64;
+    let mut t_tok_out = 0_i64;
+    let mut t_accepts = 0_i64;
+    let mut t_rejects = 0_i64;
+    let mut t_aborts = 0_i64;
+    let mut t_decisions = 0_i64;
+    let mut t_duration = 0.0_f64;
+    // cost_usd is summed from the already round4'd per-row values, so the
+    // total matches what the table shows.
+    for s in &sessions {
+        t_cost += s["cost_usd"].as_f64().unwrap_or(0.0);
+        t_tok_in += s["tokens_input"].as_i64().unwrap_or(0);
+        t_tok_out += s["tokens_output"].as_i64().unwrap_or(0);
+        t_accepts += s["accepts"].as_i64().unwrap_or(0);
+        t_rejects += s["rejects"].as_i64().unwrap_or(0);
+        t_aborts += s["aborts"].as_i64().unwrap_or(0);
+        t_decisions += s["decisions"].as_i64().unwrap_or(0);
+        t_duration += s["duration_seconds"].as_f64().unwrap_or(0.0);
+    }
+
+    // Code/Docs/Other split: one query over exactly the returned session ids.
+    // The id list is bounded by `limit` (<= 999, see the clamp above), so the
+    // `IN (?, ...)` placeholder list stays within SQLite's parameter limit.
+    let mut split = LineSplit::default();
+    let ids: Vec<String> = sessions
+        .iter()
+        .filter_map(|s| s["session_id"].as_str().map(str::to_string))
+        .collect();
+    if !ids.is_empty() {
+        let placeholders = ids.iter().map(|_| "?").collect::<Vec<_>>().join(",");
+        let fc_sql = format!(
+            "SELECT file_path, lines_added, lines_removed
+             FROM file_changes WHERE session_id IN ({placeholders})"
+        );
+        let mut fc_stmt = conn.prepare(&fc_sql)?;
+        let id_refs: Vec<&dyn rusqlite::ToSql> =
+            ids.iter().map(|s| s as &dyn rusqlite::ToSql).collect();
+        let fc_rows = fc_stmt.query_map(id_refs.as_slice(), |r| {
+            Ok((
+                r.get::<_, Option<String>>(0)?,
+                r.get::<_, i64>(1).unwrap_or(0),
+                r.get::<_, i64>(2).unwrap_or(0),
+            ))
+        })?;
+        for (path, added, removed) in fc_rows.flatten() {
+            let kind = match path.as_deref() {
+                Some(p) => change_kind(p),
+                None => ChangeKind::Other,
+            };
+            let pair = match kind {
+                ChangeKind::Code => &mut split.code,
+                ChangeKind::Docs => &mut split.docs,
+                ChangeKind::Other => &mut split.other,
+            };
+            pair.added += added;
+            pair.removed += removed;
+        }
+    }
+
+    let totals = SessionTotals {
+        sessions: sessions.len() as i64,
+        cost_usd: round4(t_cost),
+        tokens_input: t_tok_in,
+        tokens_output: t_tok_out,
+        accepts: t_accepts,
+        rejects: t_rejects,
+        aborts: t_aborts,
+        decisions: t_decisions,
+        duration_seconds: t_duration,
+        lines_added: split.code.added + split.docs.added + split.other.added,
+        lines_removed: split.code.removed + split.docs.removed + split.other.removed,
+        lines: split,
+    };
+
     Ok(Json(SessionListResponse {
         sessions,
         coverage: CoverageHint { total, with_repo },
+        totals,
     }))
 }
 
@@ -1997,6 +2081,32 @@ fn lang_from_path(path: &str) -> &'static str {
         "md" | "markdown"             => "md",
         "sh" | "bash" | "zsh"         => "shell",
         _                             => "other",
+    }
+}
+
+/// Coarse category for a changed file, derived from its path extension.
+/// Used by `v2_sessions` to split aggregate line changes three ways.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ChangeKind {
+    Code,
+    Docs,
+    Other,
+}
+
+/// Bucket a file path into Code / Docs / Other.
+///
+/// Docs = prose file extensions. Other = anything `lang_from_path` cannot
+/// name. Everything else — including config files like `.toml` / `.json` —
+/// is Code. Classification is case-insensitive.
+fn change_kind(path: &str) -> ChangeKind {
+    let lower = path.to_lowercase();
+    let ext = lower.rsplit('.').next().unwrap_or("");
+    match ext {
+        // `md` / `markdown` also resolve to a named language in lang_from_path;
+        // this Docs arm runs first and intentionally takes priority.
+        "md" | "markdown" | "mdx" | "txt" | "rst" | "adoc" | "asciidoc" => ChangeKind::Docs,
+        _ if lang_from_path(path) == "other" => ChangeKind::Other,
+        _ => ChangeKind::Code,
     }
 }
 
@@ -2600,5 +2710,23 @@ mod tests {
             wide.0, narrow.0,
             "previous-window start must follow the filter, not ignore it"
         );
+    }
+
+    #[test]
+    fn change_kind_buckets_paths_three_ways() {
+        // Code: named languages, including config files.
+        assert_eq!(change_kind("src/main.rs"), ChangeKind::Code);
+        assert_eq!(change_kind("Cargo.toml"), ChangeKind::Code);
+        assert_eq!(change_kind("web/package.json"), ChangeKind::Code);
+        assert_eq!(change_kind("a.b.rs"), ChangeKind::Code);
+        // Docs: prose extensions, case-insensitive.
+        assert_eq!(change_kind("README.md"), ChangeKind::Docs);
+        assert_eq!(change_kind("notes.txt"), ChangeKind::Docs);
+        assert_eq!(change_kind("docs/guide.rst"), ChangeKind::Docs);
+        assert_eq!(change_kind("guide.markdown"), ChangeKind::Docs);
+        assert_eq!(change_kind("CHANGELOG.MD"), ChangeKind::Docs);
+        // Other: nothing lang_from_path can name.
+        assert_eq!(change_kind("Makefile"), ChangeKind::Other);
+        assert_eq!(change_kind("data.xyz"), ChangeKind::Other);
     }
 }

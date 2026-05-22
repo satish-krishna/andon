@@ -30,7 +30,9 @@ Every Claude Code session andon has seen, filterable and sortable.
 - **Missing-repo banner** — when more than 20% of sessions in view have no repo info, a banner offers a one-click "Backfill from file paths" (runs the inference fallback) and a link to re-apply the Claude Code hook.
 - Sort by time, cost, duration, or decision count.
 - Rows expand inline to show files touched and decisions made in that session, or you can click into a full detail view.
-- Accept rate per row is computed as `accepts / (accepts + rejects + aborts)`.
+- Accept rate per row is computed as `accepts / (accepts + rejects)`.
+- **LINES column** *(new)* — per-session lines added / removed. Shows `—` when no file-change data is available (line counts are captured by the PostToolUse hook).
+- **Totals row** *(new)* — a grand-total row pinned at the bottom of the table sums cost, tokens, lines, decisions, duration, and accept rate across every session in view. Below it, a segmented bar splits the summed line changes into **Code / Docs / Other** (config files count as code; unclassifiable files as other).
 
 ## Session detail
 
