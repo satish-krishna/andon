@@ -966,7 +966,7 @@ git commit -m "feat(sessions): totals row, Lines column, and code/docs/other spl
 **Files:**
 - Modify: `docs/features.md` (the **Sessions** section, ~lines 21-34)
 
-- [ ] **Step 1: Document the new features**
+- [x] **Step 1: Document the new features**
 
 In `docs/features.md`, in the **Sessions** section, after the bullet `- Accept rate per row is computed as ...` (line 33), add:
 
@@ -975,7 +975,7 @@ In `docs/features.md`, in the **Sessions** section, after the bullet `- Accept r
 - **Totals row** *(new)* — a grand-total row pinned at the bottom of the table sums cost, tokens, lines, decisions, duration, and accept rate across every session in view. Below it, a segmented bar splits the summed line changes into **Code / Docs / Other** (config files count as code; unclassifiable files as other).
 ```
 
-- [ ] **Step 2: Commit**
+- [x] **Step 2: Commit**
 
 ```bash
 git add docs/features.md
