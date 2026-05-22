@@ -469,3 +469,44 @@ async fn v2_model_efficiency_buckets_by_dominant_family() {
     assert!((rows[0]["cost_per_1k_output"].as_f64().unwrap() - 5.0).abs() < 1e-6);
     assert_eq!(rows[1]["family"], "haiku");
 }
+
+// ---------------------------------------------------------------------------
+// 11. v2_model_efficiency_respects_model_filter
+// ---------------------------------------------------------------------------
+
+#[tokio::test]
+async fn v2_model_efficiency_respects_model_filter() {
+    let (pool, _db_dir) = common::fixture_pool();
+    let now = chrono::Utc::now().timestamp_millis();
+
+    common::seed_session(
+        &pool,
+        &common::SeedOpts {
+            session_id: "mf-opus".into(),
+            started_at_ms: Some(now),
+            model: "claude-opus-4-7".into(),
+            output_tokens: 1000,
+            cost_usd: 5.0,
+            ..Default::default()
+        },
+    );
+    common::seed_session(
+        &pool,
+        &common::SeedOpts {
+            session_id: "mf-haiku".into(),
+            started_at_ms: Some(now),
+            model: "claude-haiku-4-5".into(),
+            output_tokens: 500,
+            cost_usd: 1.0,
+            ..Default::default()
+        },
+    );
+
+    let (router, _router_dir) = common::test_router(&pool);
+    let (status, body) = get_json(router, "/api/v2/model-efficiency?models=opus").await;
+
+    assert_eq!(status, StatusCode::OK);
+    let rows = body.as_array().expect("response must be an array");
+    assert_eq!(rows.len(), 1, "model filter should leave only the opus family");
+    assert_eq!(rows[0]["family"], "opus");
+}
