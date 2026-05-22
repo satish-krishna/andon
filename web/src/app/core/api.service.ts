@@ -316,8 +316,10 @@ export class ApiService {
   }
 
   // ----- behaviour + JSONL ingest -----
-  modelMix(): Observable<ModelMixResponse> {
-    return this.http.get<ModelMixResponse>(`${BASE}/api/behaviour/model-mix`);
+  modelMix(args?: FilterArgs): Observable<ModelMixResponse> {
+    return this.http.get<ModelMixResponse>(`${BASE}/api/behaviour/model-mix`, {
+      params: toParams(args),
+    });
   }
   slashCommands(): Observable<SlashCommandEntry[]> {
     return this.http.get<SlashCommandEntry[]>(`${BASE}/api/behaviour/slash-commands`);

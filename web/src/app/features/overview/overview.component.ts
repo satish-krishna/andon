@@ -148,12 +148,7 @@ export class OverviewComponent implements OnInit {
       this.api.acceptByLanguageV2(args).subscribe((v) => this.acceptLang.set(v));
       this.api.activeTime(args).subscribe((v) => this.activeTime.set(v));
       this.api.sessionsV2({ ...args, sort: 'time', limit: 6 }).subscribe((v) => this.recent.set(v.sessions));
-    });
-    // Global, unfiltered — refetched on Refresh but, unlike the effect above,
-    // not on window/model changes. Depends only on refreshTick().
-    effect(() => {
-      this.filter.refreshTick();
-      this.api.modelMix().subscribe((v) => this.modelMix.set(v));
+      this.api.modelMix(args).subscribe((v) => this.modelMix.set(v));
     });
   }
 
