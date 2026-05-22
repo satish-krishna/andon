@@ -377,3 +377,46 @@ async fn reports_index_lists_generated_reports() {
         ".session_ids" => insta::sorted_redaction(),
     });
 }
+
+// ---------------------------------------------------------------------------
+// 9. v2_cache_efficiency_returns_expected_shape
+// ---------------------------------------------------------------------------
+
+#[tokio::test]
+async fn v2_cache_efficiency_returns_expected_shape() {
+    let (pool, _db_dir) = common::fixture_pool();
+
+    common::seed_session(
+        &pool,
+        &common::SeedOpts {
+            session_id: "cache-1".into(),
+            started_at_ms: Some(chrono::Utc::now().timestamp_millis()),
+            model: "claude-opus-4-7".into(),
+            input_tokens: 1_000_000,
+            output_tokens: 200_000,
+            cache_read_tokens: 1_000_000,
+            cache_create_tokens: 1_000_000,
+            cost_usd: 5.0,
+            ..Default::default()
+        },
+    );
+
+    let (router, _router_dir) = common::test_router(&pool);
+    let (status, body) = get_json(router, "/api/v2/cache-efficiency").await;
+
+    assert_eq!(status, StatusCode::OK);
+    assert!(body["tokens"].is_object(), "tokens key missing");
+    assert!(body["savings"].is_object(), "savings key missing");
+
+    // hit_ratio = cacheRead / (input + cacheCreation + cacheRead)
+    //           = 1e6 / (1e6 + 1e6 + 1e6) = 0.3333...
+    let hr = body["hit_ratio"].as_f64().unwrap();
+    assert!((hr - 0.3333).abs() < 0.01, "hit_ratio was {hr}");
+
+    // opus: net = gross 13.50 - creation overhead 3.75 = 9.75
+    let net = body["savings"]["net"].as_f64().unwrap();
+    assert!((net - 9.75).abs() < 1e-6, "net was {net}");
+
+    assert_eq!(body["tokens"]["cache_read"].as_i64().unwrap(), 1_000_000);
+    assert_eq!(body["unpriced_cache_tokens"].as_i64().unwrap(), 0);
+}

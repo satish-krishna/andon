@@ -30,6 +30,7 @@ pub fn router(state: ApiState) -> Router {
         .route("/api/v2/kpis", get(v2_kpis))
         .route("/api/v2/tape", get(v2_tape))
         .route("/api/v2/cost-by-model", get(v2_cost_by_model))
+        .route("/api/v2/cache-efficiency", get(v2_cache_efficiency))
         .route("/api/v2/accept-by-language", get(v2_accept_by_language))
         .route("/api/v2/active-time", get(v2_active_time))
         .route("/api/v2/sessions", get(v2_sessions))
@@ -1569,6 +1570,82 @@ async fn v2_cost_by_model(
         .map(|(m, c)| json!({ "model": m, "cost_usd": round4(c) }))
         .collect();
     Ok(Json(out))
+}
+
+/// Per-model cache savings over `[from, to)` with the model filter applied.
+/// One grouped query; the per-model dollar math lives in `efficiency`.
+fn cache_savings_for_window(
+    conn: &rusqlite::Connection,
+    from: i64,
+    to: i64,
+    q: &FilterQuery,
+) -> crate::api::efficiency::Savings {
+    let (m_sql, m_vals) = q.model_clause("model");
+    let sql = format!(
+        "SELECT model,
+                COALESCE(SUM(CASE WHEN token_type='cacheRead'     THEN count END), 0),
+                COALESCE(SUM(CASE WHEN token_type='cacheCreation' THEN count END), 0)
+         FROM token_usage
+         WHERE timestamp >= ? AND timestamp < ?{m_sql}
+         GROUP BY model"
+    );
+    let mut p: Vec<Box<dyn rusqlite::ToSql>> = vec![Box::new(from), Box::new(to)];
+    for v in m_vals {
+        p.push(Box::new(v));
+    }
+    let refs: Vec<&dyn rusqlite::ToSql> = p.iter().map(|b| &**b).collect();
+    let mut rows: Vec<(String, i64, i64)> = Vec::new();
+    if let Ok(mut stmt) = conn.prepare(&sql) {
+        if let Ok(mapped) = stmt.query_map(refs.as_slice(), |r| {
+            Ok((r.get::<_, String>(0)?, r.get::<_, i64>(1)?, r.get::<_, i64>(2)?))
+        }) {
+            rows = mapped.flatten().collect();
+        }
+    }
+    crate::api::efficiency::cache_savings(rows.iter().map(|(m, cr, cc)| (m.as_str(), *cr, *cc)))
+}
+
+async fn v2_cache_efficiency(
+    State(state): State<ApiState>,
+    Query(q): Query<FilterQuery>,
+) -> Result<Json<CacheEfficiency>, ApiError> {
+    let (from, to) = q.window();
+    let (prev_from, prev_to) = prev_period_window(from, to);
+    let conn = state.pool.get().map_err(ApiError::pool)?;
+
+    let input = sum_tokens(&conn, from, to, "input", &q);
+    let output = sum_tokens(&conn, from, to, "output", &q);
+    let cache_read = sum_tokens(&conn, from, to, "cacheRead", &q);
+    let cache_create = sum_tokens(&conn, from, to, "cacheCreation", &q);
+
+    let hit_ratio = crate::api::efficiency::hit_ratio(input, cache_create, cache_read);
+    let hit_ratio_prev = {
+        let p_in = sum_tokens(&conn, prev_from, prev_to, "input", &q);
+        let p_cc = sum_tokens(&conn, prev_from, prev_to, "cacheCreation", &q);
+        let p_cr = sum_tokens(&conn, prev_from, prev_to, "cacheRead", &q);
+        crate::api::efficiency::hit_ratio(p_in, p_cc, p_cr)
+    };
+
+    let savings = cache_savings_for_window(&conn, from, to, &q);
+    let net_prev = cache_savings_for_window(&conn, prev_from, prev_to, &q).net;
+
+    Ok(Json(CacheEfficiency {
+        hit_ratio: round4(hit_ratio),
+        hit_ratio_prev: round4(hit_ratio_prev),
+        tokens: CacheTokenTotals {
+            input,
+            output,
+            cache_read,
+            cache_create,
+        },
+        savings: CacheSavings {
+            net: round4(savings.net),
+            gross: round4(savings.gross),
+            creation_overhead: round4(savings.creation_overhead),
+        },
+        net_prev: round4(net_prev),
+        unpriced_cache_tokens: savings.unpriced_cache_tokens,
+    }))
 }
 
 async fn v2_accept_by_language(
