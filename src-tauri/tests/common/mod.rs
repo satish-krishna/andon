@@ -37,6 +37,8 @@ pub struct SeedOpts {
     pub model: String,
     pub input_tokens: i64,
     pub output_tokens: i64,
+    pub cache_read_tokens: i64,
+    pub cache_create_tokens: i64,
     pub cost_usd: f64,
     /// Pairs of (decision, language). decision ∈ accept | reject | abort.
     pub decisions: Vec<(&'static str, &'static str)>,
@@ -70,6 +72,22 @@ pub fn seed_session(pool: &Arc<DbPool>, opts: &SeedOpts) {
             params![opts.session_id, started, opts.model, opts.output_tokens],
         )
         .expect("insert output token_usage");
+    }
+    if opts.cache_read_tokens > 0 {
+        conn.execute(
+            "INSERT INTO token_usage (session_id, timestamp, model, token_type, count) \
+             VALUES (?, ?, ?, 'cacheRead', ?)",
+            params![opts.session_id, started, opts.model, opts.cache_read_tokens],
+        )
+        .expect("insert cacheRead token_usage");
+    }
+    if opts.cache_create_tokens > 0 {
+        conn.execute(
+            "INSERT INTO token_usage (session_id, timestamp, model, token_type, count) \
+             VALUES (?, ?, ?, 'cacheCreation', ?)",
+            params![opts.session_id, started, opts.model, opts.cache_create_tokens],
+        )
+        .expect("insert cacheCreation token_usage");
     }
     if opts.cost_usd != 0.0 {
         conn.execute(
