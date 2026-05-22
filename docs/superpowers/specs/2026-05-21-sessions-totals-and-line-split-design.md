@@ -205,6 +205,12 @@ formula the per-row cells use.
 - The `<tfoot>` is given a top border and a slightly emphasized background to
   separate it from the body. It is **not** sticky.
 
+### 6. `docs/features.md`
+
+The Sessions section gains a line documenting the totals row, the Lines column,
+and the Code / Docs / Other split, consistent with how other features are
+recorded there.
+
 ## Data flow
 
 ```mermaid
