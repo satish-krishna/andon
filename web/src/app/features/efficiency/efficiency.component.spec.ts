@@ -83,5 +83,14 @@ describe('EfficiencyComponent', () => {
     const text = fixture.nativeElement.textContent;
     expect(text).toContain('subagent');
     expect(text).toContain('haiku');
+
+    // The conditional class applies the accent tone only to the subagent badge.
+    const badges = Array.from(
+      fixture.nativeElement.querySelectorAll('tbody td span.uppercase') as NodeListOf<HTMLElement>,
+    );
+    const subagentBadge = badges.find((b) => b.textContent?.trim() === 'subagent');
+    const mainBadge = badges.find((b) => b.textContent?.trim() === 'main');
+    expect(subagentBadge?.className).toContain('text-accent');
+    expect(mainBadge?.className).toContain('text-muted');
   });
 });
