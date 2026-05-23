@@ -30,8 +30,12 @@ A filterable page answering "am I spending tokens well?".
   premium are shown so the mechanic is visible. Tokens on models not in the
   price table are excluded and footnoted.
 - **Model cost-efficiency** — per model family (`opus` / `sonnet` / `haiku`),
-  the cost per session and cost per 1k output tokens. Each session is
-  attributed wholly to the family that spent the most in it.
+  split by role: **main** rows attribute each session wholly to its
+  dominant-cost family; **subagent** rows aggregate sidechain (subagent) cost
+  per family across all sessions in the window. The role split is JSONL-derived
+  — sessions that have not been ingested by the JSONL backfill (or session-end
+  ingest) will not show subagent rows. Run **Backfill JSONL** in Settings to
+  re-tag existing data.
 
 All figures respect the global filter bar (window + model chips).
 
