@@ -96,60 +96,107 @@ fn dominant_family(costs: &HashMap<&'static str, f64>) -> &'static str {
     best
 }
 
-/// Aggregate per-session cost/output into per-family rows, attributing each
-/// session wholly to its dominant family. `cost_rows` are
-/// `(session_id, model, cost_usd)`; `output_rows` are `(session_id, output)`.
-/// Rows are sorted by total cost descending.
+/// Aggregate per-session cost/output into per-family rows, split by role
+/// (`main` vs `subagent`). `cost_rows` and `output_rows` carry an
+/// `is_subagent` flag per row.
+///
+/// Main rows preserve the original dominant-family-per-session attribution:
+/// every main row of a session contributes to that session's main half,
+/// which is wholly bucketed under the dominant family. Subagent rows are a
+/// pure per-actual-family aggregation; a subagent invocation typically uses
+/// one model anyway, so per-family ~= per-dominant-family. Rows are sorted
+/// by `total_cost_usd` descending.
 pub fn aggregate_model_efficiency(
-    cost_rows: &[(String, String, f64)],
-    output_rows: &[(String, i64)],
+    cost_rows:   &[(String, String, f64, bool)],
+    output_rows: &[(String, String, i64, bool)],
 ) -> Vec<ModelEfficiencyRow> {
-    // session_id -> family -> cost
-    let mut per_session: HashMap<&str, HashMap<&'static str, f64>> = HashMap::new();
-    for (sid, model, cost) in cost_rows {
-        *per_session
-            .entry(sid.as_str())
-            .or_default()
-            .entry(model_family(model))
-            .or_insert(0.0) += *cost;
+    let mut out: Vec<ModelEfficiencyRow> = Vec::new();
+
+    // ---- Main pass: dominant-family per session, is_subagent=false rows only ----
+    {
+        let mut per_session: HashMap<&str, HashMap<&'static str, f64>> = HashMap::new();
+        for (sid, model, cost, is_sub) in cost_rows {
+            if *is_sub { continue; }
+            *per_session
+                .entry(sid.as_str())
+                .or_default()
+                .entry(model_family(model))
+                .or_insert(0.0) += *cost;
+        }
+        let mut output: HashMap<&str, i64> = HashMap::new();
+        for (sid, _model, toks, is_sub) in output_rows {
+            if *is_sub { continue; }
+            *output.entry(sid.as_str()).or_insert(0) += *toks;
+        }
+        let mut buckets: HashMap<&'static str, (i64, f64, i64)> = HashMap::new();
+        for (sid, fam_costs) in &per_session {
+            let fam = dominant_family(fam_costs);
+            let total_cost: f64 = fam_costs.values().sum();
+            let out_toks = output.get(sid).copied().unwrap_or(0);
+            let e = buckets.entry(fam).or_insert((0, 0.0, 0));
+            e.0 += 1;
+            e.1 += total_cost;
+            e.2 += out_toks;
+        }
+        for (family, (sessions, total_cost, output_tokens)) in buckets {
+            out.push(ModelEfficiencyRow {
+                family: family.to_string(),
+                role: "main".to_string(),
+                sessions,
+                total_cost_usd: round4(total_cost),
+                cost_per_session: round4(total_cost / sessions as f64),
+                output_tokens,
+                cost_per_1k_output: if output_tokens > 0 {
+                    round4(total_cost / output_tokens as f64 * 1000.0)
+                } else { 0.0 },
+            });
+        }
     }
-    // session_id -> output tokens
-    let mut output: HashMap<&str, i64> = HashMap::new();
-    for (sid, toks) in output_rows {
-        *output.entry(sid.as_str()).or_insert(0) += *toks;
+
+    // ---- Subagent pass: per actual family, is_subagent=true rows only ----
+    {
+        let mut buckets: HashMap<&'static str, (std::collections::HashSet<String>, f64, i64)> =
+            HashMap::new();
+        for (sid, model, cost, is_sub) in cost_rows {
+            if !*is_sub { continue; }
+            let fam = model_family(model);
+            let e = buckets.entry(fam).or_insert_with(|| {
+                (std::collections::HashSet::new(), 0.0, 0)
+            });
+            e.0.insert(sid.clone());
+            e.1 += *cost;
+        }
+        for (_sid, model, toks, is_sub) in output_rows {
+            if !*is_sub { continue; }
+            let fam = model_family(model);
+            if let Some(e) = buckets.get_mut(fam) {
+                e.2 += *toks;
+            }
+        }
+        for (family, (sessions_set, total_cost, output_tokens)) in buckets {
+            let sessions = sessions_set.len() as i64;
+            out.push(ModelEfficiencyRow {
+                family: family.to_string(),
+                role: "subagent".to_string(),
+                sessions,
+                total_cost_usd: round4(total_cost),
+                cost_per_session: if sessions > 0 {
+                    round4(total_cost / sessions as f64)
+                } else { 0.0 },
+                output_tokens,
+                cost_per_1k_output: if output_tokens > 0 {
+                    round4(total_cost / output_tokens as f64 * 1000.0)
+                } else { 0.0 },
+            });
+        }
     }
-    // family -> (sessions, total_cost, output_tokens)
-    let mut buckets: HashMap<&'static str, (i64, f64, i64)> = HashMap::new();
-    for (sid, fam_costs) in &per_session {
-        let fam = dominant_family(fam_costs);
-        let total_cost: f64 = fam_costs.values().sum();
-        let out = output.get(sid).copied().unwrap_or(0);
-        let entry = buckets.entry(fam).or_insert((0, 0.0, 0));
-        entry.0 += 1;
-        entry.1 += total_cost;
-        entry.2 += out;
-    }
-    let mut rows: Vec<ModelEfficiencyRow> = buckets
-        .into_iter()
-        .map(|(family, (sessions, total_cost, output_tokens))| ModelEfficiencyRow {
-            family: family.to_string(),
-            sessions,
-            total_cost_usd: round4(total_cost),
-            cost_per_session: round4(total_cost / sessions as f64),
-            output_tokens,
-            cost_per_1k_output: if output_tokens > 0 {
-                round4(total_cost / output_tokens as f64 * 1000.0)
-            } else {
-                0.0
-            },
-        })
-        .collect();
-    rows.sort_by(|a, b| {
+
+    out.sort_by(|a, b| {
         b.total_cost_usd
             .partial_cmp(&a.total_cost_usd)
             .unwrap_or(std::cmp::Ordering::Equal)
     });
-    rows
+    out
 }
 
 #[cfg(test)]
@@ -216,16 +263,20 @@ mod tests {
         // s1: opus 5.0 + haiku 1.0 -> dominant opus, whole session (6.0) -> opus
         // s2: haiku 2.0           -> dominant haiku
         let cost_rows = vec![
-            ("s1".to_string(), "claude-opus-4-7".to_string(), 5.0),
-            ("s1".to_string(), "claude-haiku-4-5".to_string(), 1.0),
-            ("s2".to_string(), "claude-haiku-4-5".to_string(), 2.0),
+            ("s1".to_string(), "claude-opus-4-7".to_string(),  5.0, false),
+            ("s1".to_string(), "claude-haiku-4-5".to_string(), 1.0, false),
+            ("s2".to_string(), "claude-haiku-4-5".to_string(), 2.0, false),
         ];
-        let output_rows = vec![("s1".to_string(), 1000i64), ("s2".to_string(), 500i64)];
+        let output_rows = vec![
+            ("s1".to_string(), "claude-opus-4-7".to_string(), 1000i64, false),
+            ("s2".to_string(), "claude-haiku-4-5".to_string(),  500i64, false),
+        ];
         let rows = aggregate_model_efficiency(&cost_rows, &output_rows);
 
         assert_eq!(rows.len(), 2);
         // sorted by total cost desc -> opus first
         assert_eq!(rows[0].family, "opus");
+        assert_eq!(rows[0].role, "main");
         assert_eq!(rows[0].sessions, 1);
         assert!((rows[0].total_cost_usd - 6.0).abs() < 1e-9);
         assert!((rows[0].cost_per_session - 6.0).abs() < 1e-9);
@@ -237,18 +288,63 @@ mod tests {
     #[test]
     fn aggregate_breaks_ties_toward_opus() {
         let cost_rows = vec![
-            ("s1".to_string(), "claude-opus-4-7".to_string(), 2.0),
-            ("s1".to_string(), "claude-sonnet-4-6".to_string(), 2.0),
+            ("s1".to_string(), "claude-opus-4-7".to_string(),  2.0, false),
+            ("s1".to_string(), "claude-sonnet-4-6".to_string(), 2.0, false),
         ];
-        let rows = aggregate_model_efficiency(&cost_rows, &[]);
+        let output_rows: Vec<(String, String, i64, bool)> = vec![];
+        let rows = aggregate_model_efficiency(&cost_rows, &output_rows);
         assert_eq!(rows.len(), 1);
         assert_eq!(rows[0].family, "opus");
+        assert_eq!(rows[0].role, "main");
     }
 
     #[test]
     fn aggregate_handles_zero_output() {
-        let cost_rows = vec![("s1".to_string(), "claude-opus-4-7".to_string(), 3.0)];
-        let rows = aggregate_model_efficiency(&cost_rows, &[]);
+        let cost_rows = vec![("s1".to_string(), "claude-opus-4-7".to_string(), 3.0, false)];
+        let output_rows: Vec<(String, String, i64, bool)> = vec![];
+        let rows = aggregate_model_efficiency(&cost_rows, &output_rows);
         assert_eq!(rows[0].cost_per_1k_output, 0.0);
+        assert_eq!(rows[0].role, "main");
+    }
+
+    #[test]
+    fn aggregate_splits_main_and_subagent_rows() {
+        let cost_rows = vec![
+            ("s1".to_string(), "claude-opus-4-7".to_string(),  5.0, false),
+            ("s1".to_string(), "claude-haiku-4-5".to_string(), 1.0, true),
+        ];
+        let output_rows = vec![
+            ("s1".to_string(), "claude-opus-4-7".to_string(),  1000i64, false),
+            ("s1".to_string(), "claude-haiku-4-5".to_string(),  500i64, true),
+        ];
+        let rows = aggregate_model_efficiency(&cost_rows, &output_rows);
+
+        assert_eq!(rows.len(), 2);
+        assert_eq!(rows[0].family, "opus");
+        assert_eq!(rows[0].role, "main");
+        assert_eq!(rows[0].sessions, 1);
+        assert!((rows[0].total_cost_usd - 5.0).abs() < 1e-9);
+        assert!((rows[0].cost_per_1k_output - 5.0).abs() < 1e-9);
+
+        assert_eq!(rows[1].family, "haiku");
+        assert_eq!(rows[1].role, "subagent");
+        assert_eq!(rows[1].sessions, 1);
+        assert!((rows[1].total_cost_usd - 1.0).abs() < 1e-9);
+        assert!((rows[1].cost_per_1k_output - 2.0).abs() < 1e-9);
+    }
+
+    #[test]
+    fn aggregate_subagent_pass_groups_by_actual_family() {
+        let cost_rows = vec![
+            ("s1".to_string(), "claude-haiku-4-5".to_string(),  1.0, true),
+            ("s1".to_string(), "claude-sonnet-4-6".to_string(), 2.0, true),
+        ];
+        let output_rows: Vec<(String, String, i64, bool)> = vec![];
+        let rows = aggregate_model_efficiency(&cost_rows, &output_rows);
+
+        assert_eq!(rows.len(), 2);
+        assert!(rows.iter().all(|r| r.role == "subagent"));
+        assert_eq!(rows[0].family, "sonnet");
+        assert_eq!(rows[1].family, "haiku");
     }
 }

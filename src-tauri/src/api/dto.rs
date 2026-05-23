@@ -297,6 +297,8 @@ pub struct CacheEfficiency {
 pub struct ModelEfficiencyRow {
     /// `opus` | `sonnet` | `haiku` | `other`.
     pub family: String,
+    /// `main` (the session's main-agent half) | `subagent` (sidechain).
+    pub role: String,
     pub sessions: i64,
     pub total_cost_usd: f64,
     pub cost_per_session: f64,
