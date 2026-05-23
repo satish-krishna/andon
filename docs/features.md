@@ -10,13 +10,34 @@ The default landing page. Designed to be the one place you check each morning.
 
 - **Range selector** — Today / This week / This month / Last 30 days / Custom. Every other chart on the page respects it.
 - **Model filter** — toggle Opus / Sonnet / Haiku to isolate spend per model family.
-- **Top KPIs** — month-to-date cost (with last-month-same-day comparison and end-of-month projection at current pace), session count, and a split token breakdown (input / output / cache).
+- **Top KPIs** — month-to-date cost (with last-month-same-day comparison and end-of-month projection at current pace), session count, and a split token breakdown (input / output / cache). When a monthly budget is set (Settings → Monthly budget), the cost tile also shows projected spend as a percentage of that budget, with a progress bar that turns amber at 80% and red at 100%.
 - **The Tape** — a calendar-as-row visualisation of daily cost across the month. Today is marked, the y-axis is a money scale, future days are blanked.
 - **Cost by model** — period total broken down by model so you can see the Opus-vs-Sonnet mix.
 - **Accept rate by language** — horizontal bars sorted descending, with raw edit counts.
 - **Top repos · period** *(new in v0.4.0)* — horizontal list of the top 5 repos by cost in the active range, each with a sparkline. Click a row to jump to Sessions filtered to that repo.
 - **Active time** — wall-clock minutes you spent vs. minutes Claude Code spent computing.
 - **Recent sessions** — last 6 sessions, click-through to detail.
+
+## Efficiency
+
+A filterable page answering "am I spending tokens well?".
+
+- **Cache hit ratio** — the share of prompt tokens (`input + cacheCreation +
+  cacheRead`) served from cache, with a percentage-point delta vs. the previous
+  period.
+- **Net cache savings** — gross read savings minus the cache-creation premium,
+  computed per model from the built-in price table. The gross figure and the
+  premium are shown so the mechanic is visible. Tokens on models not in the
+  price table are excluded and footnoted.
+- **Model cost-efficiency** — per model family (`opus` / `sonnet` / `haiku`),
+  split by role: **main** rows attribute each session wholly to its
+  dominant-cost family; **subagent** rows aggregate sidechain (subagent) cost
+  per family across all sessions in the window. The role split is JSONL-derived
+  — sessions that have not been ingested by the JSONL backfill (or session-end
+  ingest) will not show subagent rows. Run **Backfill JSONL** in Settings to
+  re-tag existing data.
+
+All figures respect the global filter bar (window + model chips).
 
 ## Sessions
 
@@ -30,7 +51,9 @@ Every Claude Code session andon has seen, filterable and sortable.
 - **Missing-repo banner** — when more than 20% of sessions in view have no repo info, a banner offers a one-click "Backfill from file paths" (runs the inference fallback) and a link to re-apply the Claude Code hook.
 - Sort by time, cost, duration, or decision count.
 - Rows expand inline to show files touched and decisions made in that session, or you can click into a full detail view.
-- Accept rate per row is computed as `accepts / (accepts + rejects + aborts)`.
+- Accept rate per row is computed as `accepts / (accepts + rejects)`.
+- **LINES column** *(new)* — per-session lines added / removed. Shows `—` when no file-change data is available (line counts are captured by the PostToolUse hook).
+- **Totals row** *(new)* — a grand-total row pinned at the bottom of the table sums cost, tokens, lines, decisions, duration, and accept rate across every session in view. Below it, a segmented bar splits the summed line changes into **Code / Docs / Other** (config files count as code; unclassifiable files as other).
 
 ## Session detail
 
@@ -86,6 +109,7 @@ Configuration, integration status, and danger zone. Sections are anchor-linked f
 - **Ingestion** — global pause toggle. When paused, OTLP listeners stay bound but drop incoming payloads (so Claude Code never sees an error).
 - **OTel forwarder** — opt-in re-emitter. Configure a downstream HTTP/protobuf endpoint, timeout, and custom headers. Test the connection before saving.
 - **Data** — DB file path, "Open folder" button, and live row counts per table. *New in v0.4.0:* a **Backfill repo info** button that runs inference (LCA of file paths → walk up for `.git`) over up to 50 sessions per call with NULL `repo_root`. Useful for sessions that predate the SessionStart hook.
+- **Monthly budget** — a monthly cost budget in USD. When the projected end-of-month spend crosses 80% / 100% of it, Andon shifts the tray icon to amber / red and fires one desktop notification per threshold per month. Set to 0 to disable. Alerts are suppressed for the first two days of each month, when the projection is too volatile to trust.
 - **App** — launch-at-logon toggle (writes to `HKCU\Run`, no admin needed).
 - **About** — version, stack, repo link.
 - **Danger zone** — unpatch `settings.json` (revert the env vars and all three andon hooks) or restore from the `.andon-backup` snapshot andon took at first patch.

@@ -2,6 +2,8 @@ pub mod api;
 mod autostart;
 mod config;
 pub mod db;
+pub mod jsonl;
+mod budget;
 
 #[cfg(feature = "test-support")]
 pub mod diagnostics;
@@ -50,6 +52,7 @@ use tauri::{
 use tracing_subscriber::{EnvFilter, prelude::*};
 
 const MAIN_WINDOW: &str = "main";
+const TRAY_ID: &str = "andon-tray";
 
 struct AppState {
     control: otlp::IngestionControl,
@@ -117,6 +120,8 @@ pub fn run() {
 
     let reports_dir = paths.data_dir.join("reports");
 
+    let budget_changed = Arc::new(tokio::sync::Notify::new());
+
     let api_state = api::ApiState {
         pool: pool.clone(),
         db_path: paths.db_path.clone(),
@@ -126,11 +131,17 @@ pub fn run() {
         settings: settings_store.clone(),
         forwarder: forwarder.clone(),
         reports_dir: reports_dir.clone(),
+        budget_changed: budget_changed.clone(),
     };
 
     let app_state = AppState {
         control: control.clone(),
     };
+
+    let monitor_pool = pool.clone();
+    let monitor_settings = settings_store.clone();
+    let monitor_data_dir = paths.data_dir.clone();
+    let monitor_budget_changed = budget_changed.clone();
 
     tauri::Builder::default()
         .plugin(tauri_plugin_single_instance::init(|app, _argv, _cwd| {
@@ -142,6 +153,7 @@ pub fn run() {
         }))
         .plugin(tauri_plugin_shell::init())
         .plugin(tauri_plugin_opener::init())
+        .plugin(tauri_plugin_notification::init())
         .manage(app_state)
         .setup(move |app| {
             // API server
@@ -180,13 +192,26 @@ pub fn run() {
                 .default_window_icon()
                 .cloned()
                 .expect("default window icon must be configured in tauri.conf.json");
-            let _tray = TrayIconBuilder::with_id("andon-tray")
+            let _tray = TrayIconBuilder::with_id(TRAY_ID)
                 .icon(tray_icon)
                 .tooltip("andon — Claude Code dashboard")
                 .menu(&menu)
                 .on_menu_event(handle_menu_event)
                 .on_tray_icon_event(handle_tray_event)
                 .build(app)?;
+
+            // Budget-alert monitor
+            let monitor_app = app.handle().clone();
+            tauri::async_runtime::spawn(async move {
+                budget::monitor::run_monitor(
+                    monitor_app,
+                    monitor_settings,
+                    monitor_pool,
+                    monitor_data_dir,
+                    monitor_budget_changed,
+                )
+                .await;
+            });
 
             // Start hidden — user opens via tray.
             if let Some(w) = app.get_webview_window(MAIN_WINDOW) {

@@ -4,6 +4,10 @@ expression: "&body"
 ---
 {
   "cost": {
+    "budget": {
+      "monthly_usd": 0.0,
+      "status": "neutral"
+    },
     "current": "[cost]",
     "day_of_month": "[day]",
     "days_in_month": "[days]",

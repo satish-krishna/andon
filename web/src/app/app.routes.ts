@@ -8,6 +8,11 @@ export const routes: Routes = [
       import('./features/overview/overview.component').then((m) => m.OverviewComponent),
   },
   {
+    path: 'efficiency',
+    loadComponent: () =>
+      import('./features/efficiency/efficiency.component').then((m) => m.EfficiencyComponent),
+  },
+  {
     path: 'sessions',
     loadComponent: () =>
       import('./features/sessions/sessions.component').then((m) => m.SessionsComponent),
@@ -23,6 +28,11 @@ export const routes: Routes = [
     path: 'files',
     loadComponent: () =>
       import('./features/files/files.component').then((m) => m.FilesComponent),
+  },
+  {
+    path: 'behaviour',
+    loadComponent: () =>
+      import('./features/behaviour/behaviour.component').then((m) => m.BehaviourComponent),
   },
   {
     path: 'settings',

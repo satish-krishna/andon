@@ -43,7 +43,7 @@ Andon ingests a different stream: the OpenTelemetry feed Claude Code emits when 
 | Captures prompts / responses | Never — see *Privacy* below | Yes, on disk; the tool chooses whether to surface them |
 | Persistence | Embedded SQLite, WAL mode | None — recomputes from JSONL on each invocation |
 | Real-time | Live ingest plus a diagnostic event feed | Snapshot at invocation |
-| Retroactive | No — only sees sessions that ran after install | Yes — every session you've ever run |
+| Retroactive | Yes — Settings → "Ingest JSONL history" walks `~/.claude/projects/` | Yes — every session you've ever run |
 | Form factor | Tray app plus web dashboard | Terminal CLI |
 | Setup | One exe, auto-patches `~/.claude/settings.json` | `npx ccusage@latest` |
 | Cross-platform | Windows-first today | Anywhere Node runs |

@@ -7,7 +7,7 @@
 
 import { importProvidersFrom } from '@angular/core';
 import { TestBed, ComponentFixture } from '@angular/core/testing';
-import { Calendar, Layers, X, LucideAngularModule } from 'lucide-angular';
+import { Calendar, Layers, RefreshCw, X, LucideAngularModule } from 'lucide-angular';
 import { FilterBarComponent } from './filter-bar.component';
 import { FilterService } from '../core/filter.service';
 
@@ -16,9 +16,9 @@ function setup(): { fixture: ComponentFixture<FilterBarComponent>; filter: Filte
     imports: [FilterBarComponent],
     providers: [
       FilterService,
-      // Provide only the icons used by FilterBarComponent (calendar, layers, x).
+      // Provide only the icons used by FilterBarComponent (calendar, layers, refresh-cw, x).
       // Without this, LucideAngularComponent throws on ngOnChanges.
-      importProvidersFrom(LucideAngularModule.pick({ Calendar, Layers, X })),
+      importProvidersFrom(LucideAngularModule.pick({ Calendar, Layers, RefreshCw, X })),
     ],
   });
   const fixture = TestBed.createComponent(FilterBarComponent);
@@ -37,6 +37,10 @@ function modelChip(fixture: ComponentFixture<FilterBarComponent>, id: string): H
 
 function clearButton(fixture: ComponentFixture<FilterBarComponent>): HTMLElement | null {
   return fixture.nativeElement.querySelector('[data-testid="clear-filters"]');
+}
+
+function refreshButton(fixture: ComponentFixture<FilterBarComponent>): HTMLElement | null {
+  return fixture.nativeElement.querySelector('[data-testid="refresh-data"]');
 }
 
 describe('FilterBarComponent', () => {
@@ -79,5 +83,23 @@ describe('FilterBarComponent', () => {
     filter.setSearch('foo');
     fixture.detectChanges();
     expect(clearButton(fixture)).toBeTruthy();
+  });
+
+  it('Refresh button is always visible, including with no active filters', () => {
+    const { fixture } = setup();
+    // Default state has no active filters (Clear is hidden) — Refresh still shows.
+    expect(clearButton(fixture)).toBeFalsy();
+    expect(refreshButton(fixture)).toBeTruthy();
+  });
+
+  it('clicking Refresh bumps refreshTick without activating any filter', () => {
+    const { fixture, filter } = setup();
+    const btn = refreshButton(fixture);
+    expect(btn).toBeTruthy();
+    const before = filter.refreshTick();
+    btn!.click();
+    fixture.detectChanges();
+    expect(filter.refreshTick()).toBe(before + 1);
+    expect(filter.hasActiveFilters()).toBe(false);
   });
 });

@@ -4,7 +4,9 @@ import { FormsModule } from '@angular/forms';
 import { ActivatedRoute, RouterLink } from '@angular/router';
 import { LucideAngularModule } from 'lucide-angular';
 
-import { ApiService, CoverageHint, V2Session, V2FileRow } from '../../core/api.service';
+import { ApiService, CoverageHint, SessionTotals, V2Session, V2FileRow } from '../../core/api.service';
+import { ChangeKind, LineSegment, lineSplitSegments } from './line-split';
+import { sourceLabel, sourceDotClass, sourceTooltip } from '../../core/cost-source';
 import { FilterService } from '../../core/filter.service';
 import { FilterBarComponent } from '../../shared/filter-bar.component';
 import { RepoSummary, SessionDetail } from '../../core/models';
@@ -29,6 +31,7 @@ export class SessionsComponent implements OnInit {
   detailById = signal<Record<string, SessionDetail | null>>({});
   repoOptions = signal<RepoSummary[]>([]);
   coverage = signal<CoverageHint | null>(null);
+  totals = signal<SessionTotals | null>(null);
 
   readonly missingRepoPct = computed(() => {
     const c = this.coverage();
@@ -36,23 +39,56 @@ export class SessionsComponent implements OnInit {
     return 1 - c.with_repo / c.total;
   });
 
+  readonly totalsAcceptRate = computed(() => {
+    const t = this.totals();
+    if (!t) return 0;
+    const d = t.accepts + t.rejects;
+    return d === 0 ? 0 : t.accepts / d;
+  });
+
+  readonly totalsSegments = computed<LineSegment[]>(() => {
+    const t = this.totals();
+    return t ? lineSplitSegments(t.lines) : [];
+  });
+
+  readonly hasLineData = computed(() => {
+    const t = this.totals();
+    return !!t && t.lines_added + t.lines_removed > 0;
+  });
+
   searchInput = '';
 
   constructor() {
     effect(() => {
+      this.filter.refreshTick(); // re-run when the Refresh button is clicked
+      this.loadSessions();
       const w = this.filter.window();
-      const models = this.filter.modelsCsv();
-      const repo = this.filter.reposCsv();
-      const args = { fromMs: w.fromMs, toMs: w.toMs, models, repo, sort: this.sort(), limit: 200 };
-      this.api.sessionsV2({ ...args, search: this.searchInput || undefined }).subscribe((resp) => {
-        this.rows.set(resp.sessions);
-        this.coverage.set(resp.coverage);
-        this.loaded.set(true);
-      });
       this.api.listRepos({ from: w.fromMs, to: w.toMs, limit: 20 }).subscribe((r) => {
         this.repoOptions.set(r);
       });
     });
+  }
+
+  private loadSessions(): void {
+    const w = this.filter.window();
+    const models = this.filter.modelsCsv();
+    const repo = this.filter.reposCsv();
+    this.api
+      .sessionsV2({
+        fromMs: w.fromMs,
+        toMs: w.toMs,
+        models,
+        repo,
+        sort: this.sort(),
+        limit: 200,
+        search: this.searchInput || undefined,
+      })
+      .subscribe((resp) => {
+        this.rows.set(resp.sessions);
+        this.coverage.set(resp.coverage);
+        this.totals.set(resp.totals);
+        this.loaded.set(true);
+      });
   }
 
   ngOnInit(): void {
@@ -65,28 +101,11 @@ export class SessionsComponent implements OnInit {
 
   onSearch(v: string) {
     this.searchInput = v;
-    const w = this.filter.window();
-    const models = this.filter.modelsCsv();
-    const repo = this.filter.reposCsv();
-    this.api
-      .sessionsV2({ fromMs: w.fromMs, toMs: w.toMs, models, repo, sort: this.sort(), limit: 200, search: v || undefined })
-      .subscribe((resp) => {
-        this.rows.set(resp.sessions);
-        this.coverage.set(resp.coverage);
-      });
+    this.loadSessions();
   }
 
   runBackfill() {
-    const w = this.filter.window();
-    const models = this.filter.modelsCsv();
-    const repo = this.filter.reposCsv();
-    this.api.backfillRepos().subscribe(() => {
-      const args = { fromMs: w.fromMs, toMs: w.toMs, models, repo, sort: this.sort(), limit: 200 };
-      this.api.sessionsV2({ ...args, search: this.searchInput || undefined }).subscribe((resp) => {
-        this.rows.set(resp.sessions);
-        this.coverage.set(resp.coverage);
-      });
-    });
+    this.api.backfillRepos().subscribe(() => this.loadSessions());
   }
 
   toggleRepo(key: string) {
@@ -145,6 +164,9 @@ export class SessionsComponent implements OnInit {
   }
 
   Math = Math;
+  sourceLabel = sourceLabel;
+  sourceDotClass = sourceDotClass;
+  sourceTooltip = sourceTooltip;
 
   modelLabel(m: string | null): string {
     if (!m) return '—';
@@ -157,5 +179,16 @@ export class SessionsComponent implements OnInit {
     if (lower.includes('sonnet')) return '#60a5fa';
     if (lower.includes('haiku')) return '#34d399';
     return '#a78bfa';
+  }
+
+  segmentColor(kind: ChangeKind): string {
+    switch (kind) {
+      case 'code':
+        return '#60a5fa';
+      case 'docs':
+        return '#34d399';
+      default:
+        return '#7b8794';
+    }
   }
 }

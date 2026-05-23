@@ -35,9 +35,6 @@
                   [attr.data-active]="filter.repos().includes(repo.key) ? 'true' : null"
                   (click)="toggleRepo(repo.key)">
             {{ repo.label }}
-            @if (!repo.has_remote) {
-              <span class="text-zinc-500 text-xs ml-1">(not git)</span>
-            }
           </button>
         }
       </div>
@@ -74,8 +71,10 @@
               <th class="px-2 py-2 font-normal">Session</th>
               <th class="px-2 py-2 font-normal">Repo</th>
               <th class="px-2 py-2 font-normal">Model</th>
+              <th class="px-2 py-2 font-normal">Source</th>
               <th class="px-2 py-2 font-normal text-right">Cost</th>
               <th class="px-2 py-2 font-normal text-right">Tokens</th>
+              <th class="px-2 py-2 font-normal text-right">Lines</th>
               <th class="px-2 py-2 font-normal text-right">Decisions</th>
               <th class="px-2 py-2 font-normal text-right">Duration</th>
               <th class="px-2 py-2 font-normal text-right pr-4">Accept</th>
@@ -83,7 +82,7 @@
           </thead>
           <tbody>
             @for (g of groupedRows(); track g.label) {
-              <tr><td colspan="10" class="px-4 pt-3 pb-1 text-[10px] uppercase tracking-wider text-muted">{{ g.label }}</td></tr>
+              <tr><td colspan="12" class="px-4 pt-3 pb-1 text-[10px] uppercase tracking-wider text-muted">{{ g.label }}</td></tr>
               @for (s of g.rows; track s.session_id) {
                 <tr class="border-t border-border row-hover cursor-pointer"
                     [class.bg-border]="expanded() === s.session_id"
@@ -99,9 +98,6 @@
                       [title]="s.repo_root ?? s.cwd ?? ''">
                     @if (s.repo_name) {
                       <span class="truncate block">{{ s.repo_name }}</span>
-                      @if (!s.repo_remote) {
-                        <span class="text-zinc-500 text-xs ml-1">(not git)</span>
-                      }
                     } @else {
                       <span class="text-muted">—</span>
                     }
@@ -112,8 +108,26 @@
                       {{ modelLabel(s.top_model) }}
                     </span>
                   </td>
+                  <td class="px-2 py-2">
+                    @if (s.cost_source) {
+                      <span class="inline-flex items-center gap-1.5" [title]="sourceTooltip(s.cost_source)">
+                        <span class="inline-block w-2 h-2 rounded-full" [ngClass]="sourceDotClass(s.cost_source)"></span>
+                        {{ sourceLabel(s.cost_source) }}
+                      </span>
+                    } @else {
+                      <span class="text-muted" [title]="sourceTooltip(null)">—</span>
+                    }
+                  </td>
                   <td class="px-2 py-2 text-right tabular-nums">${{ s.cost_usd | number : '1.2-2' }}</td>
                   <td class="px-2 py-2 text-right tabular-nums">{{ s.tokens_input | number }}<span class="text-muted">/</span>{{ s.tokens_output | number }}</td>
+                  <td class="px-2 py-2 text-right tabular-nums">
+                    @if (s.lines_added + s.lines_removed === 0) {
+                      <span class="text-muted">—</span>
+                    } @else {
+                      <span class="text-ok">+{{ s.lines_added | number }}</span>
+                      <span class="text-err ml-1">−{{ s.lines_removed | number }}</span>
+                    }
+                  </td>
                   <td class="px-2 py-2 text-right">
                     @if (s.accepts + s.rejects + s.aborts === 0) {
                       <span class="text-muted">—</span>
@@ -135,7 +149,7 @@
 
                 @if (expanded() === s.session_id) {
                   <tr class="bg-bg/60">
-                    <td colspan="10" class="px-6 py-5">
+                    <td colspan="12" class="px-6 py-5">
                       <div class="flex items-center gap-4 mb-3 text-[11px] font-mono">
                         <span class="text-muted uppercase tracking-wider">Session</span>
                         <span class="text-accent">{{ s.session_id }}</span>
@@ -217,6 +231,60 @@
               }
             }
           </tbody>
+          @if (totals(); as t) {
+            @if (t.sessions > 0) {
+              <tfoot class="border-t-2 border-border bg-bg/60">
+                <tr class="font-mono text-xs">
+                  <td colspan="6" class="px-4 py-2 text-[10px] uppercase tracking-wider text-muted">
+                    Total · {{ t.sessions | number }} sessions
+                  </td>
+                  <td class="px-2 py-2 text-right tabular-nums">${{ t.cost_usd | number : '1.2-2' }}</td>
+                  <td class="px-2 py-2 text-right tabular-nums">{{ t.tokens_input | number }}<span class="text-muted">/</span>{{ t.tokens_output | number }}</td>
+                  <td class="px-2 py-2 text-right tabular-nums">
+                    @if (hasLineData()) {
+                      <span class="text-ok">+{{ t.lines_added | number }}</span>
+                      <span class="text-err ml-1">−{{ t.lines_removed | number }}</span>
+                    } @else {
+                      <span class="text-muted">—</span>
+                    }
+                  </td>
+                  <td class="px-2 py-2 text-right tabular-nums">{{ t.decisions | number }}</td>
+                  <td class="px-2 py-2 text-right tabular-nums text-muted">{{ fmtDuration(t.duration_seconds) }}</td>
+                  <td class="px-2 py-2 text-right pr-4 tabular-nums">{{ totalsAcceptRate() * 100 | number : '1.0-0' }}%</td>
+                </tr>
+                <tr>
+                  <td colspan="12" class="px-4 py-3">
+                    @if (hasLineData()) {
+                      <div class="flex items-center gap-3 font-mono">
+                        <span class="text-[10px] uppercase tracking-wider text-muted">Changes</span>
+                        <div class="flex h-2 flex-1 overflow-hidden rounded">
+                          @for (seg of totalsSegments(); track seg.kind) {
+                            @if (seg.pct > 0) {
+                              <div [style.width.%]="seg.pct" [style.background-color]="segmentColor(seg.kind)"></div>
+                            }
+                          }
+                        </div>
+                        <div class="flex items-center gap-3 text-[10px]">
+                          @for (seg of totalsSegments(); track seg.kind) {
+                            <span class="inline-flex items-center gap-1.5">
+                              <span class="inline-block w-2 h-2 rounded-full" [style.background-color]="segmentColor(seg.kind)"></span>
+                              {{ seg.kind }}
+                              <span class="text-ok">+{{ seg.added | number }}</span>
+                              <span class="text-err">−{{ seg.removed | number }}</span>
+                            </span>
+                          }
+                        </div>
+                      </div>
+                    } @else {
+                      <div class="text-[10px] text-muted font-mono">
+                        No file-change data in view — line counts are captured by the PostToolUse hook (Settings → Integration).
+                      </div>
+                    }
+                  </td>
+                </tr>
+              </tfoot>
+            }
+          }
         </table>
       }
     </div>

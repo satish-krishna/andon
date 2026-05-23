@@ -8,6 +8,11 @@ use serde::{Deserialize, Serialize};
 pub struct AppSettings {
     pub version: u32,
     pub forwarder: ForwarderSettings,
+    /// `#[serde(default)]` lets settings.json files written before this field
+    /// existed still parse — without it, every existing install is treated as
+    /// corrupt and overwritten. See the regression test in settings_roundtrip.rs.
+    #[serde(default)]
+    pub budget: BudgetSettings,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -17,6 +22,18 @@ pub struct ForwarderSettings {
     pub timeout_ms: u64,
     #[serde(default)]
     pub headers: std::collections::BTreeMap<String, String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct BudgetSettings {
+    /// Monthly cost budget in USD. `0.0` (the default) disables alerts.
+    pub monthly_usd: f64,
+}
+
+impl Default for BudgetSettings {
+    fn default() -> Self {
+        Self { monthly_usd: 0.0 }
+    }
 }
 
 impl Default for AppSettings {
@@ -29,6 +46,7 @@ impl Default for AppSettings {
                 timeout_ms: 2000,
                 headers: Default::default(),
             },
+            budget: BudgetSettings::default(),
         }
     }
 }
@@ -87,6 +105,18 @@ impl SettingsStore {
     pub fn save_forwarder(&self, new: ForwarderSettings) -> Result<ForwarderSettings> {
         let mut w = self.inner.write().expect("settings lock");
         w.forwarder = new.clone();
+        let serialized = serde_json::to_string_pretty(&*w)?;
+        write_atomic(&self.path, &serialized)?;
+        Ok(new)
+    }
+
+    pub fn budget(&self) -> BudgetSettings {
+        self.inner.read().expect("settings lock").budget.clone()
+    }
+
+    pub fn save_budget(&self, new: BudgetSettings) -> Result<BudgetSettings> {
+        let mut w = self.inner.write().expect("settings lock");
+        w.budget = new.clone();
         let serialized = serde_json::to_string_pretty(&*w)?;
         write_atomic(&self.path, &serialized)?;
         Ok(new)

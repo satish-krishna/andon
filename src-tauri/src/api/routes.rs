@@ -7,12 +7,12 @@ use axum::{
     response::IntoResponse,
     routing::{get, post},
 };
-use chrono::{Datelike, Local, NaiveDate, TimeZone};
+use chrono::{Datelike, Local, Months, NaiveDate, TimeZone};
 use rusqlite::params;
 use serde::Deserialize;
 use serde_json::json;
 
-use super::{ApiState, dto::*, filter::{FilterQuery, today_bounds}, hook_response::HookOutput};
+use super::{ApiState, dto::*, efficiency::round4, filter::{FilterQuery, today_bounds}, hook_response::HookOutput};
 
 pub fn router(state: ApiState) -> Router {
     Router::new()
@@ -30,6 +30,8 @@ pub fn router(state: ApiState) -> Router {
         .route("/api/v2/kpis", get(v2_kpis))
         .route("/api/v2/tape", get(v2_tape))
         .route("/api/v2/cost-by-model", get(v2_cost_by_model))
+        .route("/api/v2/cache-efficiency", get(v2_cache_efficiency))
+        .route("/api/v2/model-efficiency", get(v2_model_efficiency))
         .route("/api/v2/accept-by-language", get(v2_accept_by_language))
         .route("/api/v2/active-time", get(v2_active_time))
         .route("/api/v2/sessions", get(v2_sessions))
@@ -59,9 +61,19 @@ pub fn router(state: ApiState) -> Router {
         .route("/api/settings", get(get_settings))
         .route("/api/settings/forwarder", axum::routing::put(put_forwarder))
         .route("/api/settings/forwarder/test", post(test_forwarder))
+        .route("/api/settings/budget", axum::routing::put(put_budget))
         .route("/api/repo/backfill", post(repo_backfill))
         .route("/api/repos", get(list_repos))
         .route("/api/overview/top-repos", get(overview_top_repos))
+        // JSONL ingest + diagnostics
+        .route("/api/jsonl/backfill", post(jsonl_backfill))
+        .route("/api/jsonl/errors", get(jsonl_errors))
+        .route("/api/jsonl/ingest-runs", get(jsonl_ingest_runs))
+        .route("/api/jsonl/coverage-gaps", get(jsonl_coverage_gaps))
+        // Behaviour views (Plan C)
+        .route("/api/behaviour/model-mix", get(behaviour_model_mix))
+        .route("/api/behaviour/slash-commands", get(behaviour_slash_commands))
+        .route("/api/behaviour/subagents", get(behaviour_subagents))
         .with_state(state)
 }
 
@@ -308,7 +320,12 @@ async fn list_sessions(
                 COALESCE((SELECT SUM(count) FROM token_usage WHERE session_id = s.session_id AND token_type='output'), 0),
                 COALESCE((SELECT COUNT(*) FROM tool_decisions WHERE session_id = s.session_id AND decision='accept'), 0),
                 COALESCE((SELECT COUNT(*) FROM tool_decisions WHERE session_id = s.session_id AND decision='reject'), 0),
-                s.cwd, s.repo_root, s.repo_remote, s.repo_branch, s.repo_name
+                s.cwd, s.repo_root, s.repo_remote, s.repo_branch, s.repo_name,
+                (CASE
+                   WHEN EXISTS(SELECT 1 FROM cost_entries WHERE session_id = s.session_id AND request_id IS NULL) THEN 'otlp'
+                   WHEN EXISTS(SELECT 1 FROM cost_entries WHERE session_id = s.session_id) THEN 'jsonl'
+                   ELSE NULL
+                 END) AS cost_source
          FROM sessions s
          WHERE s.started_at >= ?1 AND s.started_at <= ?2
          ORDER BY s.started_at DESC
@@ -332,6 +349,7 @@ async fn list_sessions(
             repo_remote: r.get(13)?,
             repo_branch: r.get(14)?,
             repo_name: r.get(15)?,
+            cost_source: r.get::<_, Option<String>>(16)?,
         })
     })?;
     Ok(Json(rows.flatten().collect()))
@@ -351,7 +369,12 @@ async fn session_detail(
                     COALESCE((SELECT SUM(count) FROM token_usage WHERE session_id = s.session_id AND token_type='output'), 0),
                     COALESCE((SELECT COUNT(*) FROM tool_decisions WHERE session_id = s.session_id AND decision='accept'), 0),
                     COALESCE((SELECT COUNT(*) FROM tool_decisions WHERE session_id = s.session_id AND decision='reject'), 0),
-                    s.cwd, s.repo_root, s.repo_remote, s.repo_branch, s.repo_name
+                    s.cwd, s.repo_root, s.repo_remote, s.repo_branch, s.repo_name,
+                    (CASE
+                       WHEN EXISTS(SELECT 1 FROM cost_entries WHERE session_id = s.session_id AND request_id IS NULL) THEN 'otlp'
+                       WHEN EXISTS(SELECT 1 FROM cost_entries WHERE session_id = s.session_id) THEN 'jsonl'
+                       ELSE NULL
+                     END) AS cost_source
              FROM sessions s WHERE s.session_id = ?1",
             params![id],
             |r| {
@@ -372,6 +395,7 @@ async fn session_detail(
                     repo_remote: r.get(13)?,
                     repo_branch: r.get(14)?,
                     repo_name: r.get(15)?,
+                    cost_source: r.get::<_, Option<String>>(16)?,
                 })
             },
         )
@@ -633,10 +657,6 @@ async fn db_stats(State(state): State<ApiState>) -> Result<Json<serde_json::Valu
 
 // ---------- helpers ----------
 
-fn round4(v: f64) -> f64 {
-    (v * 10000.0).round() / 10000.0
-}
-
 fn accept_rate(accepts: i64, rejects: i64, aborts: i64) -> f64 {
     let denom = accepts + rejects + aborts;
     if denom == 0 {
@@ -782,6 +802,44 @@ async fn test_forwarder(
     }
 }
 
+#[derive(Deserialize)]
+struct BudgetPayload {
+    monthly_usd: f64,
+}
+
+fn validate_budget(p: &BudgetPayload) -> Result<(), String> {
+    if !p.monthly_usd.is_finite() || p.monthly_usd < 0.0 {
+        return Err("monthly_usd must be zero or a positive number".into());
+    }
+    if p.monthly_usd > 1_000_000.0 {
+        return Err("monthly_usd must not exceed 1000000".into());
+    }
+    Ok(())
+}
+
+async fn put_budget(
+    State(state): State<ApiState>,
+    Json(p): Json<BudgetPayload>,
+) -> Result<Json<serde_json::Value>, ApiError> {
+    if let Err(msg) = validate_budget(&p) {
+        return Err(ApiError {
+            status: StatusCode::BAD_REQUEST,
+            message: msg,
+        });
+    }
+    let new = crate::settings::BudgetSettings {
+        monthly_usd: p.monthly_usd,
+    };
+    let saved = state.settings.save_budget(new).map_err(|e| ApiError {
+        status: StatusCode::INTERNAL_SERVER_ERROR,
+        message: format!("{e:#}"),
+    })?;
+    // Wake the budget monitor so the tray and notifications reflect the new
+    // budget immediately, rather than at the next 30-minute tick.
+    state.budget_changed.notify_one();
+    Ok(Json(serde_json::to_value(saved).unwrap_or_else(|_| json!({}))))
+}
+
 // ---------- error ----------
 
 pub struct ApiError {
@@ -826,6 +884,24 @@ struct SessionEndPayload {
     session_id: Option<String>,
     #[serde(default)]
     reason: Option<String>,
+    #[serde(default)]
+    transcript_path: Option<String>,
+}
+
+/// Resolve a hook-supplied `transcript_path`, but only if it is a `.jsonl` file
+/// genuinely under `~/.claude/projects/`. The web API is unauthenticated and
+/// localhost-only; validating the path keeps the session-end hook from doubling
+/// as a generic local file reader if the endpoint is ever reached from outside.
+/// Canonicalizing both sides resolves `..` and symlinks before the prefix check.
+fn validate_transcript_path(raw: &str) -> Option<std::path::PathBuf> {
+    let projects = dirs::home_dir()?
+        .join(".claude")
+        .join("projects")
+        .canonicalize()
+        .ok()?;
+    let path = std::path::PathBuf::from(raw).canonicalize().ok()?;
+    let is_jsonl = path.extension().and_then(|e| e.to_str()) == Some("jsonl");
+    (path.starts_with(&projects) && is_jsonl).then_some(path)
 }
 
 async fn hook_session_end(
@@ -889,6 +965,29 @@ async fn hook_session_end(
             Err(e)       => tracing::error!(error = ?e, "report task panicked"),
         }
     });
+
+    if let Some(tp) = p.transcript_path.clone() {
+        match validate_transcript_path(&tp) {
+            Some(path) => {
+                let pool_j = state.pool.clone();
+                let control_j = state.control.clone();
+                let diag_j = state.diagnostics.clone();
+                tokio::spawn(async move {
+                    let ing =
+                        crate::otlp::ingestor::Ingestor::new(pool_j.clone(), control_j, diag_j);
+                    if let Err(e) = crate::jsonl::ingest_one(&pool_j, &ing, &path).await {
+                        tracing::error!(error = ?e, "session-end JSONL ingest failed");
+                    }
+                });
+            }
+            None => {
+                tracing::warn!(
+                    transcript_path = %tp,
+                    "ignoring transcript_path outside ~/.claude/projects/"
+                );
+            }
+        }
+    }
 
     // Best-effort repo inference for sessions the hook didn't cover.
     let pool_for_inf = state.pool.clone();
@@ -1175,36 +1274,23 @@ async fn reports_index(State(state): State<ApiState>) -> Json<serde_json::Value>
 // v2 — filterable endpoints
 // ============================================================================
 
-fn prev_month_same_day_window(from: i64) -> (i64, i64) {
-    // Compute "the same span, shifted back by ~1 month."
-    let now = Local::now();
-    let day_of_month = now.day();
-    let prev_month_start = now
-        .date_naive()
-        .with_day(1)
-        .and_then(|d| {
-            if d.month() == 1 {
-                NaiveDate::from_ymd_opt(d.year() - 1, 12, 1)
-            } else {
-                NaiveDate::from_ymd_opt(d.year(), d.month() - 1, 1)
-            }
-        })
-        .unwrap_or(now.date_naive());
-    let prev_month_target = prev_month_start
-        .with_day(day_of_month)
-        .unwrap_or(prev_month_start);
-    let prev_from = Local
-        .from_local_datetime(&prev_month_start.and_hms_opt(0, 0, 0).unwrap())
-        .single()
-        .map(|d| d.timestamp_millis())
-        .unwrap_or(0);
-    let prev_to = Local
-        .from_local_datetime(&prev_month_target.and_hms_opt(23, 59, 59).unwrap())
-        .single()
-        .map(|d| d.timestamp_millis())
-        .unwrap_or(0);
-    let _ = from;
-    (prev_from, prev_to)
+/// The selected `(from, to)` window shifted back by exactly one calendar
+/// month — the comparison window for the KPI strip's "vs last month" deltas.
+///
+/// Shifting the *actual* filter window (rather than a fixed month-to-date
+/// span) keeps the comparison honest: narrow the filter and the baseline
+/// narrows with it. `checked_sub_months` clamps day-of-month overflow (e.g.
+/// May 31 → Apr 30), so the result is always a valid instant.
+fn prev_period_window(from: i64, to: i64) -> (i64, i64) {
+    let shift = |ts: i64| -> i64 {
+        Local
+            .timestamp_millis_opt(ts)
+            .single()
+            .and_then(|dt| dt.checked_sub_months(Months::new(1)))
+            .map(|dt| dt.timestamp_millis())
+            .unwrap_or(ts)
+    };
+    (shift(from), shift(to))
 }
 
 fn delta_pct(current: f64, previous: f64) -> Option<f64> {
@@ -1283,7 +1369,7 @@ async fn v2_kpis(
     Query(q): Query<FilterQuery>,
 ) -> Result<Json<serde_json::Value>, ApiError> {
     let (from, to) = q.window();
-    let (prev_from, prev_to) = prev_month_same_day_window(from);
+    let (prev_from, prev_to) = prev_period_window(from, to);
     let conn = state.pool.get().map_err(ApiError::pool)?;
 
     let cost = sum_cost(&conn, from, to, &q);
@@ -1298,20 +1384,29 @@ async fn v2_kpis(
     let prev_tok_in = sum_tokens(&conn, prev_from, prev_to, "input", &q);
     let prev_tok_out = sum_tokens(&conn, prev_from, prev_to, "output", &q);
 
-    // pace + projection (only meaningful for monthly window)
+    // Pace and projection are month-end figures — always computed over the
+    // true current-month window, never the period filter `q`. Using `q`'s
+    // window would make a non-month filter yield a nonsensical projection,
+    // budget status, and session pace.
     let now = Local::now();
     let day_of_month = now.day() as i64;
     let days_in_month = days_in_current_month();
-    let projected_eom = if day_of_month > 0 {
-        (cost / day_of_month as f64) * days_in_month as f64
-    } else {
-        cost
-    };
+    let month_start = crate::budget::month_start_ms(now);
+    let now_ms = now.timestamp_millis();
+    let mtd_cost =
+        crate::db::queries::month_to_date_cost(&conn, month_start, now_ms).unwrap_or(0.0);
+    let mtd_sessions = count_sessions(&conn, month_start, now_ms, &q);
+    let projected_eom =
+        crate::budget::project_eom(mtd_cost, day_of_month as u32, days_in_month as u32);
     let session_pace = if day_of_month > 0 {
-        (sessions as f64 / day_of_month as f64) * days_in_month as f64
+        (mtd_sessions as f64 / day_of_month as f64) * days_in_month as f64
     } else {
-        sessions as f64
+        mtd_sessions as f64
     };
+
+    let budget = state.settings.budget();
+    let budget_status =
+        crate::budget::evaluate(projected_eom, budget.monthly_usd, day_of_month as u32);
 
     Ok(Json(json!({
         "window": { "from": from, "to": to, "label": format!("{:04}-{:02}", now.year(), now.month()) },
@@ -1322,6 +1417,10 @@ async fn v2_kpis(
             "projected_eom": round4(projected_eom),
             "day_of_month": day_of_month,
             "days_in_month": days_in_month,
+            "budget": {
+                "monthly_usd": budget.monthly_usd,
+                "status": budget_status.as_str(),
+            },
         },
         "sessions": {
             "current": sessions,
@@ -1339,14 +1438,7 @@ async fn v2_kpis(
 }
 
 fn days_in_current_month() -> i64 {
-    let now = Local::now().date_naive();
-    let first = now.with_day(1).unwrap();
-    let next = if first.month() == 12 {
-        NaiveDate::from_ymd_opt(first.year() + 1, 1, 1).unwrap()
-    } else {
-        NaiveDate::from_ymd_opt(first.year(), first.month() + 1, 1).unwrap()
-    };
-    (next - first).num_days()
+    crate::budget::days_in_month(Local::now().date_naive()) as i64
 }
 
 #[derive(Deserialize)]
@@ -1477,6 +1569,149 @@ async fn v2_cost_by_model(
     Ok(Json(out))
 }
 
+/// Per-model cache savings over `[from, to)` with the model filter applied.
+/// One grouped query; the per-model dollar math lives in `efficiency`.
+fn cache_savings_for_window(
+    conn: &rusqlite::Connection,
+    from: i64,
+    to: i64,
+    q: &FilterQuery,
+) -> crate::api::efficiency::Savings {
+    let (m_sql, m_vals) = q.model_clause("model");
+    let sql = format!(
+        "SELECT model,
+                COALESCE(SUM(CASE WHEN token_type='cacheRead'     THEN count END), 0),
+                COALESCE(SUM(CASE WHEN token_type='cacheCreation' THEN count END), 0)
+         FROM token_usage
+         WHERE token_type IN ('cacheRead', 'cacheCreation')
+           AND timestamp >= ? AND timestamp < ?{m_sql}
+         GROUP BY model"
+    );
+    let mut p: Vec<Box<dyn rusqlite::ToSql>> = vec![Box::new(from), Box::new(to)];
+    for v in m_vals {
+        p.push(Box::new(v));
+    }
+    let refs: Vec<&dyn rusqlite::ToSql> = p.iter().map(|b| &**b).collect();
+    let mut rows: Vec<(String, i64, i64)> = Vec::new();
+    if let Ok(mut stmt) = conn.prepare(&sql) {
+        if let Ok(mapped) = stmt.query_map(refs.as_slice(), |r| {
+            Ok((r.get::<_, String>(0)?, r.get::<_, i64>(1)?, r.get::<_, i64>(2)?))
+        }) {
+            rows = mapped.flatten().collect();
+        }
+    }
+    crate::api::efficiency::cache_savings(rows.iter().map(|(m, cr, cc)| (m.as_str(), *cr, *cc)))
+}
+
+async fn v2_cache_efficiency(
+    State(state): State<ApiState>,
+    Query(q): Query<FilterQuery>,
+) -> Result<Json<CacheEfficiency>, ApiError> {
+    let (from, to) = q.window();
+    let (prev_from, prev_to) = prev_period_window(from, to);
+    let conn = state.pool.get().map_err(ApiError::pool)?;
+
+    let input = sum_tokens(&conn, from, to, "input", &q);
+    let output = sum_tokens(&conn, from, to, "output", &q);
+    let cache_read = sum_tokens(&conn, from, to, "cacheRead", &q);
+    let cache_create = sum_tokens(&conn, from, to, "cacheCreation", &q);
+
+    let hit_ratio = crate::api::efficiency::hit_ratio(input, cache_create, cache_read);
+    let hit_ratio_prev = {
+        let p_in = sum_tokens(&conn, prev_from, prev_to, "input", &q);
+        let p_cc = sum_tokens(&conn, prev_from, prev_to, "cacheCreation", &q);
+        let p_cr = sum_tokens(&conn, prev_from, prev_to, "cacheRead", &q);
+        crate::api::efficiency::hit_ratio(p_in, p_cc, p_cr)
+    };
+
+    let savings = cache_savings_for_window(&conn, from, to, &q);
+    let net_prev = cache_savings_for_window(&conn, prev_from, prev_to, &q).net;
+
+    Ok(Json(CacheEfficiency {
+        hit_ratio: round4(hit_ratio),
+        hit_ratio_prev: round4(hit_ratio_prev),
+        tokens: CacheTokenTotals {
+            input,
+            output,
+            cache_read,
+            cache_create,
+        },
+        savings: CacheSavings {
+            net: round4(savings.net),
+            gross: round4(savings.gross),
+            creation_overhead: round4(savings.creation_overhead),
+        },
+        net_prev: round4(net_prev),
+        unpriced_cache_tokens: savings.unpriced_cache_tokens,
+    }))
+}
+
+async fn v2_model_efficiency(
+    State(state): State<ApiState>,
+    Query(q): Query<FilterQuery>,
+) -> Result<Json<Vec<ModelEfficiencyRow>>, ApiError> {
+    let (from, to) = q.window();
+    let conn = state.pool.get().map_err(ApiError::pool)?;
+    let (m_sql, m_vals) = q.model_clause("model");
+
+    // (session_id, model, cost, is_subagent) — folded into per-family-per-session costs.
+    let cost_sql = format!(
+        "SELECT session_id, model, SUM(cost_usd), is_subagent
+         FROM cost_entries
+         WHERE timestamp >= ? AND timestamp < ?{m_sql}
+         GROUP BY session_id, model, is_subagent"
+    );
+    let mut cp: Vec<Box<dyn rusqlite::ToSql>> = vec![Box::new(from), Box::new(to)];
+    for v in &m_vals {
+        cp.push(Box::new(v.clone()));
+    }
+    let crefs: Vec<&dyn rusqlite::ToSql> = cp.iter().map(|b| &**b).collect();
+    let mut cost_rows: Vec<(String, String, f64, bool)> = Vec::new();
+    if let Ok(mut stmt) = conn.prepare(&cost_sql) {
+        if let Ok(mapped) = stmt.query_map(crefs.as_slice(), |r| {
+            Ok((
+                r.get::<_, String>(0)?,
+                r.get::<_, String>(1)?,
+                r.get::<_, f64>(2).unwrap_or(0.0),
+                r.get::<_, i64>(3).unwrap_or(0) != 0,
+            ))
+        }) {
+            cost_rows = mapped.flatten().collect();
+        }
+    }
+
+    // (session_id, model, output tokens, is_subagent)
+    let out_sql = format!(
+        "SELECT session_id, model, SUM(count), is_subagent
+         FROM token_usage
+         WHERE token_type = 'output' AND timestamp >= ? AND timestamp < ?{m_sql}
+         GROUP BY session_id, model, is_subagent"
+    );
+    let mut op: Vec<Box<dyn rusqlite::ToSql>> = vec![Box::new(from), Box::new(to)];
+    for v in &m_vals {
+        op.push(Box::new(v.clone()));
+    }
+    let orefs: Vec<&dyn rusqlite::ToSql> = op.iter().map(|b| &**b).collect();
+    let mut output_rows: Vec<(String, String, i64, bool)> = Vec::new();
+    if let Ok(mut stmt) = conn.prepare(&out_sql) {
+        if let Ok(mapped) = stmt.query_map(orefs.as_slice(), |r| {
+            Ok((
+                r.get::<_, String>(0)?,
+                r.get::<_, String>(1)?,
+                r.get::<_, i64>(2).unwrap_or(0),
+                r.get::<_, i64>(3).unwrap_or(0) != 0,
+            ))
+        }) {
+            output_rows = mapped.flatten().collect();
+        }
+    }
+
+    Ok(Json(crate::api::efficiency::aggregate_model_efficiency(
+        &cost_rows,
+        &output_rows,
+    )))
+}
+
 async fn v2_accept_by_language(
     State(state): State<ApiState>,
     Query(q): Query<FilterQuery>,
@@ -1586,7 +1821,10 @@ async fn v2_sessions(
         models: q.models.clone(),
     };
     let (from, to) = filt.window();
-    let limit = q.limit.clamp(1, 1000);
+    // Capped at 999: the totals-split query below lists one bound parameter
+    // per returned session id, and 999 is SQLite's most conservative
+    // SQLITE_MAX_VARIABLE_NUMBER, so the `IN (...)` list can never overflow it.
+    let limit = q.limit.clamp(1, 999);
     let conn = state.pool.get().map_err(ApiError::pool)?;
 
     let repo_list: Vec<String> = q
@@ -1639,7 +1877,14 @@ async fn v2_sessions(
                 ((SELECT COUNT(*) FROM tool_decisions WHERE session_id = s.session_id AND decision='accept')
                  + (SELECT COUNT(*) FROM tool_decisions WHERE session_id = s.session_id AND decision='reject')
                  + (SELECT COUNT(*) FROM tool_decisions WHERE session_id = s.session_id AND decision='abort')) AS decisions,
-                s.cwd, s.repo_root, s.repo_remote, s.repo_branch, s.repo_name
+                s.cwd, s.repo_root, s.repo_remote, s.repo_branch, s.repo_name,
+                (CASE
+                   WHEN EXISTS(SELECT 1 FROM cost_entries WHERE session_id = s.session_id AND request_id IS NULL) THEN 'otlp'
+                   WHEN EXISTS(SELECT 1 FROM cost_entries WHERE session_id = s.session_id) THEN 'jsonl'
+                   ELSE NULL
+                 END) AS cost_source,
+                COALESCE((SELECT SUM(lines_added)   FROM file_changes WHERE session_id = s.session_id), 0) AS lines_added,
+                COALESCE((SELECT SUM(lines_removed) FROM file_changes WHERE session_id = s.session_id), 0) AS lines_removed
          FROM sessions s
          WHERE s.started_at >= ? AND s.started_at <= ?{model_filter_sql}{repo_filter_sql}{search_sql}
          {order}
@@ -1685,6 +1930,9 @@ async fn v2_sessions(
             "repo_remote":     r.get::<_, Option<String>>(18)?,
             "repo_branch":     r.get::<_, Option<String>>(19)?,
             "repo_name":       r.get::<_, Option<String>>(20)?,
+            "cost_source":     r.get::<_, Option<String>>(21)?,
+            "lines_added":     r.get::<_, i64>(22)?,
+            "lines_removed":   r.get::<_, i64>(23)?,
         }))
     })?;
     let sessions: Vec<serde_json::Value> = rows.flatten().collect();
@@ -1701,9 +1949,86 @@ async fn v2_sessions(
         })?
     };
 
+    // ---- Totals over exactly the rows just returned ----
+    let mut t_cost = 0.0_f64;
+    let mut t_tok_in = 0_i64;
+    let mut t_tok_out = 0_i64;
+    let mut t_accepts = 0_i64;
+    let mut t_rejects = 0_i64;
+    let mut t_aborts = 0_i64;
+    let mut t_decisions = 0_i64;
+    let mut t_duration = 0.0_f64;
+    // cost_usd is summed from the already round4'd per-row values, so the
+    // total matches what the table shows.
+    for s in &sessions {
+        t_cost += s["cost_usd"].as_f64().unwrap_or(0.0);
+        t_tok_in += s["tokens_input"].as_i64().unwrap_or(0);
+        t_tok_out += s["tokens_output"].as_i64().unwrap_or(0);
+        t_accepts += s["accepts"].as_i64().unwrap_or(0);
+        t_rejects += s["rejects"].as_i64().unwrap_or(0);
+        t_aborts += s["aborts"].as_i64().unwrap_or(0);
+        t_decisions += s["decisions"].as_i64().unwrap_or(0);
+        t_duration += s["duration_seconds"].as_f64().unwrap_or(0.0);
+    }
+
+    // Code/Docs/Other split: one query over exactly the returned session ids.
+    // The id list is bounded by `limit` (<= 999, see the clamp above), so the
+    // `IN (?, ...)` placeholder list stays within SQLite's parameter limit.
+    let mut split = LineSplit::default();
+    let ids: Vec<String> = sessions
+        .iter()
+        .filter_map(|s| s["session_id"].as_str().map(str::to_string))
+        .collect();
+    if !ids.is_empty() {
+        let placeholders = ids.iter().map(|_| "?").collect::<Vec<_>>().join(",");
+        let fc_sql = format!(
+            "SELECT file_path, lines_added, lines_removed
+             FROM file_changes WHERE session_id IN ({placeholders})"
+        );
+        let mut fc_stmt = conn.prepare(&fc_sql)?;
+        let id_refs: Vec<&dyn rusqlite::ToSql> =
+            ids.iter().map(|s| s as &dyn rusqlite::ToSql).collect();
+        let fc_rows = fc_stmt.query_map(id_refs.as_slice(), |r| {
+            Ok((
+                r.get::<_, Option<String>>(0)?,
+                r.get::<_, i64>(1).unwrap_or(0),
+                r.get::<_, i64>(2).unwrap_or(0),
+            ))
+        })?;
+        for (path, added, removed) in fc_rows.flatten() {
+            let kind = match path.as_deref() {
+                Some(p) => change_kind(p),
+                None => ChangeKind::Other,
+            };
+            let pair = match kind {
+                ChangeKind::Code => &mut split.code,
+                ChangeKind::Docs => &mut split.docs,
+                ChangeKind::Other => &mut split.other,
+            };
+            pair.added += added;
+            pair.removed += removed;
+        }
+    }
+
+    let totals = SessionTotals {
+        sessions: sessions.len() as i64,
+        cost_usd: round4(t_cost),
+        tokens_input: t_tok_in,
+        tokens_output: t_tok_out,
+        accepts: t_accepts,
+        rejects: t_rejects,
+        aborts: t_aborts,
+        decisions: t_decisions,
+        duration_seconds: t_duration,
+        lines_added: split.code.added + split.docs.added + split.other.added,
+        lines_removed: split.code.removed + split.docs.removed + split.other.removed,
+        lines: split,
+    };
+
     Ok(Json(SessionListResponse {
         sessions,
         coverage: CoverageHint { total, with_repo },
+        totals,
     }))
 }
 
@@ -1897,6 +2222,32 @@ fn lang_from_path(path: &str) -> &'static str {
         "md" | "markdown"             => "md",
         "sh" | "bash" | "zsh"         => "shell",
         _                             => "other",
+    }
+}
+
+/// Coarse category for a changed file, derived from its path extension.
+/// Used by `v2_sessions` to split aggregate line changes three ways.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ChangeKind {
+    Code,
+    Docs,
+    Other,
+}
+
+/// Bucket a file path into Code / Docs / Other.
+///
+/// Docs = prose file extensions. Other = anything `lang_from_path` cannot
+/// name. Everything else — including config files like `.toml` / `.json` —
+/// is Code. Classification is case-insensitive.
+fn change_kind(path: &str) -> ChangeKind {
+    let lower = path.to_lowercase();
+    let ext = lower.rsplit('.').next().unwrap_or("");
+    match ext {
+        // `md` / `markdown` also resolve to a named language in lang_from_path;
+        // this Docs arm runs first and intentionally takes priority.
+        "md" | "markdown" | "mdx" | "txt" | "rst" | "adoc" | "asciidoc" => ChangeKind::Docs,
+        _ if lang_from_path(path) == "other" => ChangeKind::Other,
+        _ => ChangeKind::Code,
     }
 }
 
@@ -2097,7 +2448,6 @@ async fn list_repos(
                 COALESCE(repo_name,
                          CASE WHEN repo_remote IS NOT NULL THEN repo_remote ELSE NULL END,
                          repo_root, cwd, '—') AS label,
-                CASE WHEN repo_remote IS NOT NULL THEN 1 ELSE 0 END AS has_remote,
                 COUNT(*) AS n,
                 MAX(repo_root) AS rr
              FROM sessions
@@ -2110,9 +2460,8 @@ async fn list_repos(
             Ok(crate::api::dto::RepoSummary {
                 key: r.get::<_, String>(0)?,
                 label: r.get::<_, String>(1)?,
-                has_remote: r.get::<_, i64>(2)? != 0,
-                session_count: r.get::<_, i64>(3)?,
-                repo_root: r.get::<_, Option<String>>(4)?,
+                session_count: r.get::<_, i64>(2)?,
+                repo_root: r.get::<_, Option<String>>(3)?,
             })
         })?;
         rows.collect()
@@ -2191,4 +2540,334 @@ async fn overview_top_repos(
         Ok(out)
     }).await.unwrap_or(Ok(vec![])).unwrap_or_default();
     Json(rows)
+}
+
+// ---------- JSONL ingest endpoints ----------
+
+#[tracing::instrument(skip(state))]
+async fn jsonl_backfill(State(state): State<ApiState>) -> axum::response::Response {
+    let Some(home) = dirs::home_dir() else {
+        return (
+            axum::http::StatusCode::INTERNAL_SERVER_ERROR,
+            Json(serde_json::json!({"error":"no home dir"})),
+        )
+            .into_response();
+    };
+    let claude_home = home.join(".claude");
+    let pool = std::sync::Arc::clone(&state.pool);
+    let ingestor = crate::otlp::ingestor::Ingestor::new(
+        std::sync::Arc::clone(&state.pool),
+        state.control.clone(),
+        state.diagnostics.clone(),
+    );
+    match crate::jsonl::backfill(&pool, &ingestor, &claude_home).await {
+        Ok(stats) => Json(crate::api::dto::JsonlBackfillResponse::from(stats)).into_response(),
+        Err(e) => {
+            tracing::error!(error = ?e, "jsonl backfill failed");
+            (
+                axum::http::StatusCode::INTERNAL_SERVER_ERROR,
+                Json(serde_json::json!({"error": e.to_string()})),
+            )
+                .into_response()
+        }
+    }
+}
+
+#[tracing::instrument(skip(state))]
+async fn jsonl_errors(State(state): State<ApiState>) -> Json<Vec<crate::api::dto::JsonlErrorEntry>> {
+    let pool = state.pool.clone();
+    let rows = tokio::task::spawn_blocking(move || -> Vec<_> {
+        let Ok(conn) = pool.get() else { return vec![] };
+        let Ok(mut stmt) = conn.prepare(
+            "SELECT jsonl_path, line_no, error_kind, error_msg, cc_version, ingested_at
+             FROM jsonl_errors ORDER BY ingested_at DESC LIMIT 100",
+        ) else {
+            return vec![];
+        };
+        stmt.query_map([], |r| {
+            Ok(crate::api::dto::JsonlErrorEntry {
+                jsonl_path: r.get(0)?,
+                line_no: r.get(1)?,
+                error_kind: r.get(2)?,
+                error_msg: r.get(3)?,
+                cc_version: r.get(4)?,
+                ingested_at: r.get(5)?,
+            })
+        })
+        .map(|i| i.filter_map(|r| r.ok()).collect())
+        .unwrap_or_default()
+    })
+    .await
+    .unwrap_or_default();
+    Json(rows)
+}
+
+#[tracing::instrument(skip(state))]
+async fn jsonl_ingest_runs(
+    State(state): State<ApiState>,
+) -> Json<Vec<crate::api::dto::JsonlIngestRunEntry>> {
+    let pool = state.pool.clone();
+    let rows = tokio::task::spawn_blocking(move || -> Vec<_> {
+        let Ok(conn) = pool.get() else { return vec![] };
+        let Ok(mut stmt) = conn.prepare(
+            "SELECT id, kind, started_at, ended_at, files_processed, records_processed, records_errored
+             FROM jsonl_ingest_runs ORDER BY started_at DESC LIMIT 20",
+        ) else {
+            return vec![];
+        };
+        stmt.query_map([], |r| {
+            Ok(crate::api::dto::JsonlIngestRunEntry {
+                id: r.get(0)?,
+                kind: r.get(1)?,
+                started_at: r.get(2)?,
+                ended_at: r.get(3)?,
+                files_processed: r.get(4)?,
+                records_processed: r.get(5)?,
+                records_errored: r.get(6)?,
+            })
+        })
+        .map(|i| i.filter_map(|r| r.ok()).collect())
+        .unwrap_or_default()
+    })
+    .await
+    .unwrap_or_default();
+    Json(rows)
+}
+
+#[tracing::instrument(skip(state))]
+async fn jsonl_coverage_gaps(
+    State(state): State<ApiState>,
+) -> Json<Vec<crate::api::dto::CoverageGap>> {
+    let pool = state.pool.clone();
+    let rows = tokio::task::spawn_blocking(move || -> Vec<_> {
+        let Ok(conn) = pool.get() else { return vec![] };
+        // OTLP-covered sessions (otlp_calls > 0) whose transcript shows more API
+        // calls than OTLP recorded — a likely mid-session loss of OTel coverage.
+        // Note: otlp_calls counts distinct timestamps of OTLP-only token_usage rows,
+        // which can undercount if two API calls share the same millisecond (acceptable for diagnostics).
+        let Ok(mut stmt) = conn.prepare(
+            "SELECT session_id, jsonl_calls, otlp_calls FROM (
+                 SELECT sjc.session_id AS session_id,
+                        sjc.api_calls  AS jsonl_calls,
+                        (SELECT COUNT(DISTINCT timestamp) FROM token_usage tu
+                         WHERE tu.session_id = sjc.session_id
+                           AND tu.request_id IS NULL) AS otlp_calls
+                 FROM session_jsonl_calls sjc
+             )
+             WHERE otlp_calls > 0 AND jsonl_calls > otlp_calls
+             ORDER BY (jsonl_calls - otlp_calls) DESC",
+        ) else {
+            return vec![];
+        };
+        stmt.query_map([], |r| {
+            Ok(crate::api::dto::CoverageGap {
+                session_id: r.get(0)?,
+                jsonl_calls: r.get(1)?,
+                otlp_calls: r.get(2)?,
+            })
+        })
+        .map(|i| i.filter_map(|r| r.ok()).collect())
+        .unwrap_or_default()
+    })
+    .await
+    .unwrap_or_default();
+    Json(rows)
+}
+
+// ---------- Behaviour endpoints (Plan C) ----------
+
+async fn behaviour_model_mix(
+    State(state): State<ApiState>,
+    Query(q): Query<FilterQuery>,
+) -> Json<crate::api::dto::ModelMixResponse> {
+    let pool = state.pool.clone();
+    // Model-mix is filterable: the Overview passes the dashboard window so its
+    // "Invocations by model" tile tracks the filter. With no `from`/`to` — the
+    // unfiltered Behaviour page — it stays all-time.
+    let (m_sql, m_vals) = q.model_clause("model");
+    // Apply each bound independently — a lone `from` or `to` still filters
+    // (no bounds at all = the all-time Behaviour-page case above).
+    let mut time_sql = String::new();
+    let mut time_vals: Vec<i64> = Vec::new();
+    if let Some(from) = q.from {
+        time_sql.push_str(" AND timestamp >= ?");
+        time_vals.push(from);
+    }
+    if let Some(to) = q.to {
+        time_sql.push_str(" AND timestamp < ?");
+        time_vals.push(to);
+    }
+    let out = tokio::task::spawn_blocking(move || {
+        let conn = pool.get().ok()?;
+
+        // The same WHERE fragment and bind parameters drive both queries.
+        let mut params: Vec<Box<dyn rusqlite::ToSql>> = Vec::new();
+        for v in &time_vals {
+            params.push(Box::new(*v));
+        }
+        for v in &m_vals {
+            params.push(Box::new(v.clone()));
+        }
+        let refs: Vec<&dyn rusqlite::ToSql> = params.iter().map(|b| &**b).collect();
+
+        let by_model: Vec<crate::api::dto::ModelMixEntry> = conn
+            .prepare(&format!(
+                // One API call writes several token_usage rows (input/output/
+                // cacheRead/cacheCreation), so COUNT(*) would inflate
+                // invocations ~2-4x. Count distinct calls instead: request_id
+                // for JSONL rows, timestamp for OTLP rows (request_id IS NULL).
+                "SELECT model,
+                        COUNT(DISTINCT COALESCE(request_id, timestamp)),
+                        COUNT(DISTINCT session_id)
+                 FROM token_usage WHERE 1=1{time_sql}{m_sql}
+                 GROUP BY model ORDER BY 2 DESC"
+            ))
+            .ok()?
+            .query_map(refs.as_slice(), |r| {
+                Ok(crate::api::dto::ModelMixEntry {
+                    model: r.get(0)?,
+                    invocations: r.get(1)?,
+                    sessions: r.get(2)?,
+                })
+            })
+            .ok()?
+            .filter_map(|r| r.ok())
+            .collect();
+        let by_model_tool: Vec<crate::api::dto::ModelToolCell> = conn
+            .prepare(&format!(
+                "SELECT model, tool_name, COUNT(*)
+                 FROM tool_decisions WHERE model IS NOT NULL{time_sql}{m_sql}
+                 GROUP BY model, tool_name ORDER BY 3 DESC"
+            ))
+            .ok()?
+            .query_map(refs.as_slice(), |r| {
+                Ok(crate::api::dto::ModelToolCell {
+                    model: r.get(0)?,
+                    tool: r.get(1)?,
+                    count: r.get(2)?,
+                })
+            })
+            .ok()?
+            .filter_map(|r| r.ok())
+            .collect();
+        Some(crate::api::dto::ModelMixResponse {
+            by_model,
+            by_model_tool,
+        })
+    })
+    .await
+    .ok()
+    .flatten()
+    .unwrap_or(crate::api::dto::ModelMixResponse {
+        by_model: vec![],
+        by_model_tool: vec![],
+    });
+    Json(out)
+}
+
+async fn behaviour_slash_commands(
+    State(state): State<ApiState>,
+) -> Json<Vec<crate::api::dto::SlashCommandEntry>> {
+    let pool = state.pool.clone();
+    let out = tokio::task::spawn_blocking(move || -> Vec<_> {
+        let Ok(conn) = pool.get() else { return vec![] };
+        let Ok(mut stmt) = conn.prepare(
+            "SELECT command_name, COUNT(*) FROM slash_commands
+             GROUP BY command_name ORDER BY 2 DESC LIMIT 30",
+        ) else {
+            return vec![];
+        };
+        stmt.query_map([], |r| {
+            Ok(crate::api::dto::SlashCommandEntry {
+                name: r.get(0)?,
+                count: r.get(1)?,
+            })
+        })
+        .map(|i| i.filter_map(|r| r.ok()).collect())
+        .unwrap_or_default()
+    })
+    .await
+    .unwrap_or_default();
+    Json(out)
+}
+
+async fn behaviour_subagents(
+    State(state): State<ApiState>,
+) -> Json<Vec<crate::api::dto::SubAgentEntry>> {
+    let pool = state.pool.clone();
+    let out = tokio::task::spawn_blocking(move || -> Vec<_> {
+        let Ok(conn) = pool.get() else { return vec![] };
+        let Ok(mut stmt) = conn.prepare(
+            "SELECT subagent_type, COUNT(*) FROM subagent_calls
+             WHERE subagent_type IS NOT NULL
+             GROUP BY subagent_type ORDER BY 2 DESC",
+        ) else {
+            return vec![];
+        };
+        stmt.query_map([], |r| {
+            Ok(crate::api::dto::SubAgentEntry {
+                subagent_type: r.get(0)?,
+                invocations: r.get(1)?,
+            })
+        })
+        .map(|i| i.filter_map(|r| r.ok()).collect())
+        .unwrap_or_default()
+    })
+    .await
+    .unwrap_or_default();
+    Json(out)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn ms(y: i32, mo: u32, d: u32, h: u32, mi: u32) -> i64 {
+        Local
+            .with_ymd_and_hms(y, mo, d, h, mi, 0)
+            .single()
+            .expect("valid local datetime")
+            .timestamp_millis()
+    }
+
+    // The KPI strip compares the selected window against the same window one
+    // calendar month earlier — BOTH endpoints must shift, not just the start.
+    #[test]
+    fn prev_period_window_shifts_both_ends_back_one_month() {
+        let (pf, pt) = prev_period_window(ms(2026, 5, 1, 0, 0), ms(2026, 5, 20, 17, 30));
+        assert_eq!(pf, ms(2026, 4, 1, 0, 0));
+        assert_eq!(pt, ms(2026, 4, 20, 17, 30));
+    }
+
+    // Regression: prev_period_window's predecessor discarded its argument, so
+    // the "vs last month" deltas were frozen regardless of the filter window.
+    // Moving the filter's start must move the comparison window with it.
+    #[test]
+    fn prev_period_window_tracks_the_selected_window() {
+        let to = ms(2026, 5, 20, 0, 0);
+        let wide = prev_period_window(ms(2026, 5, 1, 0, 0), to);
+        let narrow = prev_period_window(ms(2026, 5, 18, 0, 0), to);
+        assert_ne!(
+            wide.0, narrow.0,
+            "previous-window start must follow the filter, not ignore it"
+        );
+    }
+
+    #[test]
+    fn change_kind_buckets_paths_three_ways() {
+        // Code: named languages, including config files.
+        assert_eq!(change_kind("src/main.rs"), ChangeKind::Code);
+        assert_eq!(change_kind("Cargo.toml"), ChangeKind::Code);
+        assert_eq!(change_kind("web/package.json"), ChangeKind::Code);
+        assert_eq!(change_kind("a.b.rs"), ChangeKind::Code);
+        // Docs: prose extensions, case-insensitive.
+        assert_eq!(change_kind("README.md"), ChangeKind::Docs);
+        assert_eq!(change_kind("notes.txt"), ChangeKind::Docs);
+        assert_eq!(change_kind("docs/guide.rst"), ChangeKind::Docs);
+        assert_eq!(change_kind("guide.markdown"), ChangeKind::Docs);
+        assert_eq!(change_kind("CHANGELOG.MD"), ChangeKind::Docs);
+        // Other: nothing lang_from_path can name.
+        assert_eq!(change_kind("Makefile"), ChangeKind::Other);
+        assert_eq!(change_kind("data.xyz"), ChangeKind::Other);
+    }
 }

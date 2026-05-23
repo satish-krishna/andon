@@ -52,6 +52,7 @@ pub struct SessionSummary {
     #[serde(default)] pub repo_remote: Option<String>,
     #[serde(default)] pub repo_branch: Option<String>,
     #[serde(default)] pub repo_name: Option<String>,
+    #[serde(default)] pub cost_source: Option<String>,
 }
 
 #[derive(Serialize)]
@@ -116,8 +117,6 @@ pub struct RepoSummary {
     pub key: String,
     /// Display label: repo_name (preferred), else basename of key.
     pub label: String,
-    /// `true` when repo_remote is set.
-    pub has_remote: bool,
     pub session_count: i64,
     /// Any one repo_root observed for this group (MAX). Used by the Files page
     /// to derive relative paths when the user selects a remote-keyed repo chip.
@@ -140,8 +139,169 @@ pub struct CoverageHint {
     pub with_repo: i64,
 }
 
+#[derive(serde::Serialize, Default, Clone, Copy)]
+pub struct LinePair {
+    pub added: i64,
+    pub removed: i64,
+}
+
+#[derive(serde::Serialize, Default)]
+pub struct LineSplit {
+    pub code: LinePair,
+    pub docs: LinePair,
+    pub other: LinePair,
+}
+
+#[derive(serde::Serialize)]
+pub struct SessionTotals {
+    pub sessions: i64,
+    pub cost_usd: f64,
+    pub tokens_input: i64,
+    pub tokens_output: i64,
+    pub accepts: i64,
+    pub rejects: i64,
+    pub aborts: i64,
+    pub decisions: i64,
+    pub duration_seconds: f64,
+    /// Sum of all three buckets' `added`.
+    pub lines_added: i64,
+    /// Sum of all three buckets' `removed`.
+    pub lines_removed: i64,
+    pub lines: LineSplit,
+}
+
 #[derive(serde::Serialize)]
 pub struct SessionListResponse {
     pub sessions: Vec<serde_json::Value>,
     pub coverage: CoverageHint,
+    pub totals: SessionTotals,
+}
+
+// ---- JSONL ingest DTOs ----
+
+#[derive(Debug, serde::Serialize)]
+pub struct JsonlBackfillResponse {
+    pub files_processed: i64,
+    pub records_processed: i64,
+    pub records_errored: i64,
+    pub sessions_added: i64,
+    pub tokens_written: i64,
+    pub cost_written: i64,
+    pub duration_ms: i64,
+}
+
+impl From<crate::jsonl::IngestStats> for JsonlBackfillResponse {
+    fn from(s: crate::jsonl::IngestStats) -> Self {
+        Self {
+            files_processed: s.files_processed,
+            records_processed: s.records_processed,
+            records_errored: s.records_errored,
+            sessions_added: s.sessions_added,
+            tokens_written: s.tokens_written,
+            cost_written: s.cost_written,
+            duration_ms: s.duration_ms,
+        }
+    }
+}
+
+#[derive(Debug, serde::Serialize)]
+pub struct JsonlErrorEntry {
+    pub jsonl_path: String,
+    pub line_no: i64,
+    pub error_kind: String,
+    pub error_msg: String,
+    pub cc_version: Option<String>,
+    pub ingested_at: i64,
+}
+
+#[derive(Debug, serde::Serialize)]
+pub struct JsonlIngestRunEntry {
+    pub id: i64,
+    pub kind: String,
+    pub started_at: i64,
+    pub ended_at: Option<i64>,
+    pub files_processed: i64,
+    pub records_processed: i64,
+    pub records_errored: i64,
+}
+
+#[derive(Debug, serde::Serialize)]
+pub struct CoverageGap {
+    pub session_id: String,
+    pub jsonl_calls: i64,
+    pub otlp_calls: i64,
+}
+
+// ---- Behaviour DTOs ----
+
+#[derive(Debug, serde::Serialize)]
+pub struct ModelMixEntry {
+    pub model: String,
+    pub invocations: i64,
+    pub sessions: i64,
+}
+
+#[derive(Debug, serde::Serialize)]
+pub struct ModelToolCell {
+    pub model: String,
+    pub tool: String,
+    pub count: i64,
+}
+
+#[derive(Debug, serde::Serialize)]
+pub struct ModelMixResponse {
+    pub by_model: Vec<ModelMixEntry>,
+    pub by_model_tool: Vec<ModelToolCell>,
+}
+
+#[derive(Debug, serde::Serialize)]
+pub struct SlashCommandEntry {
+    pub name: String,
+    pub count: i64,
+}
+
+#[derive(Debug, serde::Serialize)]
+pub struct SubAgentEntry {
+    pub subagent_type: String,
+    pub invocations: i64,
+}
+
+// ---- Efficiency page DTOs ----
+
+#[derive(Debug, serde::Serialize)]
+pub struct CacheTokenTotals {
+    pub input: i64,
+    pub output: i64,
+    pub cache_read: i64,
+    pub cache_create: i64,
+}
+
+#[derive(Debug, serde::Serialize)]
+pub struct CacheSavings {
+    pub net: f64,
+    pub gross: f64,
+    pub creation_overhead: f64,
+}
+
+#[derive(Debug, serde::Serialize)]
+pub struct CacheEfficiency {
+    pub hit_ratio: f64,
+    pub hit_ratio_prev: f64,
+    pub tokens: CacheTokenTotals,
+    pub savings: CacheSavings,
+    pub net_prev: f64,
+    pub unpriced_cache_tokens: i64,
+}
+
+#[derive(Debug, serde::Serialize)]
+pub struct ModelEfficiencyRow {
+    /// `opus` | `sonnet` | `haiku` | `other`.
+    pub family: String,
+    /// `main` (the session's main-agent half) | `subagent` (sidechain).
+    pub role: String,
+    pub sessions: i64,
+    pub total_cost_usd: f64,
+    pub cost_per_session: f64,
+    pub output_tokens: i64,
+    pub cost_per_1k_output: f64,
 }

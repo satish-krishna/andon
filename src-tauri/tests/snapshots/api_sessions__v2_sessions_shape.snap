@@ -12,12 +12,15 @@ expression: "&body"
       "aborts": 1,
       "accepts": 1,
       "api_calls": 1,
+      "cost_source": "otlp",
       "cost_usd": "[cost]",
       "cwd": null,
       "decisions": 2,
       "duration_seconds": "[secs]",
       "ended_at": "[ts]",
       "host_arch": null,
+      "lines_added": 0,
+      "lines_removed": 0,
       "os_type": null,
       "rejects": 0,
       "repo_branch": null,
@@ -35,12 +38,15 @@ expression: "&body"
       "aborts": 0,
       "accepts": 0,
       "api_calls": 1,
+      "cost_source": "otlp",
       "cost_usd": "[cost]",
       "cwd": null,
       "decisions": 0,
       "duration_seconds": "[secs]",
       "ended_at": "[ts]",
       "host_arch": null,
+      "lines_added": 0,
+      "lines_removed": 0,
       "os_type": null,
       "rejects": 0,
       "repo_branch": null,
@@ -54,5 +60,32 @@ expression: "&body"
       "tokens_output": 0,
       "top_model": "claude-haiku"
     }
-  ]
+  ],
+  "totals": {
+    "aborts": 1,
+    "accepts": 1,
+    "cost_usd": 1.75,
+    "decisions": 2,
+    "duration_seconds": 0.0,
+    "lines": {
+      "code": {
+        "added": 0,
+        "removed": 0
+      },
+      "docs": {
+        "added": 0,
+        "removed": 0
+      },
+      "other": {
+        "added": 0,
+        "removed": 0
+      }
+    },
+    "lines_added": 0,
+    "lines_removed": 0,
+    "rejects": 0,
+    "sessions": 2,
+    "tokens_input": 300,
+    "tokens_output": 150
+  }
 }

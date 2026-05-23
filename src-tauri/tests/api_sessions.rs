@@ -221,6 +221,7 @@ async fn session_detail_returns_correct_data() {
                 added: 10,
                 removed: 3,
             }],
+            ..Default::default()
         },
     );
 
@@ -449,4 +450,204 @@ async fn v2_sessions_limit_is_honored() {
 
     // ORDER BY started_at DESC → v2-lim-4 should be first
     assert_eq!(sessions[0]["session_id"], "v2-lim-4");
+}
+
+// ---------------------------------------------------------------------------
+// 9. cost_source_reflects_request_id
+// ---------------------------------------------------------------------------
+
+#[tokio::test]
+async fn cost_source_reflects_request_id() {
+    let (pool, _db_dir) = common::fixture_pool();
+
+    // OTLP session: seed_session inserts a cost row with request_id = NULL.
+    common::seed_session(
+        &pool,
+        &common::SeedOpts {
+            session_id: "src-otlp".into(),
+            started_at_ms: Some(anchor_ms()),
+            cost_usd: 1.0,
+            model: "claude-opus-4-7".into(),
+            ..Default::default()
+        },
+    );
+
+    // JSONL session: seeded with no cost row, then a cost row carrying a
+    // non-NULL request_id is inserted directly (as JSONL ingest would).
+    common::seed_session(
+        &pool,
+        &common::SeedOpts {
+            session_id: "src-jsonl".into(),
+            started_at_ms: Some(anchor_ms()),
+            model: "claude-opus-4-7".into(),
+            ..Default::default()
+        },
+    );
+    {
+        let conn = pool.get().unwrap();
+        conn.execute(
+            "INSERT INTO cost_entries (session_id, request_id, timestamp, model, cost_usd) \
+             VALUES ('src-jsonl', 'req_abc', 0, 'claude-opus-4-7', 0.5)",
+            [],
+        )
+        .unwrap();
+    }
+
+    // No-cost session: seed_session with cost_usd = 0.0 inserts no cost row.
+    common::seed_session(
+        &pool,
+        &common::SeedOpts {
+            session_id: "src-none".into(),
+            started_at_ms: Some(anchor_ms()),
+            model: "claude-opus-4-7".into(),
+            ..Default::default()
+        },
+    );
+
+    let from = ms_ago(5);
+    let to = anchor_ms() + 1000;
+
+    // --- v2 list endpoint ---
+    let (router, _rd) = common::test_router(&pool);
+    let (status, body) = get_json(router, &format!("/api/v2/sessions?from={from}&to={to}")).await;
+    assert_eq!(status, StatusCode::OK);
+    let pick = |id: &str| -> Value {
+        body["sessions"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|s| s["session_id"] == id)
+            .cloned()
+            .unwrap_or(Value::Null)
+    };
+    assert_eq!(pick("src-otlp")["cost_source"], "otlp");
+    assert_eq!(pick("src-jsonl")["cost_source"], "jsonl");
+    assert!(
+        pick("src-none")["cost_source"].is_null(),
+        "a session with no cost rows has a null cost_source"
+    );
+
+    // --- detail endpoint exposes the same field ---
+    let (router2, _rd2) = common::test_router(&pool);
+    let (status2, detail) = get_json(router2, "/api/sessions/src-jsonl").await;
+    assert_eq!(status2, StatusCode::OK);
+    assert_eq!(detail["session"]["cost_source"], "jsonl");
+}
+
+// ---------------------------------------------------------------------------
+// 10. v2_sessions_reports_line_totals_and_split
+// ---------------------------------------------------------------------------
+
+#[tokio::test]
+async fn v2_sessions_reports_line_totals_and_split() {
+    let (pool, _db_dir) = common::fixture_pool();
+
+    // Session A: a code file and a docs file.
+    common::seed_session(
+        &pool,
+        &common::SeedOpts {
+            session_id: "lines-a".into(),
+            started_at_ms: Some(anchor_ms()),
+            cost_usd: 1.0,
+            model: "claude-sonnet".into(),
+            files: vec![
+                common::FileChange { path: "src/lib.rs", added: 100, removed: 20 },
+                common::FileChange { path: "README.md", added: 30, removed: 5 },
+            ],
+            ..Default::default()
+        },
+    );
+    // Session B: a config file (-> Code) and an unclassifiable file (-> Other).
+    common::seed_session(
+        &pool,
+        &common::SeedOpts {
+            session_id: "lines-b".into(),
+            started_at_ms: Some(ms_ago(1)),
+            cost_usd: 0.5,
+            model: "claude-haiku".into(),
+            files: vec![
+                common::FileChange { path: "Cargo.toml", added: 8, removed: 2 },
+                common::FileChange { path: "Makefile", added: 4, removed: 1 },
+            ],
+            ..Default::default()
+        },
+    );
+
+    let (router, _router_dir) = common::test_router(&pool);
+    let from = ms_ago(5);
+    let to = anchor_ms() + 1000;
+    let url = format!("/api/v2/sessions?from={from}&to={to}");
+    let (status, body) = get_json(router, &url).await;
+
+    assert_eq!(status, StatusCode::OK);
+
+    // Per-row lines.
+    let pick = |id: &str| -> Value {
+        body["sessions"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|s| s["session_id"] == id)
+            .cloned()
+            .unwrap()
+    };
+    assert_eq!(pick("lines-a")["lines_added"], 130); // 100 + 30
+    assert_eq!(pick("lines-a")["lines_removed"], 25); // 20 + 5
+    assert_eq!(pick("lines-b")["lines_added"], 12); // 8 + 4
+    assert_eq!(pick("lines-b")["lines_removed"], 3); // 2 + 1
+
+    // Totals block.
+    let t = &body["totals"];
+    assert_eq!(t["sessions"], 2);
+    assert_eq!(t["lines_added"], 142); // 130 + 12
+    assert_eq!(t["lines_removed"], 28); // 25 + 3
+
+    // Code = src/lib.rs + Cargo.toml ; Docs = README.md ; Other = Makefile.
+    assert_eq!(t["lines"]["code"]["added"], 108); // 100 + 8
+    assert_eq!(t["lines"]["code"]["removed"], 22); // 20 + 2
+    assert_eq!(t["lines"]["docs"]["added"], 30);
+    assert_eq!(t["lines"]["docs"]["removed"], 5);
+    assert_eq!(t["lines"]["other"]["added"], 4);
+    assert_eq!(t["lines"]["other"]["removed"], 1);
+
+    // The grand total equals the sum of the three buckets.
+    let sum_added = t["lines"]["code"]["added"].as_i64().unwrap()
+        + t["lines"]["docs"]["added"].as_i64().unwrap()
+        + t["lines"]["other"]["added"].as_i64().unwrap();
+    assert_eq!(t["lines_added"].as_i64().unwrap(), sum_added);
+}
+
+// ---------------------------------------------------------------------------
+// 11. v2_sessions_totals_are_zero_without_file_changes
+// ---------------------------------------------------------------------------
+
+#[tokio::test]
+async fn v2_sessions_totals_are_zero_without_file_changes() {
+    let (pool, _db_dir) = common::fixture_pool();
+    common::seed_session(
+        &pool,
+        &common::SeedOpts {
+            session_id: "nofiles-1".into(),
+            started_at_ms: Some(anchor_ms()),
+            cost_usd: 2.0,
+            model: "claude-sonnet".into(),
+            ..Default::default()
+        },
+    );
+
+    let (router, _router_dir) = common::test_router(&pool);
+    let from = ms_ago(5);
+    let to = anchor_ms() + 1000;
+    let (status, body) =
+        get_json(router, &format!("/api/v2/sessions?from={from}&to={to}")).await;
+
+    assert_eq!(status, StatusCode::OK);
+    let t = &body["totals"];
+    assert_eq!(t["sessions"], 1);
+    assert_eq!(t["lines_added"], 0);
+    assert_eq!(t["lines_removed"], 0);
+    assert_eq!(t["lines"]["code"]["added"], 0);
+    assert_eq!(t["lines"]["other"]["removed"], 0);
+    // Non-line totals still aggregate.
+    assert!((t["cost_usd"].as_f64().unwrap() - 2.0).abs() < 1e-9);
 }

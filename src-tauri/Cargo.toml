@@ -1,6 +1,6 @@
 [package]
 name = "andon"
-version = "0.4.2"
+version = "0.5.0-rc.6"
 edition = "2021"
 description = "Local andon board for Claude Code telemetry"
 authors = ["Andon"]
@@ -17,9 +17,10 @@ test-support = []
 tauri-build = { version = "2", features = [] }
 
 [dependencies]
-tauri = { version = "2", features = ["tray-icon"] }
+tauri = { version = "2", features = ["tray-icon", "image-png"] }
 tauri-plugin-shell = "2"
 tauri-plugin-single-instance = "2"
+tauri-plugin-notification = "2"
 
 tokio = { version = "1", features = ["full"] }
 tonic = "0.12"
@@ -57,6 +58,7 @@ tempfile = "3"
 insta = { version = "1", features = ["json", "redactions"] }
 tower = { version = "0.5", features = ["util"] }
 http-body-util = "0.1"
+proptest = "1"
 
 [profile.release]
 codegen-units = 1

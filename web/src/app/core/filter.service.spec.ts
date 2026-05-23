@@ -95,4 +95,55 @@ describe('FilterService', () => {
     expect(s.models().size).toBe(s.allModels().length);
     expect(s.customRange()).toBeNull();
   });
+
+  it('refresh() increments refreshTick and leaves filters untouched', () => {
+    const s = createService();
+    const before = s.refreshTick();
+    s.refresh();
+    expect(s.refreshTick()).toBe(before + 1);
+    s.refresh();
+    expect(s.refreshTick()).toBe(before + 2);
+    // refresh() must never behave like clearFilters() — filters stay as they were.
+    expect(s.range()).toBe('month');
+    expect(s.models().size).toBe(s.allModels().length);
+    expect(s.search()).toBe('');
+    expect(s.repos()).toEqual([]);
+    expect(s.hasActiveFilters()).toBe(false);
+  });
+
+  it('selectDay sets a single-day custom window', () => {
+    const s = createService();
+    s.selectDay(new Date(2026, 4, 15)); // May 15, 2026 (month is 0-based)
+    expect(s.range()).toBe('custom');
+    const w = s.window();
+    const from = new Date(w.fromMs);
+    const to = new Date(w.toMs);
+    expect(from.getFullYear()).toBe(2026);
+    expect(from.getMonth()).toBe(4);
+    expect(from.getDate()).toBe(15);
+    expect(from.getHours()).toBe(0);
+    expect(to.getDate()).toBe(15);
+    expect(to.getHours()).toBe(23);
+    expect(to.getMinutes()).toBe(59);
+    expect(to.getSeconds()).toBe(59);
+    expect(to.getMilliseconds()).toBe(999);
+  });
+
+  it('rangeLabel for a single-day custom window omits the duplicate date', () => {
+    const s = createService();
+    s.selectDay(new Date(2026, 4, 15));
+    const label = s.rangeLabel();
+    expect(label.startsWith('custom · ')).toBe(true);
+    expect(label).not.toContain('–'); // en-dash range separator
+  });
+
+  it('rangeLabel keeps the date range for a multi-day custom window', () => {
+    const s = createService();
+    s.customRange.set({
+      fromMs: new Date(2026, 4, 1).getTime(),
+      toMs: new Date(2026, 4, 20, 23, 59, 59, 999).getTime(),
+    });
+    s.setRange('custom');
+    expect(s.rangeLabel()).toContain('–');
+  });
 });

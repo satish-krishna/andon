@@ -1,17 +1,25 @@
 import { HttpClient, HttpParams } from '@angular/common/http';
 import { Injectable, inject } from '@angular/core';
 import { Observable } from 'rxjs';
+import { CostSource } from './cost-source';
 import {
   AcceptByLanguage,
   ActiveTimeToday,
   BackfillResult,
+  CoverageGap,
   DailySeries,
   DbStats,
   FileHeatmapRow,
+  JsonlBackfillResponse,
+  JsonlErrorEntry,
+  JsonlIngestRun,
+  ModelMixResponse,
   OverviewToday,
   RepoSummary,
   SessionDetail,
   SessionSummary,
+  SlashCommandEntry,
+  SubAgentEntry,
   TopRepoEntry,
 } from './models';
 
@@ -37,6 +45,7 @@ export interface V2Kpis {
     projected_eom: number;
     day_of_month: number;
     days_in_month: number;
+    budget: { monthly_usd: number; status: BudgetStatus };
   };
   sessions: { current: number; previous: number; delta_pct: number | null; pace: number };
   tokens: {
@@ -58,6 +67,25 @@ export interface V2Tape {
 export interface V2CostByModel {
   model: string;
   cost_usd: number;
+}
+
+export interface V2CacheEfficiency {
+  hit_ratio: number;
+  hit_ratio_prev: number;
+  tokens: { input: number; output: number; cache_read: number; cache_create: number };
+  savings: { net: number; gross: number; creation_overhead: number };
+  net_prev: number;
+  unpriced_cache_tokens: number;
+}
+
+export interface V2ModelEfficiency {
+  family: string;
+  role: 'main' | 'subagent';
+  sessions: number;
+  total_cost_usd: number;
+  cost_per_session: number;
+  output_tokens: number;
+  cost_per_1k_output: number;
 }
 
 export interface V2AcceptLang {
@@ -94,6 +122,9 @@ export interface V2Session {
   repo_remote: string | null;
   repo_branch: string | null;
   cwd: string | null;
+  cost_source: CostSource;
+  lines_added: number;
+  lines_removed: number;
 }
 
 export interface CoverageHint {
@@ -101,9 +132,36 @@ export interface CoverageHint {
   with_repo: number;
 }
 
+export interface LinePair {
+  added: number;
+  removed: number;
+}
+
+export interface LineSplit {
+  code: LinePair;
+  docs: LinePair;
+  other: LinePair;
+}
+
+export interface SessionTotals {
+  sessions: number;
+  cost_usd: number;
+  tokens_input: number;
+  tokens_output: number;
+  accepts: number;
+  rejects: number;
+  aborts: number;
+  decisions: number;
+  duration_seconds: number;
+  lines_added: number;
+  lines_removed: number;
+  lines: LineSplit;
+}
+
 export interface SessionListResponse {
   sessions: V2Session[];
   coverage: CoverageHint;
+  totals: SessionTotals;
 }
 
 export interface V2FileRow {
@@ -123,6 +181,12 @@ export interface V2FilesResponse {
   totals: { files: number; edits: number; added: number; removed: number };
 }
 
+export type BudgetStatus = 'neutral' | 'amber' | 'red';
+
+export interface BudgetSettings {
+  monthly_usd: number;
+}
+
 export interface ForwarderSettings {
   enabled: boolean;
   endpoint: string;
@@ -133,6 +197,7 @@ export interface ForwarderSettings {
 export interface AppSettings {
   version: number;
   forwarder: ForwarderSettings;
+  budget: BudgetSettings;
 }
 
 function toParams(args?: FilterArgs): HttpParams {
@@ -165,6 +230,16 @@ export class ApiService {
   }
   costByModel(args?: FilterArgs): Observable<V2CostByModel[]> {
     return this.http.get<V2CostByModel[]>(`${BASE}/api/v2/cost-by-model`, { params: toParams(args) });
+  }
+  cacheEfficiency(args?: FilterArgs): Observable<V2CacheEfficiency> {
+    return this.http.get<V2CacheEfficiency>(`${BASE}/api/v2/cache-efficiency`, {
+      params: toParams(args),
+    });
+  }
+  modelEfficiency(args?: FilterArgs): Observable<V2ModelEfficiency[]> {
+    return this.http.get<V2ModelEfficiency[]>(`${BASE}/api/v2/model-efficiency`, {
+      params: toParams(args),
+    });
   }
   acceptByLanguageV2(args?: FilterArgs): Observable<V2AcceptLang[]> {
     return this.http.get<V2AcceptLang[]>(`${BASE}/api/v2/accept-by-language`, { params: toParams(args) });
@@ -218,6 +293,9 @@ export class ApiService {
   }
   saveForwarder(f: ForwarderSettings): Observable<ForwarderSettings> {
     return this.http.put<ForwarderSettings>(`${BASE}/api/settings/forwarder`, f);
+  }
+  saveBudget(b: BudgetSettings): Observable<BudgetSettings> {
+    return this.http.put<BudgetSettings>(`${BASE}/api/settings/budget`, b);
   }
   testForwarder(f: ForwarderSettings): Observable<{ ok: boolean; status?: number; error?: string }> {
     return this.http.post<any>(`${BASE}/api/settings/forwarder/test`, f);
@@ -293,6 +371,31 @@ export class ApiService {
   }
   backfillRepos(): Observable<BackfillResult> {
     return this.http.post<BackfillResult>(`${BASE}/api/repo/backfill`, {});
+  }
+
+  // ----- behaviour + JSONL ingest -----
+  modelMix(args?: FilterArgs): Observable<ModelMixResponse> {
+    return this.http.get<ModelMixResponse>(`${BASE}/api/behaviour/model-mix`, {
+      params: toParams(args),
+    });
+  }
+  slashCommands(): Observable<SlashCommandEntry[]> {
+    return this.http.get<SlashCommandEntry[]>(`${BASE}/api/behaviour/slash-commands`);
+  }
+  subagents(): Observable<SubAgentEntry[]> {
+    return this.http.get<SubAgentEntry[]>(`${BASE}/api/behaviour/subagents`);
+  }
+  jsonlErrors(): Observable<JsonlErrorEntry[]> {
+    return this.http.get<JsonlErrorEntry[]>(`${BASE}/api/jsonl/errors`);
+  }
+  jsonlIngestRuns(): Observable<JsonlIngestRun[]> {
+    return this.http.get<JsonlIngestRun[]>(`${BASE}/api/jsonl/ingest-runs`);
+  }
+  jsonlCoverageGaps(): Observable<CoverageGap[]> {
+    return this.http.get<CoverageGap[]>(`${BASE}/api/jsonl/coverage-gaps`);
+  }
+  ingestJsonl(): Observable<JsonlBackfillResponse> {
+    return this.http.post<JsonlBackfillResponse>(`${BASE}/api/jsonl/backfill`, {});
   }
 }
 
