@@ -558,3 +558,68 @@ async fn v2_cache_efficiency_respects_model_filter() {
     let net = body["savings"]["net"].as_f64().unwrap();
     assert!((net - 9.75).abs() < 1e-6, "net was {net}");
 }
+
+// ---------------------------------------------------------------------------
+// 13. jsonl_subagent_record_upserts_is_subagent_flag
+// ---------------------------------------------------------------------------
+
+#[test]
+fn jsonl_subagent_record_upserts_is_subagent_flag() {
+    use andon_lib::jsonl::reducer::DerivedEvent;
+    use andon_lib::jsonl::reconciler::Coverage;
+    let (pool, _db_dir) = common::fixture_pool();
+
+    // Pre-seed a cost_entries / token_usage row with is_subagent=0 by hand,
+    // simulating a row OTLP wrote first.
+    let now = chrono::Utc::now().timestamp_millis();
+    let conn = pool.get().expect("conn");
+    conn.execute(
+        "INSERT INTO cost_entries (session_id, request_id, timestamp, model, cost_usd, is_subagent)
+         VALUES ('s1', 'req_x', ?, 'claude-opus-4-7', 1.0, 0)",
+        rusqlite::params![now],
+    ).expect("insert pre-existing cost row");
+    conn.execute(
+        "INSERT INTO token_usage (session_id, request_id, timestamp, model, token_type, count, is_subagent)
+         VALUES ('s1', 'req_x', ?, 'claude-opus-4-7', 'input', 100, 0)",
+        rusqlite::params![now],
+    ).expect("insert pre-existing token row");
+    drop(conn);
+
+    // Now re-ingest the same request_id via the JSONL path with is_subagent=true.
+    let ingestor = common::test_ingestor(&pool);
+    let events = vec![
+        DerivedEvent::CostEntry {
+            session_id: "s1".into(),
+            request_id: "req_x".into(),
+            ts: now,
+            model: "claude-opus-4-7".into(),
+            cost_usd: 1.0,
+            is_subagent: true,
+        },
+        DerivedEvent::TokenUsage {
+            session_id: "s1".into(),
+            request_id: "req_x".into(),
+            ts: now,
+            model: "claude-opus-4-7".into(),
+            input: 100,
+            output: 0,
+            cache_create: 0,
+            cache_read: 0,
+            is_subagent: true,
+        },
+    ];
+    ingestor.ingest_derived(&events, Coverage::JsonlOnly).expect("ingest");
+
+    // The rows should now be is_subagent=1.
+    let conn = pool.get().expect("conn");
+    let cost_flag: i64 = conn.query_row(
+        "SELECT is_subagent FROM cost_entries WHERE request_id = 'req_x'",
+        [], |r| r.get(0),
+    ).expect("query cost");
+    let token_flag: i64 = conn.query_row(
+        "SELECT is_subagent FROM token_usage WHERE request_id = 'req_x' AND token_type = 'input'",
+        [], |r| r.get(0),
+    ).expect("query token");
+    assert_eq!(cost_flag, 1, "cost row should be upserted to is_subagent=1");
+    assert_eq!(token_flag, 1, "token row should be upserted to is_subagent=1");
+}

@@ -295,7 +295,7 @@ impl Ingestor {
                     output,
                     cache_create,
                     cache_read,
-                    is_subagent: _,
+                    is_subagent,
                 } => {
                     if matches!(coverage, Coverage::JsonlOnly) {
                         for (kind, n) in [
@@ -307,16 +307,19 @@ impl Ingestor {
                             if n > 0 {
                                 let affected = match tx.execute(
                                     "INSERT INTO token_usage
-                                       (session_id, request_id, timestamp, model, token_type, count)
-                                     VALUES (?1, ?2, ?3, ?4, ?5, ?6)
+                                       (session_id, request_id, timestamp, model, token_type, count, is_subagent)
+                                     VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)
                                      ON CONFLICT(request_id, token_type)
-                                       WHERE request_id IS NOT NULL DO NOTHING",
-                                    params![session_id, request_id, ts, model, kind, n],
+                                       WHERE request_id IS NOT NULL DO UPDATE
+                                       SET is_subagent = 1
+                                       WHERE excluded.is_subagent = 1",
+                                    params![session_id, request_id, ts, model, kind, n, *is_subagent as i64],
                                 ) {
                                     Ok(rows) => rows,
                                     Err(e) => {
-                                        // ON CONFLICT DO NOTHING yields Ok(0) on a duplicate, so any Err
-                                        // here is a genuine insert failure — log it, never surface it.
+                                        // ON CONFLICT DO UPDATE returns Ok(1) on a matching upsert
+                                        // and Ok(0) when the guarded WHERE eliminates the update.
+                                        // Any Err is a genuine insert failure — log, never surface.
                                         tracing::warn!(error = ?e, session_id, "JSONL token_usage insert failed");
                                         0
                                     }
@@ -332,21 +335,21 @@ impl Ingestor {
                     ts,
                     model,
                     cost_usd,
-                    is_subagent: _,
+                    is_subagent,
                 } => {
                     if matches!(coverage, Coverage::JsonlOnly) && *cost_usd > 0.0 {
                         let affected = match tx.execute(
                             "INSERT INTO cost_entries
-                               (session_id, request_id, timestamp, model, cost_usd)
-                             VALUES (?1, ?2, ?3, ?4, ?5)
+                               (session_id, request_id, timestamp, model, cost_usd, is_subagent)
+                             VALUES (?1, ?2, ?3, ?4, ?5, ?6)
                              ON CONFLICT(request_id)
-                               WHERE request_id IS NOT NULL DO NOTHING",
-                            params![session_id, request_id, ts, model, cost_usd],
+                               WHERE request_id IS NOT NULL DO UPDATE
+                               SET is_subagent = 1
+                               WHERE excluded.is_subagent = 1",
+                            params![session_id, request_id, ts, model, cost_usd, *is_subagent as i64],
                         ) {
                             Ok(rows) => rows,
                             Err(e) => {
-                                // ON CONFLICT DO NOTHING yields Ok(0) on a duplicate, so any Err
-                                // here is a genuine insert failure — log it, never surface it.
                                 tracing::warn!(error = ?e, session_id, "JSONL cost_entries insert failed");
                                 0
                             }
