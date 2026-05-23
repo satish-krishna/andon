@@ -4,9 +4,59 @@
   </span>
 </div>
 
+<div class="mx-6 mt-4 border border-warn/40 bg-warn/5 rounded-md px-4 py-2.5 flex items-center gap-2.5">
+  <lucide-icon name="flask-conical" class="w-4 h-4 text-warn shrink-0"></lucide-icon>
+  <div class="text-xs">
+    <span class="text-warn font-medium">Experimental.</span>
+    <span class="text-muted">Subagent rows are JSONL-derived — run
+    <span class="text-text font-medium">Backfill JSONL</span> in Settings if
+    they're missing.</span>
+  </div>
+</div>
+
 <app-filter-bar />
 
 <div class="px-6 py-5 flex flex-col gap-4">
+
+  <!-- Explainer: how prompt caching saves you money -->
+  <section class="panel">
+    <div class="panel-title">
+      <span class="flex items-center gap-1.5">
+        <lucide-icon name="info" class="w-3.5 h-3.5"></lucide-icon>
+        How prompt caching saves you money
+      </span>
+    </div>
+    <div class="panel-body">
+      <p class="text-xs leading-relaxed">
+        Most of every Claude Code prompt — system prompt, tool definitions,
+        CLAUDE.md, prior conversation — gets <em>cached</em>. Cached reads cost
+        about <span class="text-text font-medium">10% of fresh input</span>, so
+        the hit ratio above is the share of your prompt being served at that
+        discount.
+      </p>
+      @if (cache(); as c) {
+        @if (c.tokens.cache_read + c.tokens.cache_create > 0) {
+          <p class="text-xs leading-relaxed mt-2">
+            <span class="text-muted">Your numbers this period:</span> the cache saved you
+            <span class="font-mono tabular-nums text-ok">${{ c.savings.net | number : '1.2-2' }}</span> net —
+            <span class="font-mono tabular-nums">${{ c.savings.gross | number : '1.2-2' }}</span>
+            in reads at the cache discount, minus a
+            <span class="font-mono tabular-nums">${{ c.savings.creation_overhead | number : '1.2-2' }}</span>
+            premium to write the cache. Without prompt caching, this same work would have cost roughly
+            <span class="font-mono tabular-nums text-ok">${{ c.savings.net | number : '1.2-2' }}</span> more.
+          </p>
+        }
+      }
+      <p class="text-xs leading-relaxed mt-3 mb-1">
+        <span class="text-text font-medium">To improve your hit rate:</span>
+      </p>
+      <ul class="text-xs leading-relaxed text-muted list-disc pl-5 space-y-1">
+        <li>Prefer long sessions over many short ones — every new session starts cold and pays the cache-write premium fresh.</li>
+        <li>Keep CLAUDE.md and project-level context stable — edits invalidate every cached prefix that follows them.</li>
+        <li>Use <code class="font-mono text-text">/clear</code> deliberately — it resets the cache.</li>
+      </ul>
+    </div>
+  </section>
 
   <!-- KPI strip -->
   <div class="grid grid-cols-3 gap-4">
