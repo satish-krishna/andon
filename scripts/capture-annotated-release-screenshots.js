@@ -103,7 +103,7 @@ const CAPTURES = [
   {
     output: '20-efficiency-experimental-banner',
     route: '/efficiency',
-    anchor: { by: 'selector', value: '.border-warn\\/40' },
+    anchor: { by: 'text', value: 'Subagent rows are JSONL-derived', climb: 'div.border' },
     padding: 8,
   },
   // #28: Efficiency page — explainer blurb (with dynamic "your numbers" line).
@@ -117,7 +117,7 @@ const CAPTURES = [
   {
     output: '22-efficiency-kpi-strip',
     route: '/efficiency',
-    anchor: { by: 'selector', value: '.grid.grid-cols-3' },
+    anchor: { by: 'text', value: 'Cache hit ratio', climb: 'div.grid' },
     padding: 12,
   },
   // #28: Efficiency page — Model cost-efficiency table.
@@ -179,13 +179,40 @@ async function checkApi() {
   }
 }
 
-// Click the sidebar link for `route`, wait for lazy-loaded content + data.
-async function navigateVia(page, route) {
-  await page.evaluate((r) => {
-    const a = document.querySelector(`a[href="${r}"]`);
-    if (a) a.click();
-  }, route);
-  await sleep(3500); // lazy chunk + first data fetch
+// Click the sidebar link — the only navigation method that activates Angular's
+// router consistently (a fresh page.goto can miss whatever location strategy
+// the SPA uses and end up on the default route).
+async function navigateVia(page, route /*, base unused */) {
+  // The SPA uses hash routing, so sidebar <a> tags have href="#/route" — not
+  // "/route". Try both, then fall back to label-text matching for stability.
+  const label = route.replace(/^\//, '');
+  const ok = await page.evaluate((r, l) => {
+    let a =
+      document.querySelector(`a[href="${r}"]`) ||
+      document.querySelector(`a[href="#${r}"]`);
+    if (!a) {
+      a = [...document.querySelectorAll('a')].find(
+        (el) => el.textContent.trim().toLowerCase() === l,
+      );
+    }
+    if (!a) return false;
+    a.click();
+    return true;
+  }, route, label);
+  if (!ok) {
+    console.error('  nav ' + route + ' — no sidebar link found');
+    return;
+  }
+  // Wait for the crumb to reflect the new route.
+  await page.waitForFunction(
+    (needle) => {
+      const c = document.querySelector('.crumb');
+      return c && c.textContent.toLowerCase().includes(needle);
+    },
+    { timeout: 15000 },
+    label,
+  ).catch(() => {});
+  await sleep(800); // settle data fetches
 }
 
 // Compute the bounding rect of the anchor element in the page's coordinate
@@ -195,22 +222,22 @@ async function rectOf(page, anchor) {
   return page.evaluate((a) => {
     function find() {
       if (a.by === 'selector') return document.querySelector(a.value);
-      if (a.by === 'text') {
-        const climb = a.climb || 'section';
-        // Find the deepest element whose own (own-text-only, trimmed) content
-        // matches; then climb to the nearest enclosing structural ancestor.
-        const all = Array.from(document.querySelectorAll('*'));
-        const hit = all.find((el) => {
-          if (el.children.length === 0) return false; // leaf-only matchers below
-          const own = Array.from(el.childNodes)
-            .filter((n) => n.nodeType === 3)
-            .map((n) => n.textContent.trim())
-            .join(' ');
-          return own.toLowerCase().includes(a.value.toLowerCase());
-        }) || all.find((el) => el.textContent.trim().toLowerCase().includes(a.value.toLowerCase()));
-        return hit ? hit.closest(climb) || hit : null;
+      if (a.by !== 'text') return null;
+      const climb = a.climb || 'section';
+      const needle = a.value.toLowerCase();
+      // Find the DEEPEST element whose textContent contains the needle.
+      // Deepest = most specific, avoids returning <html>/<body>.
+      let best = null;
+      let bestDepth = -1;
+      for (const el of document.querySelectorAll('*')) {
+        const tc = el.textContent || '';
+        if (!tc.toLowerCase().includes(needle)) continue;
+        let depth = 0;
+        let n = el;
+        while (n.parentElement) { n = n.parentElement; depth++; }
+        if (depth > bestDepth) { best = el; bestDepth = depth; }
       }
-      return null;
+      return best ? (best.closest(climb) || best) : null;
     }
     const el = find();
     if (!el) return null;
@@ -279,7 +306,7 @@ async function blurDollars(page) {
     let lastRoute = '/overview';
     for (const cap of CAPTURES) {
       if (cap.route !== lastRoute) {
-        await navigateVia(page, cap.route);
+        await navigateVia(page, cap.route, base);
         lastRoute = cap.route;
       }
 
