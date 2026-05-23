@@ -63,18 +63,48 @@ git push origin vX.Y.Z
 ### 5. Capture release screenshots
 
 For an illustrated release, capture the dashboard pages. Needs **andon
-running** (so its API answers on `:8765`) and the frontend built (step 3):
+running** (so its API answers on `:8765`) and the frontend built (step 3).
+There are two scripts; both write to `docs/images/release/v<version>/`.
+
+**Full-page baselines — one PNG per dashboard page:**
 
 ```powershell
 cd scripts; npm install            # one-time — pulls puppeteer-core
 node capture-release-screenshots.js
 ```
 
-It reads the version from `tauri.conf.json`, drives headless Chrome through
-the running app, blurs every dollar cost, and writes one PNG per page to
-`docs/images/release/v<version>/`. Repo paths, token counts and session IDs
-are left intact — review the PNGs, re-blur or crop anything sensitive, then
-commit them.
+Reads the version from `tauri.conf.json`, drives headless Chrome through the
+running app, blurs every dollar cost, and writes `01-overview.png` through
+`07-efficiency.png`. Update its `PAGES` list when new pages ship.
+
+**Annotated partials — cropped views of each change since the last release:**
+
+```powershell
+node capture-annotated-release-screenshots.js
+```
+
+Same prerequisites. Reads the same `tauri.conf.json` and writes additional
+PNGs to the same folder (numbered `10-`/`20-` to avoid clashing with the
+full-page set). Driven by the `CAPTURES` list at the top of the script:
+each entry names an output file, a route, an anchor (CSS selector or visible
+text + a `climb` selector for the enclosing region), and optional padding.
+The script clips the screenshot to the anchor's bounding box.
+
+Edit `CAPTURES` per release to highlight what's new in that version. The
+list from v0.5.0 doubles as a worked example. Anchors by visible text are
+usually more stable than selectors against Tailwind class names that may
+change between releases.
+
+Both scripts apply the same dollar-cost blur. Repo paths, token counts and
+session IDs are left intact — review the PNGs, re-blur or crop anything
+sensitive, then commit them.
+
+Embed the partials in the release notes using raw-GitHub URLs **pinned to
+the commit that added them**, so the notes never rot as files move:
+
+```markdown
+![Caption](https://raw.githubusercontent.com/<owner>/andon/<commit-sha>/docs/images/release/v<version>/<filename>.png)
+```
 
 ### 6. Create the GitHub release
 
