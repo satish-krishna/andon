@@ -2,7 +2,7 @@
 import { importProvidersFrom } from '@angular/core';
 import { TestBed } from '@angular/core/testing';
 import { of } from 'rxjs';
-import { Calendar, Gauge, Layers, RefreshCw, X, LucideAngularModule } from 'lucide-angular';
+import { Calendar, FlaskConical, Gauge, Info, Layers, RefreshCw, X, LucideAngularModule } from 'lucide-angular';
 import { EfficiencyComponent } from './efficiency.component';
 import { ApiService } from '../../core/api.service';
 
@@ -44,7 +44,7 @@ function setup(cache: unknown = CACHE, models: unknown = MODELS) {
     imports: [EfficiencyComponent],
     providers: [
       { provide: ApiService, useValue: fakeApi },
-      importProvidersFrom(LucideAngularModule.pick({ Gauge, Calendar, Layers, RefreshCw, X })),
+      importProvidersFrom(LucideAngularModule.pick({ Gauge, Calendar, Layers, RefreshCw, X, Info, FlaskConical })),
     ],
   });
   const fixture = TestBed.createComponent(EfficiencyComponent);
