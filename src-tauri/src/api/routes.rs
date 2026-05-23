@@ -1657,47 +1657,53 @@ async fn v2_model_efficiency(
     let conn = state.pool.get().map_err(ApiError::pool)?;
     let (m_sql, m_vals) = q.model_clause("model");
 
-    // (session_id, model, cost) — folded into per-family-per-session costs.
+    // (session_id, model, cost, is_subagent) — folded into per-family-per-session costs.
     let cost_sql = format!(
-        "SELECT session_id, model, SUM(cost_usd)
+        "SELECT session_id, model, SUM(cost_usd), is_subagent
          FROM cost_entries
          WHERE timestamp >= ? AND timestamp < ?{m_sql}
-         GROUP BY session_id, model"
+         GROUP BY session_id, model, is_subagent"
     );
     let mut cp: Vec<Box<dyn rusqlite::ToSql>> = vec![Box::new(from), Box::new(to)];
     for v in &m_vals {
         cp.push(Box::new(v.clone()));
     }
     let crefs: Vec<&dyn rusqlite::ToSql> = cp.iter().map(|b| &**b).collect();
-    let mut cost_rows: Vec<(String, String, f64)> = Vec::new();
+    let mut cost_rows: Vec<(String, String, f64, bool)> = Vec::new();
     if let Ok(mut stmt) = conn.prepare(&cost_sql) {
         if let Ok(mapped) = stmt.query_map(crefs.as_slice(), |r| {
             Ok((
                 r.get::<_, String>(0)?,
                 r.get::<_, String>(1)?,
                 r.get::<_, f64>(2).unwrap_or(0.0),
+                r.get::<_, i64>(3).unwrap_or(0) != 0,
             ))
         }) {
             cost_rows = mapped.flatten().collect();
         }
     }
 
-    // (session_id, output tokens)
+    // (session_id, model, output tokens, is_subagent)
     let out_sql = format!(
-        "SELECT session_id, SUM(count)
+        "SELECT session_id, model, SUM(count), is_subagent
          FROM token_usage
          WHERE token_type = 'output' AND timestamp >= ? AND timestamp < ?{m_sql}
-         GROUP BY session_id"
+         GROUP BY session_id, model, is_subagent"
     );
     let mut op: Vec<Box<dyn rusqlite::ToSql>> = vec![Box::new(from), Box::new(to)];
     for v in &m_vals {
         op.push(Box::new(v.clone()));
     }
     let orefs: Vec<&dyn rusqlite::ToSql> = op.iter().map(|b| &**b).collect();
-    let mut output_rows: Vec<(String, i64)> = Vec::new();
+    let mut output_rows: Vec<(String, String, i64, bool)> = Vec::new();
     if let Ok(mut stmt) = conn.prepare(&out_sql) {
         if let Ok(mapped) = stmt.query_map(orefs.as_slice(), |r| {
-            Ok((r.get::<_, String>(0)?, r.get::<_, i64>(1).unwrap_or(0)))
+            Ok((
+                r.get::<_, String>(0)?,
+                r.get::<_, String>(1)?,
+                r.get::<_, i64>(2).unwrap_or(0),
+                r.get::<_, i64>(3).unwrap_or(0) != 0,
+            ))
         }) {
             output_rows = mapped.flatten().collect();
         }

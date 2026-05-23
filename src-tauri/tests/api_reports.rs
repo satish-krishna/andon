@@ -684,3 +684,52 @@ fn jsonl_main_record_does_not_demote_an_existing_subagent_row() {
     assert_eq!(cost_flag, 1, "cost row must not be demoted from subagent to main");
     assert_eq!(token_flag, 1, "token row must not be demoted from subagent to main");
 }
+
+// ---------------------------------------------------------------------------
+// 15. v2_model_efficiency_splits_main_and_subagent
+// ---------------------------------------------------------------------------
+
+#[tokio::test]
+async fn v2_model_efficiency_splits_main_and_subagent() {
+    let (pool, _db_dir) = common::fixture_pool();
+    let now = chrono::Utc::now().timestamp_millis();
+
+    // A main-agent session on opus
+    common::seed_session(
+        &pool,
+        &common::SeedOpts {
+            session_id: "split-main".into(),
+            started_at_ms: Some(now),
+            model: "claude-opus-4-7".into(),
+            output_tokens: 1000,
+            cost_usd: 5.0,
+            ..Default::default()
+        },
+    );
+    // A subagent session on haiku — same start time, separate session id
+    common::seed_session(
+        &pool,
+        &common::SeedOpts {
+            session_id: "split-sub".into(),
+            started_at_ms: Some(now),
+            model: "claude-haiku-4-5".into(),
+            output_tokens: 500,
+            cost_usd: 1.0,
+            is_subagent: true,
+            ..Default::default()
+        },
+    );
+
+    let (router, _router_dir) = common::test_router(&pool);
+    let (status, body) = get_json(router, "/api/v2/model-efficiency").await;
+
+    assert_eq!(status, StatusCode::OK);
+    let rows = body.as_array().expect("array");
+    assert_eq!(rows.len(), 2, "expected one main + one subagent row, got {}", rows.len());
+
+    // sort: opus main 5.0 > haiku subagent 1.0
+    assert_eq!(rows[0]["family"], "opus");
+    assert_eq!(rows[0]["role"], "main");
+    assert_eq!(rows[1]["family"], "haiku");
+    assert_eq!(rows[1]["role"], "subagent");
+}
