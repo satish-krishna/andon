@@ -344,6 +344,11 @@ mod tests {
             _ => None,
         });
         assert_eq!(token_flag, Some(false), "TokenUsage should default to is_subagent=false");
+        let cost_flag = out.iter().find_map(|e| match e {
+            DerivedEvent::CostEntry { is_subagent, .. } => Some(*is_subagent),
+            _ => None,
+        });
+        assert_eq!(cost_flag, Some(false), "CostEntry should default to is_subagent=false");
     }
 
     #[test]
