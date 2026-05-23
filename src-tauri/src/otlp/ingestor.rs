@@ -317,8 +317,10 @@ impl Ingestor {
                                 ) {
                                     Ok(rows) => rows,
                                     Err(e) => {
-                                        // ON CONFLICT DO UPDATE returns Ok(1) on a matching upsert
+                                        // ON CONFLICT DO UPDATE returns Ok(1) for both a new
+                                        // insert and a successful flip-upsert (false -> true),
                                         // and Ok(0) when the guarded WHERE eliminates the update.
+                                        // `tokens_written` therefore counts inserts + flips.
                                         // Any Err is a genuine insert failure — log, never surface.
                                         tracing::warn!(error = ?e, session_id, "JSONL token_usage insert failed");
                                         0
@@ -350,6 +352,11 @@ impl Ingestor {
                         ) {
                             Ok(rows) => rows,
                             Err(e) => {
+                                // ON CONFLICT DO UPDATE returns Ok(1) for both a new
+                                // insert and a successful flip-upsert (false -> true),
+                                // and Ok(0) when the guarded WHERE eliminates the update.
+                                // `cost_written` therefore counts inserts + flips.
+                                // Any Err is a genuine insert failure — log, never surface.
                                 tracing::warn!(error = ?e, session_id, "JSONL cost_entries insert failed");
                                 0
                             }

@@ -623,3 +623,64 @@ fn jsonl_subagent_record_upserts_is_subagent_flag() {
     assert_eq!(cost_flag, 1, "cost row should be upserted to is_subagent=1");
     assert_eq!(token_flag, 1, "token row should be upserted to is_subagent=1");
 }
+
+// ---------------------------------------------------------------------------
+// 14. jsonl_main_record_does_not_demote_an_existing_subagent_row
+// ---------------------------------------------------------------------------
+
+#[test]
+fn jsonl_main_record_does_not_demote_an_existing_subagent_row() {
+    use andon_lib::jsonl::reducer::DerivedEvent;
+    use andon_lib::jsonl::reconciler::Coverage;
+    let (pool, _db_dir) = common::fixture_pool();
+
+    let now = chrono::Utc::now().timestamp_millis();
+    let conn = pool.get().expect("conn");
+    conn.execute(
+        "INSERT INTO cost_entries (session_id, request_id, timestamp, model, cost_usd, is_subagent)
+         VALUES ('s2', 'req_y', ?, 'claude-opus-4-7', 1.0, 1)",
+        rusqlite::params![now],
+    ).expect("seed cost row at is_subagent=1");
+    conn.execute(
+        "INSERT INTO token_usage (session_id, request_id, timestamp, model, token_type, count, is_subagent)
+         VALUES ('s2', 'req_y', ?, 'claude-opus-4-7', 'input', 100, 1)",
+        rusqlite::params![now],
+    ).expect("seed token row at is_subagent=1");
+    drop(conn);
+
+    let ingestor = common::test_ingestor(&pool);
+    let events = vec![
+        DerivedEvent::CostEntry {
+            session_id: "s2".into(),
+            request_id: "req_y".into(),
+            ts: now,
+            model: "claude-opus-4-7".into(),
+            cost_usd: 1.0,
+            is_subagent: false,
+        },
+        DerivedEvent::TokenUsage {
+            session_id: "s2".into(),
+            request_id: "req_y".into(),
+            ts: now,
+            model: "claude-opus-4-7".into(),
+            input: 100,
+            output: 0,
+            cache_create: 0,
+            cache_read: 0,
+            is_subagent: false,
+        },
+    ];
+    ingestor.ingest_derived(&events, Coverage::JsonlOnly).expect("ingest");
+
+    let conn = pool.get().expect("conn");
+    let cost_flag: i64 = conn.query_row(
+        "SELECT is_subagent FROM cost_entries WHERE request_id = 'req_y'",
+        [], |r| r.get(0),
+    ).expect("query cost");
+    let token_flag: i64 = conn.query_row(
+        "SELECT is_subagent FROM token_usage WHERE request_id = 'req_y' AND token_type = 'input'",
+        [], |r| r.get(0),
+    ).expect("query token");
+    assert_eq!(cost_flag, 1, "cost row must not be demoted from subagent to main");
+    assert_eq!(token_flag, 1, "token row must not be demoted from subagent to main");
+}
