@@ -39,6 +39,9 @@ pub struct SeedOpts {
     pub output_tokens: i64,
     pub cache_read_tokens: i64,
     pub cache_create_tokens: i64,
+    /// When true, every cost/token row seeded by this call is tagged
+    /// `is_subagent = 1` — simulates a JSONL-ingested subagent session.
+    pub is_subagent: bool,
     pub cost_usd: f64,
     /// Pairs of (decision, language). decision ∈ accept | reject | abort.
     pub decisions: Vec<(&'static str, &'static str)>,
@@ -59,41 +62,41 @@ pub fn seed_session(pool: &Arc<DbPool>, opts: &SeedOpts) {
 
     if opts.input_tokens > 0 {
         conn.execute(
-            "INSERT INTO token_usage (session_id, timestamp, model, token_type, count) \
-             VALUES (?, ?, ?, 'input', ?)",
-            params![opts.session_id, started, opts.model, opts.input_tokens],
+            "INSERT INTO token_usage (session_id, timestamp, model, token_type, count, is_subagent) \
+             VALUES (?, ?, ?, 'input', ?, ?)",
+            params![opts.session_id, started, opts.model, opts.input_tokens, opts.is_subagent as i64],
         )
         .expect("insert input token_usage");
     }
     if opts.output_tokens > 0 {
         conn.execute(
-            "INSERT INTO token_usage (session_id, timestamp, model, token_type, count) \
-             VALUES (?, ?, ?, 'output', ?)",
-            params![opts.session_id, started, opts.model, opts.output_tokens],
+            "INSERT INTO token_usage (session_id, timestamp, model, token_type, count, is_subagent) \
+             VALUES (?, ?, ?, 'output', ?, ?)",
+            params![opts.session_id, started, opts.model, opts.output_tokens, opts.is_subagent as i64],
         )
         .expect("insert output token_usage");
     }
     if opts.cache_read_tokens > 0 {
         conn.execute(
-            "INSERT INTO token_usage (session_id, timestamp, model, token_type, count) \
-             VALUES (?, ?, ?, 'cacheRead', ?)",
-            params![opts.session_id, started, opts.model, opts.cache_read_tokens],
+            "INSERT INTO token_usage (session_id, timestamp, model, token_type, count, is_subagent) \
+             VALUES (?, ?, ?, 'cacheRead', ?, ?)",
+            params![opts.session_id, started, opts.model, opts.cache_read_tokens, opts.is_subagent as i64],
         )
         .expect("insert cacheRead token_usage");
     }
     if opts.cache_create_tokens > 0 {
         conn.execute(
-            "INSERT INTO token_usage (session_id, timestamp, model, token_type, count) \
-             VALUES (?, ?, ?, 'cacheCreation', ?)",
-            params![opts.session_id, started, opts.model, opts.cache_create_tokens],
+            "INSERT INTO token_usage (session_id, timestamp, model, token_type, count, is_subagent) \
+             VALUES (?, ?, ?, 'cacheCreation', ?, ?)",
+            params![opts.session_id, started, opts.model, opts.cache_create_tokens, opts.is_subagent as i64],
         )
         .expect("insert cacheCreation token_usage");
     }
     if opts.cost_usd != 0.0 {
         conn.execute(
-            "INSERT INTO cost_entries (session_id, timestamp, model, cost_usd) \
-             VALUES (?, ?, ?, ?)",
-            params![opts.session_id, started, opts.model, opts.cost_usd],
+            "INSERT INTO cost_entries (session_id, timestamp, model, cost_usd, is_subagent) \
+             VALUES (?, ?, ?, ?, ?)",
+            params![opts.session_id, started, opts.model, opts.cost_usd, opts.is_subagent as i64],
         )
         .expect("insert cost_entries");
     }
