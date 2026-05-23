@@ -58,25 +58,43 @@ andon/
 ├── src-tauri/         # Rust backend, Tauri config, bundle assets
 │   ├── src/
 │   │   ├── otlp/      # gRPC + HTTP receivers, ingestor, forwarder
-│   │   ├── api/       # axum routes + DTOs for the SPA
+│   │   ├── jsonl/     # transcript walker, parser, reducer, reconciler, pricing
+│   │   ├── api/       # axum routes + DTOs + efficiency aggregator
 │   │   ├── db/        # rusqlite pool, migrations, queries
-│   │   ├── reports/   # standalone HTML session reports
+│   │   ├── reports/   # standalone HTML session/diagnostic reports
+│   │   ├── budget/    # month-end projection + tray monitor + alert state
 │   │   ├── settings.rs
 │   │   ├── integration.rs    # patches ~/.claude/settings.json
 │   │   ├── autostart.rs      # HKCU\Run registration
-│   │   └── diagnostics.rs
-│   ├── templates/     # Tera/Jinja2 report templates
+│   │   ├── diagnostics.rs
+│   │   ├── git_query.rs      # PostToolUse → git activity extraction
+│   │   └── repo_inference.rs # cwd / remote / branch / repo_name detection
+│   ├── templates/     # MiniJinja templates for HTML reports
 │   └── tauri.conf.json
 ├── web/               # Angular 21 SPA (standalone components, signals)
 │   └── src/app/features/
 │       ├── overview/
+│       ├── efficiency/
 │       ├── sessions/
 │       ├── files/
+│       ├── behaviour/
 │       ├── diagnostics/
 │       └── settings/
 ├── docs/              # This documentation
-└── scripts/           # Release / packaging helpers
+└── scripts/           # Release build + screenshot capture (full + annotated)
 ```
+
+## Run tests
+
+```powershell
+# Rust unit + integration tests (the test-support feature gates shared fixtures)
+cd src-tauri; cargo test --features test-support
+
+# Angular tests (Vitest, CI mode by default)
+cd web; npm test
+```
+
+Both suites are green on every release branch — CI doesn't run them (it's a single-developer project), so local runs are the gate.
 
 ## Notes
 
