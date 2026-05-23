@@ -295,6 +295,7 @@ impl Ingestor {
                     output,
                     cache_create,
                     cache_read,
+                    is_subagent: _,
                 } => {
                     if matches!(coverage, Coverage::JsonlOnly) {
                         for (kind, n) in [
@@ -331,6 +332,7 @@ impl Ingestor {
                     ts,
                     model,
                     cost_usd,
+                    is_subagent: _,
                 } => {
                     if matches!(coverage, Coverage::JsonlOnly) && *cost_usd > 0.0 {
                         let affected = match tx.execute(

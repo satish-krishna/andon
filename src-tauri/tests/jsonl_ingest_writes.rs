@@ -71,6 +71,7 @@ fn otlp_coverage_skips_jsonl_cost_and_tokens() {
             output: 2000,
             cache_create: 0,
             cache_read: 0,
+            is_subagent: false,
         },
         DerivedEvent::CostEntry {
             session_id: "s1".into(),
@@ -78,6 +79,7 @@ fn otlp_coverage_skips_jsonl_cost_and_tokens() {
             ts: 9000,
             model: "claude-opus-4-7".into(),
             cost_usd: 0.42,
+            is_subagent: false,
         },
     ];
     let (tokens_written, cost_written, _) = ing.ingest_derived(&events, Coverage::Otlp).unwrap();
@@ -108,6 +110,7 @@ fn jsonl_only_writes_cost_and_tokens_with_request_id() {
             output: 500,
             cache_create: 0,
             cache_read: 0,
+            is_subagent: false,
         },
         DerivedEvent::CostEntry {
             session_id: "s2".into(),
@@ -115,6 +118,7 @@ fn jsonl_only_writes_cost_and_tokens_with_request_id() {
             ts: 100,
             model: "claude-opus-4-7".into(),
             cost_usd: 0.05,
+            is_subagent: false,
         },
     ];
     let (tokens_written, cost_written, _) =
@@ -167,6 +171,7 @@ fn jsonl_reingest_is_idempotent_via_request_id() {
             output: 500,
             cache_create: 0,
             cache_read: 0,
+            is_subagent: false,
         },
         DerivedEvent::CostEntry {
             session_id: "s3".into(),
@@ -174,6 +179,7 @@ fn jsonl_reingest_is_idempotent_via_request_id() {
             ts: 100,
             model: "claude-opus-4-7".into(),
             cost_usd: 0.05,
+            is_subagent: false,
         },
     ];
     ing.ingest_derived(&events, Coverage::JsonlOnly).unwrap();
