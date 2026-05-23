@@ -27,6 +27,7 @@ pub enum DerivedEvent {
         output: i64,
         cache_create: i64,
         cache_read: i64,
+        is_subagent: bool,
     },
     CostEntry {
         session_id: String,
@@ -34,6 +35,7 @@ pub enum DerivedEvent {
         ts: i64,
         model: String,
         cost_usd: f64,
+        is_subagent: bool,
     },
     ToolCall {
         session_id: String,
@@ -130,6 +132,7 @@ impl Reducer {
                     output: u.output_tokens,
                     cache_create: u.cache_creation,
                     cache_read: u.cache_read,
+                    is_subagent: rec.is_sidechain,
                 });
                 if let Some(cost) = crate::jsonl::pricing::cost_for(
                     &model,
@@ -145,6 +148,7 @@ impl Reducer {
                             ts,
                             model: model.clone(),
                             cost_usd: cost,
+                            is_subagent: rec.is_sidechain,
                         });
                     }
                 }
@@ -312,6 +316,39 @@ mod tests {
             })
             .expect("slash command emitted");
         assert_eq!(sc, ("review".to_string(), 2));
+    }
+
+    #[test]
+    fn assistant_with_is_sidechain_marks_usage_as_subagent() {
+        let mut r = Reducer::new();
+        let line = r#"{"type":"assistant","sessionId":"s1","requestId":"req_a","isSidechain":true,"timestamp":"2026-05-19T10:00:01.000Z","message":{"role":"assistant","model":"claude-haiku-4-5","usage":{"input_tokens":10,"output_tokens":5}}}"#;
+        let out = r.reduce(&parse_line(line).unwrap());
+
+        let (token_flag, cost_flag) = out.iter().fold((None, None), |acc, e| match e {
+            DerivedEvent::TokenUsage { is_subagent, .. } => (Some(*is_subagent), acc.1),
+            DerivedEvent::CostEntry { is_subagent, .. } => (acc.0, Some(*is_subagent)),
+            _ => acc,
+        });
+        assert_eq!(token_flag, Some(true), "TokenUsage missing or wrong is_subagent");
+        assert_eq!(cost_flag, Some(true), "CostEntry missing or wrong is_subagent");
+    }
+
+    #[test]
+    fn assistant_without_is_sidechain_marks_usage_as_main() {
+        let mut r = Reducer::new();
+        let line = r#"{"type":"assistant","sessionId":"s1","requestId":"req_b","timestamp":"2026-05-19T10:00:02.000Z","message":{"role":"assistant","model":"claude-opus-4-7","usage":{"input_tokens":10,"output_tokens":5}}}"#;
+        let out = r.reduce(&parse_line(line).unwrap());
+
+        let token_flag = out.iter().find_map(|e| match e {
+            DerivedEvent::TokenUsage { is_subagent, .. } => Some(*is_subagent),
+            _ => None,
+        });
+        assert_eq!(token_flag, Some(false), "TokenUsage should default to is_subagent=false");
+        let cost_flag = out.iter().find_map(|e| match e {
+            DerivedEvent::CostEntry { is_subagent, .. } => Some(*is_subagent),
+            _ => None,
+        });
+        assert_eq!(cost_flag, Some(false), "CostEntry should default to is_subagent=false");
     }
 
     #[test]

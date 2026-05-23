@@ -23,6 +23,8 @@ pub struct JsonlRecord {
     pub message: Option<Message>,
     #[serde(rename = "isMeta", default)]
     pub is_meta: bool,
+    #[serde(rename = "isSidechain", default)]
+    pub is_sidechain: bool,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -166,5 +168,19 @@ mod tests {
     fn missing_request_id_is_none() {
         let r = parse_line(r#"{"type":"assistant","sessionId":"s1"}"#).unwrap();
         assert!(r.request_id.is_none());
+    }
+
+    #[test]
+    fn parses_is_sidechain_true() {
+        let line = r#"{"type":"assistant","sessionId":"s1","isSidechain":true}"#;
+        let r = parse_line(line).expect("parse");
+        assert!(r.is_sidechain);
+    }
+
+    #[test]
+    fn missing_is_sidechain_defaults_to_false() {
+        let line = r#"{"type":"assistant","sessionId":"s1"}"#;
+        let r = parse_line(line).expect("parse");
+        assert!(!r.is_sidechain);
     }
 }

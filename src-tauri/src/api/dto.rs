@@ -265,3 +265,43 @@ pub struct SubAgentEntry {
     pub subagent_type: String,
     pub invocations: i64,
 }
+
+// ---- Efficiency page DTOs ----
+
+#[derive(Debug, serde::Serialize)]
+pub struct CacheTokenTotals {
+    pub input: i64,
+    pub output: i64,
+    pub cache_read: i64,
+    pub cache_create: i64,
+}
+
+#[derive(Debug, serde::Serialize)]
+pub struct CacheSavings {
+    pub net: f64,
+    pub gross: f64,
+    pub creation_overhead: f64,
+}
+
+#[derive(Debug, serde::Serialize)]
+pub struct CacheEfficiency {
+    pub hit_ratio: f64,
+    pub hit_ratio_prev: f64,
+    pub tokens: CacheTokenTotals,
+    pub savings: CacheSavings,
+    pub net_prev: f64,
+    pub unpriced_cache_tokens: i64,
+}
+
+#[derive(Debug, serde::Serialize)]
+pub struct ModelEfficiencyRow {
+    /// `opus` | `sonnet` | `haiku` | `other`.
+    pub family: String,
+    /// `main` (the session's main-agent half) | `subagent` (sidechain).
+    pub role: String,
+    pub sessions: i64,
+    pub total_cost_usd: f64,
+    pub cost_per_session: f64,
+    pub output_tokens: i64,
+    pub cost_per_1k_output: f64,
+}

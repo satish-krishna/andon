@@ -12,7 +12,7 @@ use rusqlite::params;
 use serde::Deserialize;
 use serde_json::json;
 
-use super::{ApiState, dto::*, filter::{FilterQuery, today_bounds}, hook_response::HookOutput};
+use super::{ApiState, dto::*, efficiency::round4, filter::{FilterQuery, today_bounds}, hook_response::HookOutput};
 
 pub fn router(state: ApiState) -> Router {
     Router::new()
@@ -30,6 +30,8 @@ pub fn router(state: ApiState) -> Router {
         .route("/api/v2/kpis", get(v2_kpis))
         .route("/api/v2/tape", get(v2_tape))
         .route("/api/v2/cost-by-model", get(v2_cost_by_model))
+        .route("/api/v2/cache-efficiency", get(v2_cache_efficiency))
+        .route("/api/v2/model-efficiency", get(v2_model_efficiency))
         .route("/api/v2/accept-by-language", get(v2_accept_by_language))
         .route("/api/v2/active-time", get(v2_active_time))
         .route("/api/v2/sessions", get(v2_sessions))
@@ -654,10 +656,6 @@ async fn db_stats(State(state): State<ApiState>) -> Result<Json<serde_json::Valu
 }
 
 // ---------- helpers ----------
-
-fn round4(v: f64) -> f64 {
-    (v * 10000.0).round() / 10000.0
-}
 
 fn accept_rate(accepts: i64, rejects: i64, aborts: i64) -> f64 {
     let denom = accepts + rejects + aborts;
@@ -1569,6 +1567,149 @@ async fn v2_cost_by_model(
         .map(|(m, c)| json!({ "model": m, "cost_usd": round4(c) }))
         .collect();
     Ok(Json(out))
+}
+
+/// Per-model cache savings over `[from, to)` with the model filter applied.
+/// One grouped query; the per-model dollar math lives in `efficiency`.
+fn cache_savings_for_window(
+    conn: &rusqlite::Connection,
+    from: i64,
+    to: i64,
+    q: &FilterQuery,
+) -> crate::api::efficiency::Savings {
+    let (m_sql, m_vals) = q.model_clause("model");
+    let sql = format!(
+        "SELECT model,
+                COALESCE(SUM(CASE WHEN token_type='cacheRead'     THEN count END), 0),
+                COALESCE(SUM(CASE WHEN token_type='cacheCreation' THEN count END), 0)
+         FROM token_usage
+         WHERE token_type IN ('cacheRead', 'cacheCreation')
+           AND timestamp >= ? AND timestamp < ?{m_sql}
+         GROUP BY model"
+    );
+    let mut p: Vec<Box<dyn rusqlite::ToSql>> = vec![Box::new(from), Box::new(to)];
+    for v in m_vals {
+        p.push(Box::new(v));
+    }
+    let refs: Vec<&dyn rusqlite::ToSql> = p.iter().map(|b| &**b).collect();
+    let mut rows: Vec<(String, i64, i64)> = Vec::new();
+    if let Ok(mut stmt) = conn.prepare(&sql) {
+        if let Ok(mapped) = stmt.query_map(refs.as_slice(), |r| {
+            Ok((r.get::<_, String>(0)?, r.get::<_, i64>(1)?, r.get::<_, i64>(2)?))
+        }) {
+            rows = mapped.flatten().collect();
+        }
+    }
+    crate::api::efficiency::cache_savings(rows.iter().map(|(m, cr, cc)| (m.as_str(), *cr, *cc)))
+}
+
+async fn v2_cache_efficiency(
+    State(state): State<ApiState>,
+    Query(q): Query<FilterQuery>,
+) -> Result<Json<CacheEfficiency>, ApiError> {
+    let (from, to) = q.window();
+    let (prev_from, prev_to) = prev_period_window(from, to);
+    let conn = state.pool.get().map_err(ApiError::pool)?;
+
+    let input = sum_tokens(&conn, from, to, "input", &q);
+    let output = sum_tokens(&conn, from, to, "output", &q);
+    let cache_read = sum_tokens(&conn, from, to, "cacheRead", &q);
+    let cache_create = sum_tokens(&conn, from, to, "cacheCreation", &q);
+
+    let hit_ratio = crate::api::efficiency::hit_ratio(input, cache_create, cache_read);
+    let hit_ratio_prev = {
+        let p_in = sum_tokens(&conn, prev_from, prev_to, "input", &q);
+        let p_cc = sum_tokens(&conn, prev_from, prev_to, "cacheCreation", &q);
+        let p_cr = sum_tokens(&conn, prev_from, prev_to, "cacheRead", &q);
+        crate::api::efficiency::hit_ratio(p_in, p_cc, p_cr)
+    };
+
+    let savings = cache_savings_for_window(&conn, from, to, &q);
+    let net_prev = cache_savings_for_window(&conn, prev_from, prev_to, &q).net;
+
+    Ok(Json(CacheEfficiency {
+        hit_ratio: round4(hit_ratio),
+        hit_ratio_prev: round4(hit_ratio_prev),
+        tokens: CacheTokenTotals {
+            input,
+            output,
+            cache_read,
+            cache_create,
+        },
+        savings: CacheSavings {
+            net: round4(savings.net),
+            gross: round4(savings.gross),
+            creation_overhead: round4(savings.creation_overhead),
+        },
+        net_prev: round4(net_prev),
+        unpriced_cache_tokens: savings.unpriced_cache_tokens,
+    }))
+}
+
+async fn v2_model_efficiency(
+    State(state): State<ApiState>,
+    Query(q): Query<FilterQuery>,
+) -> Result<Json<Vec<ModelEfficiencyRow>>, ApiError> {
+    let (from, to) = q.window();
+    let conn = state.pool.get().map_err(ApiError::pool)?;
+    let (m_sql, m_vals) = q.model_clause("model");
+
+    // (session_id, model, cost, is_subagent) — folded into per-family-per-session costs.
+    let cost_sql = format!(
+        "SELECT session_id, model, SUM(cost_usd), is_subagent
+         FROM cost_entries
+         WHERE timestamp >= ? AND timestamp < ?{m_sql}
+         GROUP BY session_id, model, is_subagent"
+    );
+    let mut cp: Vec<Box<dyn rusqlite::ToSql>> = vec![Box::new(from), Box::new(to)];
+    for v in &m_vals {
+        cp.push(Box::new(v.clone()));
+    }
+    let crefs: Vec<&dyn rusqlite::ToSql> = cp.iter().map(|b| &**b).collect();
+    let mut cost_rows: Vec<(String, String, f64, bool)> = Vec::new();
+    if let Ok(mut stmt) = conn.prepare(&cost_sql) {
+        if let Ok(mapped) = stmt.query_map(crefs.as_slice(), |r| {
+            Ok((
+                r.get::<_, String>(0)?,
+                r.get::<_, String>(1)?,
+                r.get::<_, f64>(2).unwrap_or(0.0),
+                r.get::<_, i64>(3).unwrap_or(0) != 0,
+            ))
+        }) {
+            cost_rows = mapped.flatten().collect();
+        }
+    }
+
+    // (session_id, model, output tokens, is_subagent)
+    let out_sql = format!(
+        "SELECT session_id, model, SUM(count), is_subagent
+         FROM token_usage
+         WHERE token_type = 'output' AND timestamp >= ? AND timestamp < ?{m_sql}
+         GROUP BY session_id, model, is_subagent"
+    );
+    let mut op: Vec<Box<dyn rusqlite::ToSql>> = vec![Box::new(from), Box::new(to)];
+    for v in &m_vals {
+        op.push(Box::new(v.clone()));
+    }
+    let orefs: Vec<&dyn rusqlite::ToSql> = op.iter().map(|b| &**b).collect();
+    let mut output_rows: Vec<(String, String, i64, bool)> = Vec::new();
+    if let Ok(mut stmt) = conn.prepare(&out_sql) {
+        if let Ok(mapped) = stmt.query_map(orefs.as_slice(), |r| {
+            Ok((
+                r.get::<_, String>(0)?,
+                r.get::<_, String>(1)?,
+                r.get::<_, i64>(2).unwrap_or(0),
+                r.get::<_, i64>(3).unwrap_or(0) != 0,
+            ))
+        }) {
+            output_rows = mapped.flatten().collect();
+        }
+    }
+
+    Ok(Json(crate::api::efficiency::aggregate_model_efficiency(
+        &cost_rows,
+        &output_rows,
+    )))
 }
 
 async fn v2_accept_by_language(

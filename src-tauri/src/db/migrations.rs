@@ -178,12 +178,21 @@ CREATE TABLE session_jsonl_calls (
 );
 "#;
 
+const MIGRATION_V6: &str = r#"
+-- Distinguishes subagent (sidechain) JSONL records from main-agent activity.
+-- Set on insert from `isSidechain`; upserted false -> true when a JSONL
+-- post-session ingest re-sees an OTLP-written row as a subagent record.
+ALTER TABLE cost_entries ADD COLUMN is_subagent INTEGER NOT NULL DEFAULT 0;
+ALTER TABLE token_usage  ADD COLUMN is_subagent INTEGER NOT NULL DEFAULT 0;
+"#;
+
 const MIGRATIONS: &[(i32, &str)] = &[
     (1, MIGRATION_V1),
     (2, MIGRATION_V2),
     (3, MIGRATION_V3),
     (4, MIGRATION_V4),
     (5, MIGRATION_V5),
+    (6, MIGRATION_V6),
 ];
 
 pub fn apply(conn: &mut Connection) -> Result<()> {
@@ -251,7 +260,7 @@ mod tests {
         let v: i32 = conn.query_row(
             "SELECT MAX(version) FROM schema_version", [], |r| r.get(0)
         ).unwrap();
-        assert_eq!(v, 5);
+        assert_eq!(v, 6);
     }
 
     #[test]
@@ -262,7 +271,7 @@ mod tests {
         let v: i32 = conn.query_row(
             "SELECT MAX(version) FROM schema_version", [], |r| r.get(0)
         ).unwrap();
-        assert_eq!(v, 5);
+        assert_eq!(v, 6);
     }
 
     #[test]
@@ -293,7 +302,7 @@ mod tests {
         let v: i32 = conn.query_row(
             "SELECT MAX(version) FROM schema_version", [], |r| r.get(0),
         ).unwrap();
-        assert_eq!(v, 5);
+        assert_eq!(v, 6);
     }
 
     #[test]
@@ -326,6 +335,25 @@ mod tests {
         let v: i32 = conn.query_row(
             "SELECT MAX(version) FROM schema_version", [], |r| r.get(0),
         ).unwrap();
-        assert_eq!(v, 5);
+        assert_eq!(v, 6);
+    }
+
+    #[test]
+    fn v6_adds_is_subagent_columns() {
+        let mut conn = Connection::open_in_memory().unwrap();
+        apply(&mut conn).unwrap();
+
+        for tbl in ["cost_entries", "token_usage"] {
+            let cols: Vec<String> = conn
+                .prepare(&format!("PRAGMA table_info({tbl})")).unwrap()
+                .query_map([], |r| r.get::<_, String>(1)).unwrap()
+                .map(|r| r.unwrap()).collect();
+            assert!(cols.contains(&"is_subagent".to_string()), "{tbl} missing is_subagent");
+        }
+
+        let v: i32 = conn.query_row(
+            "SELECT MAX(version) FROM schema_version", [], |r| r.get(0),
+        ).unwrap();
+        assert_eq!(v, 6);
     }
 }
