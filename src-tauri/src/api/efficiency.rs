@@ -1,7 +1,7 @@
 //! Cost-efficiency math for the Efficiency page (cache savings + per-model
 //! cost-efficiency). Pure and DB-free so it can be unit-tested in isolation.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 use crate::api::dto::ModelEfficiencyRow;
 use crate::jsonl::pricing;
@@ -155,17 +155,17 @@ pub fn aggregate_model_efficiency(
 
     // ---- Subagent pass: per actual family, is_subagent=true rows only ----
     {
-        let mut buckets: HashMap<&'static str, (std::collections::HashSet<String>, f64, i64)> =
-            HashMap::new();
+        let mut buckets: HashMap<&'static str, (HashSet<String>, f64, i64)> = HashMap::new();
         for (sid, model, cost, is_sub) in cost_rows {
             if !*is_sub { continue; }
             let fam = model_family(model);
-            let e = buckets.entry(fam).or_insert_with(|| {
-                (std::collections::HashSet::new(), 0.0, 0)
-            });
+            let e = buckets.entry(fam).or_insert_with(|| (HashSet::new(), 0.0, 0));
             e.0.insert(sid.clone());
             e.1 += *cost;
         }
+        // Output tokens for a subagent family with no cost rows are skipped on
+        // purpose: a family with zero cost would emit a row whose
+        // `cost_per_1k_output` is 0, which conveys nothing useful.
         for (_sid, model, toks, is_sub) in output_rows {
             if !*is_sub { continue; }
             let fam = model_family(model);
