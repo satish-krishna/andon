@@ -14,7 +14,11 @@ Claude Code already emits a rich stream of OpenTelemetry metrics and logs — co
 
 - A bundled OTLP receiver (gRPC `:4317` + HTTP/protobuf `:4318`) accepts the telemetry directly from the Claude Code CLI.
 - An embedded SQLite database persists every metric and log event, denormalised by session.
-- An Angular dashboard, served by a localhost API on `:8765`, renders the data as charts, tables, and a file heatmap.
+- **Retroactive backfill:** Andon also reads `~/.claude/projects/**/*.jsonl`, so a fresh install populates months of historical sessions in one pass. Per-API-call dedup via `requestId` keeps costs honest.
+- An Angular dashboard, served by a localhost API on `:8765`, renders the data across **Overview**, **Efficiency**, **Sessions**, **Files**, **Behaviour**, **Diagnostics**, and **Settings** pages.
+- An **Efficiency** page surfaces prompt-cache savings (gross / premium / net) and per-model-family cost-efficiency, split into *main* vs *subagent* rows so a Haiku subagent's spend stops being folded into its Opus parent.
+- A **Behaviour** page (JSONL-derived) shows model mix, slash-command frequency, and sub-agent usage — things OTel can't see.
+- **Budget alerts:** set a monthly cap and Andon repaints its tray icon (neutral → amber → red) and fires a one-shot desktop notification as your projected end-of-month spend crosses 80% / 100%.
 - A system tray icon keeps the process alive in the background; the window opens on demand.
 
 No collector, no Docker, no daemon to install. One executable.
@@ -23,10 +27,10 @@ No collector, no Docker, no daemon to install. One executable.
 
 | | |
 |---|---|
+| ![Behaviour](docs/images/behaviour.png) | ![Efficiency](docs/images/efficiency.png) |
+| **Behaviour** — model mix, slash-command frequency, and sub-agent usage, all extracted from the JSONL transcripts. | **Efficiency** — cache hit ratio and net savings, per-family cost rates, split into main vs subagent rows. |
 | ![Sessions](docs/images/sessions.png) | ![Files](docs/images/files.png) |
-| **Sessions** — every Claude Code session with cost, duration, tokens, accept rate. | **Files** — what got touched, how often, accepted vs rejected, by language. |
-| ![Session detail](docs/images/session-detail.png) | ![Diagnostics](docs/images/diagnostics.png) |
-| **Session detail** — per-session timeline of tool decisions, files, and token spend. | **Diagnostics** — live OTLP event feed, listener health, event-type counters. |
+| **Sessions** — every Claude Code session with cost, duration, tokens, accept rate, a totals row, and a code/docs/other line-change split. | **Files** — what got touched, how often, accepted vs rejected, by language. |
 
 More detail and per-page screenshots: [`docs/features.md`](docs/features.md). Architecture, ports, and data model: [`docs/architecture.md`](docs/architecture.md).
 

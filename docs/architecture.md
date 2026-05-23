@@ -111,15 +111,20 @@ WAL mode, applied incrementally via numbered migrations on first run. Indexes on
 
 | Table                  | Purpose                                                                |
 |------------------------|------------------------------------------------------------------------|
-| `sessions`             | One row per Claude Code session. Lifecycle + denormalised resource attrs. |
-| `token_usage`          | Per-event token counts split by `model` and `token_type` (input/output/cacheRead/cacheCreation). OTLP-written rows have `request_id IS NULL`; JSONL-written rows carry the Claude Code `requestId`. A partial unique index on `(request_id, token_type) WHERE request_id IS NOT NULL` makes JSONL duplicates impossible. |
-| `cost_entries`         | Per-event USD cost split by `model`. Same `request_id` column and partial unique index as `token_usage`. |
-| `tool_decisions`       | Accept / reject / abort per tool call. Carries `language` + `file_path`. |
+| `sessions`             | One row per Claude Code session. Lifecycle + denormalised resource attrs + repo metadata (root, remote, branch, name) + `data_source` (`otlp` or `jsonl`). |
+| `token_usage`          | Per-event token counts split by `model` and `token_type` (input/output/cacheRead/cacheCreation). OTLP-written rows have `request_id IS NULL`; JSONL-written rows carry the Claude Code `requestId`. A partial unique index on `(request_id, token_type) WHERE request_id IS NOT NULL` makes JSONL duplicates impossible. An `is_subagent` flag (set from JSONL's `isSidechain`) distinguishes sidechain rows from main-agent rows — powers the Efficiency page's main/subagent split. |
+| `cost_entries`         | Per-event USD cost split by `model`. Same `request_id` column, partial unique index, and `is_subagent` flag as `token_usage`. |
+| `tool_decisions`       | Accept / reject / abort per tool call. Carries `language`, `file_path`, `model`, and a `source` label (`otlp` or `jsonl`). |
 | `file_changes`         | Lines added / removed per file per session.                            |
 | `git_activity`         | Commits + pull requests emitted by Claude Code.                        |
 | `active_time`          | Wall-clock active time, split `user` vs `cli`.                         |
 | `metrics_raw`          | Catch-all: any metric name the ingestor doesn't recognise lands here with full attrs as JSON. |
+| `log_events`           | Catch-all log of every OTLP log record received: event name, body (redacted for `user_prompt`), attributes JSON, and transport (`grpc` / `http`). |
+| `slash_commands`       | Per-session log of slash-command invocations (name + arg-count). Populated from JSONL transcripts; powers the Behaviour page's command leaderboard. |
+| `subagent_calls`       | Per-session log of `Task` tool delegations grouped by `subagent_type`. Populated from JSONL transcripts; powers the Behaviour page's sub-agent usage view. |
 | `session_jsonl_calls`  | Per-session count of distinct `requestId`s observed in the JSONL transcript. Powers partial-OTLP detection via `GET /api/jsonl/coverage-gaps`. |
+| `jsonl_errors`         | Per-line JSONL parse errors with file path + line number; surfaced on the Diagnostics page. |
+| `jsonl_ingest_runs`    | One row per JSONL ingest run (backfill or session-end), with start/end timestamps, files processed, records processed, and error counts. |
 
 ## OTel resource attributes captured
 
