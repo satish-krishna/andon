@@ -80,6 +80,7 @@ export interface V2CacheEfficiency {
 
 export interface V2ModelEfficiency {
   family: string;
+  role: 'main' | 'subagent';
   sessions: number;
   total_cost_usd: number;
   cost_per_session: number;
