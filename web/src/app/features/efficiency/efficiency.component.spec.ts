@@ -17,11 +17,21 @@ const CACHE = {
 const MODELS = [
   {
     family: 'opus',
+    role: 'main',
     sessions: 38,
     total_cost_usd: 69.92,
     cost_per_session: 1.84,
     output_tokens: 98480,
     cost_per_1k_output: 0.71,
+  },
+  {
+    family: 'haiku',
+    role: 'subagent',
+    sessions: 12,
+    total_cost_usd: 4.32,
+    cost_per_session: 0.36,
+    output_tokens: 21000,
+    cost_per_1k_output: 0.21,
   },
 ];
 
@@ -66,5 +76,12 @@ describe('EfficiencyComponent', () => {
   it('shows the unpriced footnote when unpriced_cache_tokens is non-zero', () => {
     const { fixture } = setup({ ...CACHE, unpriced_cache_tokens: 5000 }, MODELS);
     expect(fixture.nativeElement.textContent).toContain('5.0k tokens on un-priced models');
+  });
+
+  it('renders a subagent role badge for subagent rows', () => {
+    const { fixture } = setup();
+    const text = fixture.nativeElement.textContent;
+    expect(text).toContain('subagent');
+    expect(text).toContain('haiku');
   });
 });

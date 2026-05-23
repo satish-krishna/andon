@@ -81,6 +81,7 @@
           <thead>
             <tr class="text-[10px] uppercase text-muted">
               <th class="text-left px-4 py-1.5 font-normal">Family</th>
+              <th class="text-left px-4 py-1.5 font-normal">Role</th>
               <th class="text-right px-4 py-1.5 font-normal">Sessions</th>
               <th class="text-right px-4 py-1.5 font-normal">Cost / session</th>
               <th class="text-right px-4 py-1.5 font-normal">$ / 1k output</th>
@@ -88,12 +89,18 @@
             </tr>
           </thead>
           <tbody>
-            @for (m of models(); track m.family) {
+            @for (m of models(); track m.family + ':' + m.role) {
               <tr class="border-t border-border/40">
                 <td class="px-4 py-1.5">
                   <span class="inline-flex items-center gap-1.5">
                     <span class="inline-block w-2 h-2 rounded-full" [style.background-color]="familyColor(m.family)"></span>
                     {{ m.family }}
+                  </span>
+                </td>
+                <td class="px-4 py-1.5">
+                  <span class="text-[10px] uppercase tracking-wider"
+                        [class]="m.role === 'subagent' ? 'text-accent/80' : 'text-muted'">
+                    {{ m.role }}
                   </span>
                 </td>
                 <td class="px-4 py-1.5 text-right tabular-nums">{{ m.sessions | number }}</td>
