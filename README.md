@@ -80,6 +80,8 @@ The tools are complementary more than competing. A reasonable workflow:
 
 Then restart any open Claude Code sessions. Within ~10 seconds of finishing a session you'll see today's numbers populate on the Overview page.
 
+> **Note — first-run JSONL backfill.** Live OTLP fills the dashboard for new sessions immediately, but three things come only from Claude Code's on-disk JSONL transcripts: the **Behaviour** page, historical sessions from before Andon was installed, and the **main vs subagent split** on the Efficiency page. Open **Settings → Data → Ingest JSONL history** once after install to backfill them all in one pass. It's idempotent — re-run it any time.
+
 ### Manual setup (if you'd prefer)
 
 ```json
