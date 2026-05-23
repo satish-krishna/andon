@@ -312,15 +312,16 @@ impl Ingestor {
                                      ON CONFLICT(request_id, token_type)
                                        WHERE request_id IS NOT NULL DO UPDATE
                                        SET is_subagent = 1
-                                       WHERE excluded.is_subagent = 1",
+                                       WHERE excluded.is_subagent = 1 AND token_usage.is_subagent = 0",
                                     params![session_id, request_id, ts, model, kind, n, *is_subagent as i64],
                                 ) {
                                     Ok(rows) => rows,
                                     Err(e) => {
-                                        // ON CONFLICT DO UPDATE returns Ok(1) for both a new
-                                        // insert and a successful flip-upsert (false -> true),
-                                        // and Ok(0) when the guarded WHERE eliminates the update.
-                                        // `tokens_written` therefore counts inserts + flips.
+                                        // ON CONFLICT DO UPDATE returns Ok(1) only when this insert
+                                        // actually flipped a row from 0 to 1 (the guarded WHERE
+                                        // eliminates both re-flips and non-sidechain conflicts).
+                                        // `tokens_written` therefore counts new rows + true 0->1
+                                        // flips, never redundant updates.
                                         // Any Err is a genuine insert failure — log, never surface.
                                         tracing::warn!(error = ?e, session_id, "JSONL token_usage insert failed");
                                         0
@@ -347,15 +348,16 @@ impl Ingestor {
                              ON CONFLICT(request_id)
                                WHERE request_id IS NOT NULL DO UPDATE
                                SET is_subagent = 1
-                               WHERE excluded.is_subagent = 1",
+                               WHERE excluded.is_subagent = 1 AND cost_entries.is_subagent = 0",
                             params![session_id, request_id, ts, model, cost_usd, *is_subagent as i64],
                         ) {
                             Ok(rows) => rows,
                             Err(e) => {
-                                // ON CONFLICT DO UPDATE returns Ok(1) for both a new
-                                // insert and a successful flip-upsert (false -> true),
-                                // and Ok(0) when the guarded WHERE eliminates the update.
-                                // `cost_written` therefore counts inserts + flips.
+                                // ON CONFLICT DO UPDATE returns Ok(1) only when this insert
+                                // actually flipped a row from 0 to 1 (the guarded WHERE
+                                // eliminates both re-flips and non-sidechain conflicts).
+                                // `cost_written` therefore counts new rows + true 0->1 flips,
+                                // never redundant updates.
                                 // Any Err is a genuine insert failure — log, never surface.
                                 tracing::warn!(error = ?e, session_id, "JSONL cost_entries insert failed");
                                 0

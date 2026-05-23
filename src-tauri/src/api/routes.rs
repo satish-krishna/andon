@@ -12,7 +12,7 @@ use rusqlite::params;
 use serde::Deserialize;
 use serde_json::json;
 
-use super::{ApiState, dto::*, filter::{FilterQuery, today_bounds}, hook_response::HookOutput};
+use super::{ApiState, dto::*, efficiency::round4, filter::{FilterQuery, today_bounds}, hook_response::HookOutput};
 
 pub fn router(state: ApiState) -> Router {
     Router::new()
@@ -656,10 +656,6 @@ async fn db_stats(State(state): State<ApiState>) -> Result<Json<serde_json::Valu
 }
 
 // ---------- helpers ----------
-
-fn round4(v: f64) -> f64 {
-    (v * 10000.0).round() / 10000.0
-}
 
 fn accept_rate(accepts: i64, rejects: i64, aborts: i64) -> f64 {
     let denom = accepts + rejects + aborts;
@@ -1587,7 +1583,8 @@ fn cache_savings_for_window(
                 COALESCE(SUM(CASE WHEN token_type='cacheRead'     THEN count END), 0),
                 COALESCE(SUM(CASE WHEN token_type='cacheCreation' THEN count END), 0)
          FROM token_usage
-         WHERE timestamp >= ? AND timestamp < ?{m_sql}
+         WHERE token_type IN ('cacheRead', 'cacheCreation')
+           AND timestamp >= ? AND timestamp < ?{m_sql}
          GROUP BY model"
     );
     let mut p: Vec<Box<dyn rusqlite::ToSql>> = vec![Box::new(from), Box::new(to)];

@@ -70,9 +70,10 @@ pub fn cache_savings<'a>(rows: impl Iterator<Item = (&'a str, i64, i64)>) -> Sav
     }
 }
 
-/// Round a USD figure to 4 decimal places — matches the `round4` used by the
-/// v2 API handlers. Kept local so this module stays free of `routes.rs`.
-fn round4(v: f64) -> f64 {
+/// Round a USD figure to 4 decimal places. The single shared implementation
+/// used by both the pure aggregator in this module and the v2 API handlers in
+/// `routes.rs`, so the two cannot drift.
+pub(crate) fn round4(v: f64) -> f64 {
     (v * 10_000.0).round() / 10_000.0
 }
 

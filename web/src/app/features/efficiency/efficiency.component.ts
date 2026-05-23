@@ -57,7 +57,7 @@ export class EfficiencyComponent {
     return `${d >= 0 ? '+' : ''}${d} pts`;
   }
 
-  /** Signed percent delta of a value vs its previous, e.g. "up 20%". */
+  /** Signed percent delta of a value vs its previous, e.g. "▲ 20%" / "▾ 20%". */
   pctDelta(cur: number, prev: number): string {
     if (prev === 0) return '—';
     const d = (cur - prev) / prev;
