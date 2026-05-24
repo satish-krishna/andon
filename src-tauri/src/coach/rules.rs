@@ -318,3 +318,26 @@ pub fn detect_long_session_no_commit(pool: &std::sync::Arc<DbPool>, window: &Win
         payload_json: serde_json::json!({ "duration_ms": dur, "commits": 0 }).to_string(),
     }).collect())
 }
+
+/// Fires when >=5 sessions in the window started between 23:00 and 05:00 local time.
+pub fn detect_late_night_coding(pool: &std::sync::Arc<DbPool>, window: &Window) -> crate::coach::Result<Vec<Finding>> {
+    let conn = pool.get()?;
+    let mut stmt = conn.prepare(
+        "SELECT session_id, started_at
+         FROM sessions
+         WHERE started_at >= ?1 AND started_at < ?2
+           AND (CAST(strftime('%H', started_at/1000, 'unixepoch', 'localtime') AS INTEGER) >= 23
+            OR CAST(strftime('%H', started_at/1000, 'unixepoch', 'localtime') AS INTEGER) < 5)",
+    )?;
+    let late: Vec<(String, i64)> = stmt.query_map(rusqlite::params![window.from_ms, window.to_ms], |r| {
+        Ok((r.get::<_, String>(0)?, r.get::<_, i64>(1)?))
+    })?.filter_map(|r| r.ok()).collect();
+    if late.len() < 5 { return Ok(vec![]); }
+    let latest = late.iter().max_by_key(|(_, ts)| *ts).unwrap();
+    Ok(vec![Finding {
+        rule_id: "late-night-coding".into(),
+        session_id: latest.0.clone(),
+        detected_at: latest.1,
+        payload_json: serde_json::json!({ "count": late.len() }).to_string(),
+    }])
+}
