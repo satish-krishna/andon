@@ -13,6 +13,8 @@ pub struct AppSettings {
     /// corrupt and overwritten. See the regression test in settings_roundtrip.rs.
     #[serde(default)]
     pub budget: BudgetSettings,
+    #[serde(default)]
+    pub coach: CoachSettings,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -36,6 +38,40 @@ impl Default for BudgetSettings {
     }
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct CoachSettings {
+    pub skill_min_occurrences: u32,
+    pub skill_min_sessions: u32,
+    pub planning_commands: Vec<String>,
+    pub planning_keywords: Vec<String>,
+    pub constraint_keywords: Vec<String>,
+}
+
+impl Default for CoachSettings {
+    fn default() -> Self {
+        Self {
+            skill_min_occurrences: 3,
+            skill_min_sessions: 2,
+            planning_commands: vec![
+                "plan".into(), "brainstorm".into(), "design".into(),
+                "spec".into(), "specify".into(), "rfc".into(),
+            ],
+            planning_keywords: vec![
+                "spec".into(), "specs".into(), "requirement".into(),
+                "requirements".into(), "acceptance criteria".into(),
+                "design doc".into(), "PRD".into(), "RFC".into(),
+                "plan file".into(), "constraint".into(), "must".into(),
+                "should".into(), "ensure".into(),
+            ],
+            constraint_keywords: vec![
+                "must".into(), "should".into(), "limit".into(), "ensure".into(),
+                "require".into(), "only".into(), "without".into(),
+                "never".into(), "always".into(),
+            ],
+        }
+    }
+}
+
 impl Default for AppSettings {
     fn default() -> Self {
         Self {
@@ -47,6 +83,7 @@ impl Default for AppSettings {
                 headers: Default::default(),
             },
             budget: BudgetSettings::default(),
+            coach: CoachSettings::default(),
         }
     }
 }
@@ -121,6 +158,18 @@ impl SettingsStore {
         write_atomic(&self.path, &serialized)?;
         Ok(new)
     }
+
+    pub fn coach(&self) -> CoachSettings {
+        self.inner.read().expect("settings lock").coach.clone()
+    }
+
+    pub fn save_coach(&self, new: CoachSettings) -> Result<CoachSettings> {
+        let mut w = self.inner.write().expect("settings lock");
+        w.coach = new.clone();
+        let serialized = serde_json::to_string_pretty(&*w)?;
+        write_atomic(&self.path, &serialized)?;
+        Ok(new)
+    }
 }
 
 fn write_atomic(path: &Path, contents: &str) -> Result<()> {
@@ -182,5 +231,41 @@ mod tests {
             .filter(|e| e.file_name().to_string_lossy().contains("corrupt-"))
             .collect();
         assert_eq!(backups.len(), 1);
+    }
+
+    #[test]
+    fn coach_defaults_are_seeded() {
+        let dir = TempDir::new().unwrap();
+        let p = dir.path().join("settings.json");
+        let store = SettingsStore::load(p).unwrap();
+        let coach = store.coach();
+        assert_eq!(coach.skill_min_occurrences, 3);
+        assert_eq!(coach.skill_min_sessions, 2);
+        assert!(coach.planning_commands.contains(&"plan".to_string()));
+        assert!(coach.planning_commands.contains(&"brainstorm".to_string()));
+        assert!(coach.constraint_keywords.contains(&"must".to_string()));
+    }
+
+    #[test]
+    fn save_coach_persists() {
+        let dir = TempDir::new().unwrap();
+        let p = dir.path().join("settings.json");
+        let store = SettingsStore::load(p.clone()).unwrap();
+        let mut new_coach = store.coach();
+        new_coach.skill_min_occurrences = 5;
+        new_coach.planning_commands.push("rfc".into());
+        store.save_coach(new_coach.clone()).unwrap();
+        let reloaded = SettingsStore::load(p).unwrap();
+        assert_eq!(reloaded.coach(), new_coach);
+    }
+
+    #[test]
+    fn settings_file_without_coach_key_still_parses() {
+        // Pre-existing installs have no `coach` field — must not break.
+        let dir = TempDir::new().unwrap();
+        let p = dir.path().join("settings.json");
+        std::fs::write(&p, r#"{"version":1,"forwarder":{"enabled":false,"endpoint":"","timeout_ms":2000,"headers":{}},"budget":{"monthly_usd":0.0}}"#).unwrap();
+        let store = SettingsStore::load(p).unwrap();
+        assert_eq!(store.coach(), CoachSettings::default());
     }
 }
