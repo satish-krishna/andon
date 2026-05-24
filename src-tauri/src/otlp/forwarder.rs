@@ -116,7 +116,7 @@ pub fn join_url(base: &str, suffix: &str) -> String {
 /// Strip the `body` of any `user_prompt` log record before forwarding.
 /// See docs/superpowers/specs/2026-05-24-ai-engineering-coach-integration-design.md
 /// §Privacy & safety rule 5.
-pub(crate) fn redact_user_prompt(
+pub fn redact_user_prompt(
     resource_logs: &mut [opentelemetry_proto::tonic::logs::v1::ResourceLogs],
 ) {
     use opentelemetry_proto::tonic::common::v1::{AnyValue, any_value::Value as AnyV};
