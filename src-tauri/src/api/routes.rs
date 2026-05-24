@@ -1029,6 +1029,24 @@ async fn hook_session_end(
         }).await;
     });
 
+    // Coach re-evaluation: tokio::spawn after all writes, never inline.
+    let pool_for_coach = std::sync::Arc::clone(&state.pool);
+    let settings_for_coach = state.settings.coach();
+    let session_id_owned = sid.clone();
+    tokio::spawn(async move {
+        if let Err(e) = crate::coach::eval::evaluate_session(
+            &pool_for_coach,
+            &session_id_owned,
+            &settings_for_coach,
+        ) {
+            tracing::warn!(
+                error = ?e,
+                session_id = session_id_owned,
+                "coach evaluate_session failed"
+            );
+        }
+    });
+
     let _ = p.reason; // diagnostic field; intentionally dropped from wire
     Json(HookOutput::ok())
 }
