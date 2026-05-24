@@ -315,6 +315,25 @@ pub struct CoachFindingsResponse {
     pub next_cursor: Option<i64>,
 }
 
+// ---- Coach Skills DTOs ----
+
+#[derive(serde::Serialize)]
+pub struct SkillOpportunityRow {
+    pub norm_hash: String,
+    pub label: String,
+    pub command: Option<String>,
+    pub occurrences: i64,
+    pub session_count: i64,
+    pub first_seen: i64,
+    pub last_seen: i64,
+}
+
+#[derive(serde::Serialize)]
+pub struct CoachSkillsResponse {
+    pub lookback: String,
+    pub opportunities: Vec<SkillOpportunityRow>,
+}
+
 // ---- Efficiency page DTOs ----
 
 #[derive(Debug, serde::Serialize)]

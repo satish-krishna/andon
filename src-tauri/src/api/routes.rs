@@ -79,6 +79,7 @@ pub fn router(state: ApiState) -> Router {
         .route("/api/coach/findings", get(coach_findings))
         .route("/api/coach/rules", get(coach_rules))
         .route("/api/coach/rules/:id", post(coach_rules_update))
+        .route("/api/coach/skills", get(coach_skills))
         .with_state(state)
 }
 
@@ -2995,6 +2996,63 @@ async fn coach_scorecard(
         window: card.window,
         sessions_in_window: card.sessions_in_window,
     }))
+}
+
+// ============================================================================
+// I5: GET /api/coach/skills
+// ============================================================================
+
+#[derive(serde::Deserialize)]
+struct SkillsQuery {
+    lookback: Option<String>,
+}
+
+async fn coach_skills(
+    State(state): State<ApiState>,
+    Query(q): Query<SkillsQuery>,
+) -> Result<Json<CoachSkillsResponse>, ApiError> {
+    let lookback = q.lookback.unwrap_or_else(|| "90d".into());
+    let days: i64 = match lookback.as_str() {
+        "30d" => 30,
+        "90d" => 90,
+        "180d" => 180,
+        _ => {
+            return Err(ApiError {
+                status: StatusCode::BAD_REQUEST,
+                message: "lookback must be 30d / 90d / 180d".into(),
+            })
+        }
+    };
+    let now = chrono::Utc::now().timestamp_millis();
+    let conn = state.pool.get().map_err(ApiError::pool)?;
+    // Tolerate ±1 day around the nominal window length.
+    let lower = days * 86_400_000 - 86_400_000;
+    let upper = days * 86_400_000 + 86_400_000;
+    let mut stmt = conn.prepare(
+        "SELECT norm_hash, label, command, occurrences, session_count, first_seen, last_seen
+         FROM skill_opportunities
+         WHERE window_end >= ?1
+           AND (window_end - window_start) BETWEEN ?2 AND ?3
+         ORDER BY occurrences DESC, last_seen DESC",
+    )?;
+    let opps: Vec<SkillOpportunityRow> = stmt
+        .query_map(
+            rusqlite::params![now - 86_400_000, lower, upper],
+            |r| {
+                Ok(SkillOpportunityRow {
+                    norm_hash: r.get(0)?,
+                    label: r.get(1)?,
+                    command: r.get(2)?,
+                    occurrences: r.get(3)?,
+                    session_count: r.get(4)?,
+                    first_seen: r.get(5)?,
+                    last_seen: r.get(6)?,
+                })
+            },
+        )?
+        .filter_map(|r| r.ok())
+        .collect();
+    Ok(Json(CoachSkillsResponse { lookback, opportunities: opps }))
 }
 
 #[cfg(test)]
