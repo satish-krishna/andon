@@ -131,3 +131,61 @@ export interface JsonlBackfillResponse {
 export interface CoverageGap {
   session_id: string; jsonl_calls: number; otlp_calls: number;
 }
+
+// ---- AI Engineering Coach ----
+
+export interface CoachContinuous { id: string; score: number; }
+export interface CoachPracticeRow {
+  practice: string;
+  score: number | null;
+  status: 'good' | 'needs-improvement' | 'critical' | 'n/a';
+  wow_pct: number;
+  mom_pct: number;
+  triggered_count: number;
+  continuous: CoachContinuous[];
+}
+export interface CoachScorecard {
+  practices: CoachPracticeRow[];
+  window: { from: number; to: number };
+  sessions_in_window: number;
+}
+export interface CoachFinding {
+  id: number;
+  rule_id: string;
+  practice: string;
+  severity: string | null;
+  session_id: string;
+  started_at: number;
+  detected_at: number;
+  repo: string | null;
+  cost_usd: number;
+  description: string;
+  suggestion: string;
+  payload: Record<string, unknown>;
+}
+export interface CoachFindingsResponse { items: CoachFinding[]; next_cursor: number | null; }
+export interface CoachRule {
+  id: string;
+  practice: string;
+  severity: string | null;
+  kind: 'binary' | 'continuous';
+  aiec_origin: string | null;
+  description: string;
+  suggestion: string;
+  enabled: boolean;
+  reserved: boolean;
+}
+export interface SkillOpportunity {
+  norm_hash: string; label: string; command: string | null;
+  occurrences: number; session_count: number;
+  first_seen: number; last_seen: number;
+}
+export interface CoachSkillsResponse { lookback: string; opportunities: SkillOpportunity[]; }
+export interface SkillExample { session_id: string; turn_index: number; ts: number; text: string; }
+export interface CoachSettings {
+  skill_min_occurrences: number;
+  skill_min_sessions: number;
+  planning_commands: string[];
+  planning_keywords: string[];
+  constraint_keywords: string[];
+}

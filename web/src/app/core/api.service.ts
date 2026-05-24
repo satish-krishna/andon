@@ -6,6 +6,12 @@ import {
   AcceptByLanguage,
   ActiveTimeToday,
   BackfillResult,
+  CoachFinding,
+  CoachFindingsResponse,
+  CoachRule,
+  CoachScorecard,
+  CoachSettings,
+  CoachSkillsResponse,
   CoverageGap,
   DailySeries,
   DbStats,
@@ -18,6 +24,7 @@ import {
   RepoSummary,
   SessionDetail,
   SessionSummary,
+  SkillExample,
   SlashCommandEntry,
   SubAgentEntry,
   TopRepoEntry,
@@ -396,6 +403,46 @@ export class ApiService {
   }
   ingestJsonl(): Observable<JsonlBackfillResponse> {
     return this.http.post<JsonlBackfillResponse>(`${BASE}/api/jsonl/backfill`, {});
+  }
+
+  // ----- AI Engineering Coach -----
+  coachScorecard(args: { fromMs: number; toMs: number; models?: string }): Observable<CoachScorecard> {
+    let params = new HttpParams().set('from', String(args.fromMs)).set('to', String(args.toMs));
+    if (args.models) params = params.set('models', args.models);
+    return this.http.get<CoachScorecard>(`${BASE}/api/coach/scorecard`, { params });
+  }
+  coachFindings(args: { fromMs?: number; toMs?: number; ruleId?: string; sessionId?: string; limit?: number; cursor?: number }): Observable<CoachFindingsResponse> {
+    let params = new HttpParams();
+    if (args.fromMs != null) params = params.set('from', String(args.fromMs));
+    if (args.toMs != null) params = params.set('to', String(args.toMs));
+    if (args.ruleId) params = params.set('rule_id', args.ruleId);
+    if (args.sessionId) params = params.set('session_id', args.sessionId);
+    if (args.limit) params = params.set('limit', String(args.limit));
+    if (args.cursor) params = params.set('cursor', String(args.cursor));
+    return this.http.get<CoachFindingsResponse>(`${BASE}/api/coach/findings`, { params });
+  }
+  coachRules(): Observable<CoachRule[]> {
+    return this.http.get<CoachRule[]>(`${BASE}/api/coach/rules`);
+  }
+  updateCoachRule(id: string, enabled: boolean): Observable<{ ok: boolean }> {
+    return this.http.post<{ ok: boolean }>(`${BASE}/api/coach/rules/${id}`, { enabled });
+  }
+  coachSkills(lookback: '30d' | '90d' | '180d'): Observable<CoachSkillsResponse> {
+    return this.http.get<CoachSkillsResponse>(`${BASE}/api/coach/skills`, {
+      params: new HttpParams().set('lookback', lookback),
+    });
+  }
+  coachSkillExamples(hash: string, limit = 3): Observable<{ examples: SkillExample[] }> {
+    return this.http.get<{ examples: SkillExample[] }>(
+      `${BASE}/api/coach/skills/${encodeURIComponent(hash)}/examples`,
+      { params: new HttpParams().set('limit', String(limit)) },
+    );
+  }
+  coachSettings(): Observable<CoachSettings> {
+    return this.http.get<CoachSettings>(`${BASE}/api/settings/coach`);
+  }
+  saveCoachSettings(s: CoachSettings): Observable<CoachSettings> {
+    return this.http.put<CoachSettings>(`${BASE}/api/settings/coach`, s);
   }
 }
 
