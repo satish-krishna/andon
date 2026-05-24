@@ -4,6 +4,35 @@
 > Branch: `claude/ai-engineering-coach-andon-CKkqZ`
 > Upstream: [microsoft/AI-Engineering-Coach](https://github.com/microsoft/AI-Engineering-Coach) (MIT)
 
+## Privacy contract amendment
+
+This design **amends** the privacy guarantee that Andon does not persist raw
+user prompts. The amendment is intentional and the rest of the document
+assumes it:
+
+- **Before:** "Raw user prompts are never persisted, even if
+  `OTEL_LOG_USER_PROMPTS=1` upstream." (`CLAUDE.md` rule 2,
+  `docs/architecture.md` §"Privacy & safety rules" item 2)
+- **After:** Andon may persist raw user prompts from both JSONL transcripts
+  and the OTLP `user_prompt` log event. Everything else about the privacy
+  posture is unchanged — local-only listeners (`127.0.0.1`), no outbound
+  network except the opt-in OTel forwarder, no telemetry of telemetry,
+  user-only file permissions on `data.db`.
+
+The trigger is feature-driven: Skill Finder (and likely later coach
+features) need the prompt text. The original guarantee was an
+over-restriction premised on "we don't need it" — that premise no longer
+holds. Andon is still a local tool: prompts stay on the machine they were
+typed on. The thing the original guarantee actually protected against —
+exfiltration — is unaffected, because there is no exfil path.
+
+Implementation must update `CLAUDE.md`, `docs/architecture.md`,
+`docs/features.md`, and `README.md` to reflect the new posture in the
+same PR that adds the schema. The forwarder gets one new rule (see
+*Privacy & safety* below): prompts must be stripped from anything the
+forwarder re-emits, because the forwarder is the only outbound network
+path Andon has and it pre-dates this amendment.
+
 ## Motivation
 
 [Microsoft AI Engineering Coach](https://github.com/microsoft/AI-Engineering-Coach)
@@ -116,7 +145,6 @@ flowchart LR
         DB[("SQLite<br/>sessions, token_usage,<br/>cost_entries, tool_decisions,<br/>file_changes, slash_commands,<br/>subagent_calls, …")]
         SE["SessionEnd hook<br/>(existing)"]
         BF["JSONL backfill<br/>(existing)"]
-        FS[("JSONL on disk<br/>~/.claude/projects/")]
     end
     subgraph New["New: coach module"]
         Engine["RuleEngine<br/>(coach/engine.rs)"]
@@ -127,7 +155,7 @@ flowchart LR
     end
     subgraph New2["New tables"]
         T1[("coach_rules<br/>coach_findings")]
-        T2[("prompt_signatures<br/>skill_opportunities")]
+        T2[("prompt_turns<br/>skill_opportunities")]
     end
     subgraph API["API + UI"]
         Routes["GET /api/coach/scorecard<br/>GET /api/coach/findings<br/>GET /api/coach/rules<br/>POST /api/coach/rules/:id<br/>GET /api/coach/skills<br/>GET /api/coach/skills/:hash/examples"]
@@ -135,7 +163,7 @@ flowchart LR
     end
     SE --> Eval
     BF --> Eval
-    BF -- "norm hash, no text" --> T2
+    BF -- "prompt text + norm hash" --> T2
     Eval --> Engine
     Eval --> Skill
     Engine --> Rules
@@ -146,7 +174,6 @@ flowchart LR
     T1 --> Routes
     T2 --> Routes
     DB --> Routes
-    Routes -- "examples only, on demand" --> FS
     Routes --> Page
 ```
 
@@ -216,28 +243,42 @@ rule-specific detail without the engine knowing about it.
 `coach_findings` joined against `sessions`. Caching is unnecessary; the SQL
 is a handful of indexed aggregates.
 
-### `prompt_signatures` (skill discovery)
+### `prompt_turns` (skill discovery input)
 
-A privacy-safe index of every user prompt seen during JSONL ingest — used
-only as the input to the Skill Finder. **No prompt text is stored.**
+One row per user turn seen during JSONL ingest (and, when
+`OTEL_LOG_USER_PROMPTS=1` upstream, per OTLP `user_prompt` log event).
+The table is the canonical source for prompts inside Andon; Skill
+Finder reads from it directly, and future coach features can join
+against it without an on-disk JSONL re-read.
 
 ```sql
-CREATE TABLE prompt_signatures (
+CREATE TABLE prompt_turns (
   session_id   TEXT NOT NULL,
   request_id   TEXT,                      -- nullable; user turns w/o a request
   turn_index   INTEGER NOT NULL,          -- ordinal within the session
-  norm_hash    TEXT NOT NULL,             -- BLAKE3 hex of normalised prompt
-  length_bin   INTEGER NOT NULL,          -- 0=<20, 1=<100, 2=<500, 3=<2000, 4=≥2000
+  ts           INTEGER NOT NULL,          -- unix ms
+  source       TEXT NOT NULL,             -- 'jsonl' | 'otlp'
+  text         TEXT NOT NULL,             -- the raw prompt
+  norm_hash    TEXT NOT NULL,             -- BLAKE3 hex of normalised text (clustering key)
+  command      TEXT,                      -- slash-command name if the prompt was one
+  length       INTEGER NOT NULL,          -- char count of `text`
   has_file_ref INTEGER NOT NULL,          -- 0/1 — contains `@path` or absolute path
   has_code     INTEGER NOT NULL,          -- 0/1 — contains a ``` fence
-  command      TEXT,                      -- slash-command name if the prompt was one
   PRIMARY KEY (session_id, turn_index),
   FOREIGN KEY (session_id) REFERENCES sessions(session_id) ON DELETE CASCADE
 );
-CREATE INDEX prompt_signatures_hash ON prompt_signatures(norm_hash);
+CREATE INDEX prompt_turns_hash    ON prompt_turns(norm_hash);
+CREATE INDEX prompt_turns_session ON prompt_turns(session_id, ts);
 ```
 
-**Normalisation rule** (the input to `norm_hash`):
+`norm_hash` is the **clustering key** used by Skill Finder. The
+normalisation is purely for grouping — it collapses superficially
+different prompts into the same bucket so that *"package the
+extension"* and *"Package the extension please"* hash to the same
+value. We still store the original `text` for display and for future
+analyses that need it.
+
+**Normalisation rule** (input to `norm_hash`):
 1. Lowercase.
 2. Strip leading/trailing whitespace; collapse internal whitespace to one space.
 3. Replace any absolute path or `@path` reference with the literal `<path>`.
@@ -249,9 +290,12 @@ CREATE INDEX prompt_signatures_hash ON prompt_signatures(norm_hash);
    hashing — long pasted contexts shouldn't fragment the hash.
 
 The hash uses BLAKE3 with a static 32-byte key built into the binary, so
-hashes are stable across runs but not portable across installs. There is
-no reverse lookup — by construction, only the JSONL on disk can produce
-example text for a given hash.
+hashes are stable across runs but not portable across installs.
+
+The pre-existing `log_events.body` redaction-on-`user_prompt` rule is
+also removed in this design: OTLP `user_prompt` log events that carry
+prompt text now write the text through to `log_events.body` and also
+materialise a `prompt_turns` row, so the two tables stay consistent.
 
 ### `skill_opportunities`
 
@@ -259,6 +303,7 @@ example text for a given hash.
 CREATE TABLE skill_opportunities (
   id             INTEGER PRIMARY KEY AUTOINCREMENT,
   norm_hash      TEXT NOT NULL,           -- groups occurrences
+  label          TEXT NOT NULL,           -- snapshotted shortest example, or '/{command}'
   command        TEXT,                    -- slash-command name if applicable
   occurrences    INTEGER NOT NULL,        -- count of matching prompts in window
   session_count  INTEGER NOT NULL,        -- distinct sessions touched
@@ -273,8 +318,8 @@ CREATE UNIQUE INDEX skill_opportunities_unique
 ```
 
 The same hash can appear in multiple rows for different look-back windows
-(1m / 3m / 6m, matching AIEC). Example text is fetched on demand by the
-API at display time — never persisted (see *Skill discovery* below).
+(1m / 3m / 6m, matching AIEC). The `label` column is materialised at
+discovery time — the API serves it directly without a join.
 
 ## Starter rule set
 
@@ -291,7 +336,7 @@ scope for the data we collect.
 
 | Practice | Rule id | Kind | Sev | AIEC origin | Triggers when… |
 |---|---|---|---|---|---|
-| **Prompt quality** | `repeated-prompts` | binary | medium | `repeated-prompts.md` | Same `norm_hash` (see `prompt_signatures`) appears ≥ 3× in one session |
+| **Prompt quality** | `repeated-prompts` | binary | medium | `repeated-prompts.md` | Same `norm_hash` (see `prompt_turns`) appears ≥ 3× in one session |
 | Prompt quality | `lazy-prompting` | binary | low | `lazy-prompting.md` | First user turn has `length_bin = 0` *and* the session writes > 5 file edits |
 | Prompt quality | `low-constraint-usage` | binary | low | `low-constraint-usage.md` | < 20 % of user turns in a session contain a constraint keyword (`must`, `should`, `limit`, …; matched on the un-hashed prompt at ingest, recorded as a flag) |
 | **Session hygiene** | `mega-sessions` | binary | high | `mega-sessions.md` + `metrics/mega-sessions.metric.md` | `sessions.ended_at − started_at > 90 min` *and* `git_activity` for that session is empty |
@@ -406,8 +451,7 @@ thresholds quoted above. Both data sources (`cost_entries.model`,
 
 ## Skill discovery
 
-A port of AIEC's **Skill Finder** (`docs/content/improve/skill-finder.md`),
-adapted to Andon's stricter privacy contract.
+A port of AIEC's **Skill Finder** (`docs/content/improve/skill-finder.md`).
 
 ### What it does
 
@@ -420,56 +464,39 @@ it a slash command."*
 
 ```mermaid
 flowchart LR
-    A["JSONL backfill / SessionEnd"] --> B["normalise + hash<br/>(no prompt text persisted)"]
-    B --> C[("prompt_signatures<br/>session_id, turn, norm_hash,<br/>length_bin, has_file_ref, …")]
+    A["JSONL backfill / SessionEnd"] --> B["normalise + hash"]
+    B --> C[("prompt_turns<br/>session_id, turn, text,<br/>norm_hash, command, …")]
     C --> D["Discover task<br/>(coach::skill::discover)"]
-    D --> E[("skill_opportunities<br/>per look-back window")]
+    D --> E[("skill_opportunities<br/>per look-back window<br/>(label snapshotted)")]
     E --> F["GET /api/coach/skills"]
-    F --> G["UI: opportunity rows<br/>(name, count, sessions, …)"]
-    G -->|user clicks Examples| H["GET /api/coach/skills/:hash/examples<br/>reads JSONL on disk on-demand"]
-    H --> I["UI: example text<br/>never stored in SQLite"]
+    F --> G["UI: opportunity rows<br/>(label, count, sessions, examples)"]
+    C --> H["GET /api/coach/skills/:hash/examples<br/>(DB read)"]
+    H --> G
 ```
-
-### Privacy posture
-
-Andon's rule (`docs/architecture.md` §"Privacy & safety") is that **raw
-user prompts are never persisted**. Skill discovery honours this:
-
-1. JSONL ingest writes `prompt_signatures` — the **hash + structural
-   flags only**. The prompt text is processed in memory and dropped.
-2. Cluster discovery operates entirely on `prompt_signatures`.
-3. When the user clicks "show examples" for a discovered opportunity,
-   the API re-reads the original JSONL files from `~/.claude/projects/`
-   on disk and returns matching text **without writing it anywhere**.
-   The DB never holds raw prompts. The HTTP response is in-memory only
-   and crosses no boundary other than localhost.
-
-A property test (`coach_no_prompt_leak.rs`, extended) asserts the
-invariant: for randomly generated prompts, no substring of any prompt
-appears in any column of `prompt_signatures`, `skill_opportunities`, or
-`coach_findings`.
 
 ### Discovery algorithm
 
-A straightforward two-pass on `prompt_signatures`:
+A straightforward two-pass on `prompt_turns`:
 
 ```
 threshold_occurrences = 3        // configurable, AIEC parity default
 threshold_sessions    = 2        // configurable
 
 for each look_back ∈ {30d, 90d, 180d}:
-    rows = SELECT session_id, norm_hash, command, MIN(ts) AS first, MAX(ts) AS last
-           FROM prompt_signatures
+    rows = SELECT norm_hash, session_id, command,
+                  MIN(ts) AS first, MAX(ts) AS last, COUNT(*) AS n
+           FROM prompt_turns
            JOIN sessions USING (session_id)
            WHERE sessions.started_at >= now - look_back
            GROUP BY norm_hash, session_id
     buckets = group rows by norm_hash
     for each (hash, group) in buckets:
-        occurrences   = sum(group.count_in_session)   // total prompts
+        occurrences   = sum(group.n)
         session_count = |distinct session_ids in group|
         if occurrences >= threshold_occurrences AND
            session_count >= threshold_sessions:
-            UPSERT skill_opportunities (norm_hash, command, ...)
+            label = compute_label(hash, group)
+            UPSERT skill_opportunities (norm_hash, label, command, ...)
 ```
 
 Clustering at Phase 1 is **exact normalised-hash equality** — fast,
@@ -481,24 +508,39 @@ stage.
 
 ### Naming opportunities
 
-The UI needs a short label per opportunity. Three sources, in order of
-preference:
+`compute_label(hash, group)` picks a human-readable label at discovery
+time, snapshotted into the `skill_opportunities.label` column so the API
+never has to compute it on read:
 
-1. If `command` is set (the prompt was a slash command), label = `/{command}`.
-2. Else, on the Examples fetch, the API returns the **shortest** example
-   prompt as the label (truncated at 80 chars). This is human-readable and
-   stays current with the most concise phrasing of the pattern.
-3. Else, label = `pattern {first-8-chars-of-hash}` as a final fallback.
+1. If every row in the group has the same non-null `command`,
+   label = `/{command}`.
+2. Else, label = the **shortest** matching `prompt_turns.text` in the
+   group, trimmed and truncated at 80 chars (mirrors AIEC's representative
+   prompt). Ties broken by earliest `ts`.
 
-The shortest-example heuristic mirrors AIEC's behaviour: opportunity rows
-in AIEC display a representative prompt, not a hash.
+### Examples endpoint
+
+The UI fetches up to three example prompts when the user expands an
+opportunity row. The endpoint reads `prompt_turns` directly:
+
+```
+GET /api/coach/skills/:norm_hash/examples?limit=3
+→ SELECT session_id, turn_index, ts, text
+  FROM prompt_turns
+  WHERE norm_hash = ?
+  ORDER BY length ASC          -- prefer shorter, more canonical phrasings
+  LIMIT ?
+```
+
+There is no on-disk JSONL re-read and no in-memory-only path.
 
 ### Re-discovery
 
 The skill-discovery task runs in the same triggers as the coach engine
 (SessionEnd, JSONL backfill batch end). It is idempotent — the unique
 index on `(norm_hash, window_start, window_end)` makes re-running on the
-same window a no-op upsert.
+same window a no-op upsert. The `label` is recomputed on every upsert,
+so as soon as a shorter example arrives the label updates.
 
 ### Thresholds in Settings
 
@@ -525,8 +567,9 @@ Triggers:
 - **JSONL backfill** calls `coach::eval::evaluate_window(pool, 30d)` and
   `coach::skill::discover_all(pool)` (all three look-back windows) once at
   the end of a backfill batch (not per file). A backfill may surface old
-  sessions a rule needs to compare against, and it is the only source of
-  `prompt_signatures`.
+  sessions a rule needs to compare against, and it is one of the two
+  writers of `prompt_turns` (the other is the OTLP `user_prompt` log
+  ingest path).
 
 The evaluator never blocks the OTLP path. It runs on the existing tokio
 runtime as a spawned task. Failures are logged via `tracing::warn!` and never
@@ -660,10 +703,10 @@ it does not recompute on every request.
 
 ### `GET /api/coach/skills/:norm_hash/examples?limit=3`
 
-Resolves up to `limit` example prompts for a discovered opportunity by
-reading the original JSONL files on disk. The prompt text is returned in
-the HTTP response **but never persisted**. If the underlying JSONL has
-been deleted or rotated, the endpoint returns `{ "examples": [] }`.
+Returns up to `limit` example prompts for a discovered opportunity, read
+directly from `prompt_turns` ordered by `length ASC` (shorter examples
+first — more canonical phrasings). Returns `{ "examples": [] }` if the
+hash has no matching rows.
 
 ```json
 {
@@ -738,7 +781,7 @@ A simpler page sharing the same `CoachComponent` parent layout:
   `~/.claude/commands/`. We do **not** write to `~/.claude/` from
   Andon — out of scope, and the user must own that step.
 - Empty state: a one-liner pointing at Settings → "Ingest JSONL history"
-  when no `prompt_signatures` exist for the window.
+  when no `prompt_turns` exist for the window.
 
 Settings page gains a new anchor section **Rules** rendering
 `CoachRulesComponent`: the catalogue with one toggle per rule, grouped by
@@ -762,10 +805,11 @@ JSON above, declared in `core/`.
 - **Skill Finder, no JSONL ingest yet.** Empty list with a one-line hint
   pointing at Settings → "Ingest JSONL history" — same pattern the
   Efficiency page uses for subagent rows.
-- **JSONL file deleted between discovery and Examples request.** The
-  examples endpoint returns `{ "examples": [] }` rather than erroring;
-  the `skill_opportunities` row stays as long as the look-back window
-  covers it.
+- **Examples-endpoint hash with no rows.** Possible if a
+  `skill_opportunities` row exists but its underlying `prompt_turns`
+  rows have been deleted (cascade from a session delete). The endpoint
+  returns `{ "examples": [] }`. A follow-up discovery pass garbage-collects
+  the orphaned opportunity.
 - **Sessions without JSONL ingest.** Rules that depend on JSONL-only data
   (`subagent-cost-spike`, `cache-anti-pattern` at session granularity)
   simply skip those sessions — no false positives from missing data. The
@@ -785,25 +829,39 @@ JSON above, declared in `core/`.
 
 ## Privacy & safety
 
-This feature adds **no** new listeners and **no** new outbound calls. The
-four privacy guarantees in
-[`docs/architecture.md`](../../architecture.md) §"Privacy & safety rules"
-are unaffected. Four points worth being explicit about:
+This feature **amends** the long-standing "raw user prompts are never
+persisted" guarantee (see *Privacy contract amendment* at the top of this
+document). Andon now stores prompts in `prompt_turns`, and the
+`log_events.body` redaction-on-`user_prompt` rule is removed. The
+remaining guarantees are intact and called out individually:
 
-1. **No prompt text in any new table.** `prompt_signatures`,
-   `skill_opportunities`, and `coach_findings.payload` carry only hashes,
-   lengths, counts, and structural flags. The proptest
-   `coach_no_prompt_leak.rs` enforces this invariant against random inputs.
-2. **JSONL on-demand reads stay in memory.** The
-   `/api/coach/skills/:hash/examples` handler reads `~/.claude/projects/`
-   at request time and streams matching prompts to the SPA. The text is
-   never written to `data.db`, never logged, never forwarded. Tracing
-   spans for this handler use `tracing::field::Empty` for the prompt
-   field so it cannot accidentally land in `log.txt`.
-3. **Forwarder is unaffected.** The forwarder only re-emits OTLP payloads
-   from the receivers; Coach data does not flow through it.
-4. AIEC's optional Copilot-LM features are not ported. No part of this
-   design requires an LM, by design.
+1. **All listeners stay bound to `127.0.0.1`.** No change.
+2. **No outbound network calls** except the opt-in OTel forwarder. No change.
+3. **`data.db` is user-only read/write.** No change. Prompts at rest sit
+   behind the same file permissions everything else does.
+4. **No telemetry of telemetry.** No change.
+
+The amendment adds one new safety rule, tied to the only outbound path
+Andon has:
+
+5. **The forwarder must strip prompts before re-emitting.** The forwarder
+   re-emits OTLP payloads to a user-configured downstream collector. With
+   prompt redaction removed, an OTLP `user_prompt` log event now carries
+   the raw prompt — and forwarding that downstream would silently exfil
+   text the user typed locally. The forwarder gains a filter pass that
+   rewrites `log_events.body` to `"<redacted>"` for any record whose
+   `event.name` is `user_prompt` before sending. The Skill Finder data
+   path does **not** flow through the forwarder; only the OTLP receivers
+   do, and only `user_prompt` records are touched.
+
+A proptest (`forwarder_no_prompt_leak.rs`) generates random
+`user_prompt` log records and asserts the forwarder's outgoing payload
+contains no substring of any generated prompt. This is the inverse of
+the now-obsolete `coach_no_prompt_leak.rs` — the boundary that matters
+is the one network egress point, not the local DB.
+
+AIEC's optional Copilot-LM features are still not ported. No part of
+this design requires an LM, by design.
 
 ## Testing
 
@@ -817,11 +875,17 @@ covering the trigger and a near-miss.
 **Rust integration:** `src-tauri/tests/coach_api.rs` — seeded DB, hit all
 four endpoints, snapshot the JSON. Adds one new `.snap`.
 
-**Rust property:** `coach_no_prompt_leak.rs` — generate random prompts,
-run JSONL ingest + the full coach pipeline (rules + skill discovery), and
-assert no substring of any prompt appears anywhere in
-`coach_findings.payload`, `prompt_signatures` (any column), or
-`skill_opportunities` (any column). Mirrors `jsonl_privacy.rs`.
+**Rust property:** `forwarder_no_prompt_leak.rs` — generate random
+`user_prompt` log records, run them through the forwarder's filter pass,
+and assert the outgoing OTLP payload contains no substring of any
+generated prompt. Replaces the previous local-DB leak proptest, which
+became obsolete when the privacy contract was amended.
+
+**Rust normalisation unit tests** — `coach::skill::normalise` against a
+curated table: same prompt with/without trailing whitespace, with
+different paths, with/without code fences, with embedded UUIDs all
+collapse to the same hash; structurally different prompts produce
+different hashes.
 
 **Rust scorer unit tests** — direct AIEC-formula coverage:
 - `score_all_clean → 100`, `score_all_high → 0`, `score_disabled → null`.
@@ -850,7 +914,7 @@ This design covers Phase 1. Each later phase ships under its own spec.
 
 If Phase 1 lands and nobody uses the page, we stop and don't build phases
 2–4. The cost of Phase 1 is bounded (one module, one page, two migrations
-— `coach_*` plus `prompt_signatures` + `skill_opportunities`); the cost
+— `coach_*` plus `prompt_turns` + `skill_opportunities`); the cost
 of premature DSL design is not.
 
 ## Files touched
@@ -859,14 +923,19 @@ of premature DSL design is not.
 
 - `src-tauri/migrations/NNN_coach.sql` — `coach_rules` + `coach_findings`
   + indexes + seed inserts.
-- `src-tauri/migrations/NNN_skill_finder.sql` — `prompt_signatures` +
+- `src-tauri/migrations/NNN_skill_finder.sql` — `prompt_turns` +
   `skill_opportunities` + indexes.
 - `src-tauri/src/coach/{mod,rules,engine,score,skill,eval,queries}.rs` — new.
 - `src-tauri/src/api/routes.rs` — six handlers + route registration.
 - `src-tauri/src/api/dto.rs` — `CoachScorecard`, `CoachFinding`, `CoachRule`,
   `UpdateCoachRule`, `SkillOpportunity`, `SkillExample`.
-- `src-tauri/src/jsonl/reducer.rs` — emit a `PromptSignature` derived event
-  for every user turn (hash + structural flags only; never the text).
+- `src-tauri/src/jsonl/reducer.rs` — emit a `PromptTurn` derived event
+  for every user turn (text + norm hash + structural flags).
+- `src-tauri/src/otlp/ingestor.rs` — drop the `user_prompt` body
+  redaction; write the body through to `log_events` and also emit a
+  `PromptTurn` row tagged `source = 'otlp'`.
+- `src-tauri/src/otlp/forwarder.rs` — new `redact_user_prompt` filter
+  pass on outgoing OTLP log records (see *Privacy & safety* rule 5).
 - `src-tauri/src/integration.rs` — call `coach::eval::evaluate_session` on
   SessionEnd, after existing writes.
 - `src-tauri/src/jsonl/runner.rs` (or equivalent backfill driver) — call
@@ -880,9 +949,13 @@ of premature DSL design is not.
 - `src-tauri/tests/coach_scorer.rs` — AIEC-formula correctness +
   worked-example regression.
 - `src-tauri/tests/coach_skill.rs` — normaliser + discovery thresholds
-  + examples-on-disk reader.
-- `src-tauri/tests/coach_no_prompt_leak.rs` — privacy proptest (now
-  covers `prompt_signatures` + `skill_opportunities` columns too).
+  + examples endpoint.
+- `src-tauri/tests/forwarder_no_prompt_leak.rs` — proptest that the
+  forwarder strips `user_prompt` bodies before sending.
+- `src-tauri/tests/jsonl_privacy.rs` — **delete** the assertions that
+  prompts never appear in `prompt_turns.text` or `log_events.body`;
+  rewrite to assert the forwarder redaction instead. The privacy
+  invariant has moved from the local DB to the network egress point.
 
 **Angular**
 
@@ -900,14 +973,24 @@ of premature DSL design is not.
 - `web/src/app/core/icons.ts` — register `graduation-cap` and
   `lightbulb` (Skill Finder).
 
-**Docs**
+**Docs (canonical privacy-contract edits in the same PR)**
 
-- `docs/features.md` — new Coach section, between Efficiency and Sessions.
-- `docs/architecture.md` — one paragraph under "SQLite schema" for the two
-  new tables; one sentence in "Process model" about the re-evaluator task.
+- `CLAUDE.md` — rule 2 under "Privacy guarantees the code must keep" is
+  replaced with: *"Prompts persisted to the local DB never leave it. The
+  forwarder strips `user_prompt` bodies before re-emitting."* Out-of-scope
+  list is unchanged.
+- `docs/architecture.md` §"Privacy & safety rules" — item 2 rewritten to
+  match (prompts allowed at rest; forwarder strips them on egress).
+  §"SQLite schema" — one row each for `prompt_turns` and
+  `skill_opportunities`, one row updated for `log_events` (no longer
+  redacted). §"Process model" — one sentence on the coach re-evaluator.
+- `docs/features.md` — new Coach section, between Efficiency and Sessions,
+  including the Skill Finder sub-page.
 - `README.md` — one bullet in the page list ("**Coach** — anti-pattern
-  rules and practice-area scorecards (experimental)") and Microsoft AIEC
-  attribution near the License section.
+  rules, practice-area scorecards, and a Skill Finder for repeated
+  prompts (experimental)"), the Privacy section's "Raw user prompts are
+  never persisted…" bullet replaced with the new posture, and Microsoft
+  AIEC attribution near the License section.
 
 ## Risks
 
@@ -924,10 +1007,15 @@ of premature DSL design is not.
   deliberate ("which kind of question?" not "which exact question?"), but
   if hashes fragment too much in practice, we can extend the normaliser
   in a point release without a migration — the hash key is hard-coded.
-- **JSONL files can be large.** On-demand example reads grep through
-  `~/.claude/projects/<slug>/*.jsonl`. We bound the search by the session
-  ids inside the matching `prompt_signatures` rows, so the read is
-  O(matching sessions × file size), not whole-tree.
+- **`prompt_turns` will grow large.** Long-running users may accumulate
+  hundreds of thousands of rows. The table is indexed on `norm_hash` and
+  on `(session_id, ts)` — the two access paths Skill Finder needs. We
+  do not paginate prompts in the API; the examples endpoint always
+  returns at most `limit` rows (default 3). If the DB grows unwieldy in
+  practice, a future migration can prune `prompt_turns` rows whose
+  session is older than the longest configured look-back (180d) and
+  whose hash has zero open `skill_opportunities`. Out of scope for
+  Phase 1 — let's see the real numbers first.
 - **AIEC drifts and our port goes stale.** AIEC's rule set will evolve.
   Each ported rule's `aiec_origin` tag makes the mapping greppable; a
   periodic "AIEC sync" pass can pull new rules in. We are not promising
