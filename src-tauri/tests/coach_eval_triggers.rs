@@ -46,9 +46,14 @@ async fn jsonl_backfill_completion_runs_evaluator_and_discovery() {
     std::fs::write(&p, jsonl).unwrap();
 
     let ingestor = common::test_ingestor(&pool);
-    andon_lib::jsonl::backfill(&pool, &ingestor, dir.path())
-        .await
-        .unwrap();
+    andon_lib::jsonl::backfill(
+        &pool,
+        &ingestor,
+        dir.path(),
+        &andon_lib::settings::CoachSettings::default(),
+    )
+    .await
+    .unwrap();
 
     let n_findings: i64 = pool
         .get()

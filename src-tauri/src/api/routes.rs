@@ -2574,13 +2574,14 @@ async fn jsonl_backfill(State(state): State<ApiState>) -> axum::response::Respon
     };
     let claude_home = home.join(".claude");
     let pool = std::sync::Arc::clone(&state.pool);
+    let coach_settings = state.settings.coach();
     let ingestor = crate::otlp::ingestor::Ingestor::new(
         std::sync::Arc::clone(&state.pool),
         state.control.clone(),
         state.diagnostics.clone(),
-        state.settings.coach(),
+        coach_settings.clone(),
     );
-    match crate::jsonl::backfill(&pool, &ingestor, &claude_home).await {
+    match crate::jsonl::backfill(&pool, &ingestor, &claude_home, &coach_settings).await {
         Ok(stats) => Json(crate::api::dto::JsonlBackfillResponse::from(stats)).into_response(),
         Err(e) => {
             tracing::error!(error = ?e, "jsonl backfill failed");

@@ -4,7 +4,7 @@ use std::fs;
 use std::path::Path;
 use std::sync::Arc;
 
-use andon_lib::jsonl;
+use andon_lib::{jsonl, settings::CoachSettings};
 use common::{fixture_pool, test_ingestor};
 
 fn write_transcript(dir: &Path, slug: &str, lines: &[&str]) {
@@ -24,7 +24,7 @@ async fn backfill_processes_synthetic_session() {
     ]);
 
     let pool_arc = Arc::clone(&pool);
-    let stats = jsonl::backfill(&pool_arc, &ing, home.path())
+    let stats = jsonl::backfill(&pool_arc, &ing, home.path(), &CoachSettings::default())
         .await
         .unwrap();
     assert_eq!(stats.files_processed, 1);
@@ -65,8 +65,8 @@ async fn backfill_is_idempotent() {
     );
     let pool_arc = Arc::clone(&pool);
 
-    let s1 = jsonl::backfill(&pool_arc, &ing, home.path()).await.unwrap();
-    let s2 = jsonl::backfill(&pool_arc, &ing, home.path()).await.unwrap();
+    let s1 = jsonl::backfill(&pool_arc, &ing, home.path(), &CoachSettings::default()).await.unwrap();
+    let s2 = jsonl::backfill(&pool_arc, &ing, home.path(), &CoachSettings::default()).await.unwrap();
 
     let conn = pool.get().unwrap();
     let sessions: i64 = conn
@@ -127,8 +127,8 @@ async fn backfill_counts_multi_record_request_once() {
     ]);
 
     let pool_arc = Arc::clone(&pool);
-    jsonl::backfill(&pool_arc, &ing, home.path()).await.unwrap();
-    jsonl::backfill(&pool_arc, &ing, home.path()).await.unwrap();
+    jsonl::backfill(&pool_arc, &ing, home.path(), &CoachSettings::default()).await.unwrap();
+    jsonl::backfill(&pool_arc, &ing, home.path(), &CoachSettings::default()).await.unwrap();
 
     let conn = pool.get().unwrap();
     // 1M input tokens of opus-4-7 = $15.00, counted exactly once despite 3 records
@@ -161,7 +161,7 @@ async fn reingest_of_grown_transcript_adds_new_turns() {
         r#"{"type":"assistant","sessionId":"sG","requestId":"req_g1","timestamp":"2026-05-19T10:00:01.000Z","message":{"role":"assistant","model":"claude-opus-4-7","usage":{"input_tokens":1000000,"output_tokens":0}}}"#,
     ]);
     let pool_arc = Arc::clone(&pool);
-    jsonl::backfill(&pool_arc, &ing, home.path()).await.unwrap();
+    jsonl::backfill(&pool_arc, &ing, home.path(), &CoachSettings::default()).await.unwrap();
 
     // The session resumes — the transcript file grows a second API call.
     write_transcript(home.path(), "g", &[
@@ -169,7 +169,7 @@ async fn reingest_of_grown_transcript_adds_new_turns() {
         r#"{"type":"assistant","sessionId":"sG","requestId":"req_g1","timestamp":"2026-05-19T10:00:01.000Z","message":{"role":"assistant","model":"claude-opus-4-7","usage":{"input_tokens":1000000,"output_tokens":0}}}"#,
         r#"{"type":"assistant","sessionId":"sG","requestId":"req_g2","timestamp":"2026-05-19T10:00:02.000Z","message":{"role":"assistant","model":"claude-opus-4-7","usage":{"input_tokens":1000000,"output_tokens":0}}}"#,
     ]);
-    jsonl::backfill(&pool_arc, &ing, home.path()).await.unwrap();
+    jsonl::backfill(&pool_arc, &ing, home.path(), &CoachSettings::default()).await.unwrap();
 
     let conn = pool.get().unwrap();
     let cost_rows: i64 = conn
@@ -191,7 +191,7 @@ async fn backfill_records_api_call_count() {
     ]);
 
     let pool_arc = Arc::clone(&pool);
-    jsonl::backfill(&pool_arc, &ing, home.path()).await.unwrap();
+    jsonl::backfill(&pool_arc, &ing, home.path(), &CoachSettings::default()).await.unwrap();
 
     let conn = pool.get().unwrap();
     let api_calls: i64 = conn

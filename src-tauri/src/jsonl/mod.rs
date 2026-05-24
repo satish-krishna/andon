@@ -15,6 +15,7 @@ use rusqlite::params;
 
 use crate::db::DbPool;
 use crate::otlp::ingestor::Ingestor;
+use crate::settings::CoachSettings;
 
 #[derive(Debug, Clone, Default, serde::Serialize)]
 pub struct IngestStats {
@@ -29,11 +30,12 @@ pub struct IngestStats {
     pub duration_ms: i64,
 }
 
-#[tracing::instrument(skip(pool, ingestor))]
+#[tracing::instrument(skip(pool, ingestor, coach_settings))]
 pub async fn backfill(
     pool: &Arc<DbPool>,
     ingestor: &Ingestor,
     claude_home: &Path,
+    coach_settings: &CoachSettings,
 ) -> Result<IngestStats> {
     let started_at = now_ms();
     let run_id = insert_run(pool, "backfill", started_at)?;
@@ -57,6 +59,19 @@ pub async fn backfill(
     }
     stats.duration_ms = now_ms() - started_at;
     finalise_run(pool, run_id, &stats)?;
+
+    // Post-backfill coach hook: evaluate the window covered by the ingest,
+    // then run skill discovery. Both are best-effort — failures are logged,
+    // never propagated.
+    let now = now_ms();
+    let day = 86_400_000i64;
+    if let Err(e) = crate::coach::eval::evaluate_window(pool, now - 30 * day, now + 1, coach_settings) {
+        tracing::warn!(error = ?e, "coach evaluate_window after backfill failed");
+    }
+    if let Err(e) = crate::coach::skill::discover_all(pool, coach_settings) {
+        tracing::warn!(error = ?e, "coach skill::discover_all after backfill failed");
+    }
+
     Ok(stats)
 }
 
