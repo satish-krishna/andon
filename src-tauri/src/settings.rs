@@ -38,6 +38,18 @@ impl Default for BudgetSettings {
     }
 }
 
+/// Coach feature settings — vocabulary lists and Skill Finder thresholds.
+///
+/// `planning_keywords` and `constraint_keywords` deliberately share words
+/// like `must` / `should` / `ensure`. The two lists feed *different* rules
+/// operating on *different* signals: `planning_keywords` is matched against
+/// a session's first user turn only (powers `low-spec-rate`), while
+/// `constraint_keywords` is matched against every turn at ingest time to
+/// set the `prompt_turns.has_constraint` flag (powers `low-constraint-usage`).
+/// The overlap is intentional — a turn like "this must be idempotent" is
+/// legitimately *both* a constrained turn and a spec-driven opener.
+/// Upstream AIEC's `no-spec-driven-development` rule uses the same
+/// modal-verb vocabulary for the same reason.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct CoachSettings {
     pub skill_min_occurrences: u32,
