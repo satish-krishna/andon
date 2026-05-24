@@ -33,18 +33,6 @@ pub fn evaluate_window(
     Ok(())
 }
 
-/// Convenience wrapper: run `evaluate_window` over the last 30 days.
-#[instrument(skip(pool, coach_settings))]
-pub fn evaluate_session(
-    pool: &Arc<DbPool>,
-    _session_id: &str,
-    coach_settings: &crate::settings::CoachSettings,
-) -> Result<()> {
-    let now = chrono::Utc::now().timestamp_millis();
-    let win = Window { from_ms: now - 30 * 86_400_000, to_ms: now, models: None };
-    evaluate_window(pool, &win, coach_settings)
-}
-
 fn enabled_rule_ids(pool: &Arc<DbPool>) -> Result<HashSet<String>> {
     let conn = pool.get()?;
     let mut stmt = conn.prepare("SELECT id FROM coach_rules WHERE enabled = 1")?;
