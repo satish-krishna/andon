@@ -210,6 +210,42 @@ CREATE UNIQUE INDEX coach_findings_unique
 CREATE INDEX coach_findings_session ON coach_findings(session_id);
 "#;
 
+const MIGRATION_V8: &str = r#"
+CREATE TABLE prompt_turns (
+  session_id   TEXT NOT NULL,
+  request_id   TEXT,
+  turn_index   INTEGER NOT NULL,
+  ts           INTEGER NOT NULL,
+  source       TEXT NOT NULL,
+  text         TEXT NOT NULL,
+  norm_hash    TEXT NOT NULL,
+  command      TEXT,
+  length       INTEGER NOT NULL,
+  has_file_ref INTEGER NOT NULL,
+  has_code     INTEGER NOT NULL,
+  PRIMARY KEY (session_id, turn_index),
+  FOREIGN KEY (session_id) REFERENCES sessions(session_id) ON DELETE CASCADE
+);
+CREATE INDEX prompt_turns_hash    ON prompt_turns(norm_hash);
+CREATE INDEX prompt_turns_session ON prompt_turns(session_id, ts);
+
+CREATE TABLE skill_opportunities (
+  id             INTEGER PRIMARY KEY AUTOINCREMENT,
+  norm_hash      TEXT NOT NULL,
+  label          TEXT NOT NULL,
+  command        TEXT,
+  occurrences    INTEGER NOT NULL,
+  session_count  INTEGER NOT NULL,
+  first_seen     INTEGER NOT NULL,
+  last_seen      INTEGER NOT NULL,
+  window_start   INTEGER NOT NULL,
+  window_end     INTEGER NOT NULL,
+  computed_at    INTEGER NOT NULL
+);
+CREATE UNIQUE INDEX skill_opportunities_unique
+  ON skill_opportunities(norm_hash, window_start, window_end);
+"#;
+
 const MIGRATIONS: &[(i32, &str)] = &[
     (1, MIGRATION_V1),
     (2, MIGRATION_V2),
@@ -218,6 +254,7 @@ const MIGRATIONS: &[(i32, &str)] = &[
     (5, MIGRATION_V5),
     (6, MIGRATION_V6),
     (7, MIGRATION_V7),
+    (8, MIGRATION_V8),
 ];
 
 pub fn apply(conn: &mut Connection) -> Result<()> {
@@ -401,5 +438,36 @@ mod tests {
             .map(|r| r.unwrap()).collect();
         assert!(idxs.contains(&"coach_findings_unique".to_string()));
         assert!(idxs.contains(&"coach_findings_session".to_string()));
+    }
+
+    #[test]
+    fn v8_creates_prompt_turns_and_skill_tables() {
+        let mut conn = Connection::open_in_memory().unwrap();
+        apply(&mut conn).unwrap();
+
+        for tbl in ["prompt_turns", "skill_opportunities"] {
+            let n: i64 = conn.query_row(
+                "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name=?1",
+                [tbl], |r| r.get(0),
+            ).unwrap();
+            assert_eq!(n, 1, "missing table {tbl}");
+        }
+
+        // prompt_turns columns (without has_constraint — that's V9)
+        let cols: Vec<String> = conn.prepare("PRAGMA table_info(prompt_turns)").unwrap()
+            .query_map([], |r| r.get::<_, String>(1)).unwrap()
+            .map(|r| r.unwrap()).collect();
+        for c in ["session_id","request_id","turn_index","ts","source","text",
+                 "norm_hash","command","length","has_file_ref","has_code"] {
+            assert!(cols.contains(&c.to_string()), "missing prompt_turns column {c}");
+        }
+
+        let idxs: Vec<String> = conn
+            .prepare("SELECT name FROM sqlite_master WHERE type='index'").unwrap()
+            .query_map([], |r| r.get::<_, String>(0)).unwrap()
+            .map(|r| r.unwrap()).collect();
+        assert!(idxs.contains(&"prompt_turns_hash".to_string()));
+        assert!(idxs.contains(&"prompt_turns_session".to_string()));
+        assert!(idxs.contains(&"skill_opportunities_unique".to_string()));
     }
 }
