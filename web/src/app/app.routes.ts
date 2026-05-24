@@ -51,4 +51,9 @@ export const routes: Routes = [
     loadComponent: () =>
       import('./features/coach/coach.component').then((m) => m.CoachComponent),
   },
+  {
+    path: 'coach/skills',
+    loadComponent: () =>
+      import('./features/coach/coach-skills.component').then((m) => m.CoachSkillsComponent),
+  },
 ];
