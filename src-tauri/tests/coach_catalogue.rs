@@ -53,3 +53,25 @@ async fn seed_rules_preserves_user_disabled_state() {
     ).unwrap();
     assert_eq!(enabled, 0, "second seed must not clobber user's disable");
 }
+
+#[tokio::test]
+async fn seed_rules_refreshes_metadata_but_preserves_enabled() {
+    let (pool, _dir) = common::fixture_pool();
+    andon_lib::coach::seed_rules(&pool).unwrap();
+    // Manually clobber the severity to simulate stale metadata from an older release,
+    // and disable a rule to simulate user action.
+    pool.get().unwrap().execute(
+        "UPDATE coach_rules SET severity = 'low', enabled = 0 WHERE id = 'lazy-prompting'",
+        []
+    ).unwrap();
+    // Re-seed.
+    andon_lib::coach::seed_rules(&pool).unwrap();
+    // Metadata should be refreshed back to RULES' canonical value ('medium'),
+    // but `enabled` should remain 0 (user's preference).
+    let (sev, enabled): (String, i64) = pool.get().unwrap().query_row(
+        "SELECT severity, enabled FROM coach_rules WHERE id = 'lazy-prompting'",
+        [], |r| Ok((r.get(0)?, r.get(1)?)),
+    ).unwrap();
+    assert_eq!(sev, "medium", "metadata should refresh from RULES on re-seed");
+    assert_eq!(enabled, 0, "user's enabled toggle must survive re-seed");
+}

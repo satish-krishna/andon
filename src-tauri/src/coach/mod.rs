@@ -29,8 +29,11 @@ pub enum CoachError {
 
 pub type Result<T> = std::result::Result<T, CoachError>;
 
-/// Insert every entry in [`rules::RULES`] into `coach_rules` using
-/// `INSERT OR IGNORE`, so the user's enable/disable state survives upgrades.
+/// Insert every entry in [`rules::RULES`] into `coach_rules`, refreshing
+/// metadata (`practice`, `severity`, `kind`) on every run so the DB stays
+/// in sync with the static catalogue. The user's `enabled` toggle is
+/// intentionally excluded from the DO UPDATE SET clause so it survives
+/// upgrades.
 #[tracing::instrument(skip(pool))]
 pub fn seed_rules(pool: &Arc<rules::DbPool>) -> Result<()> {
     let now_ms = chrono::Utc::now().timestamp_millis();
@@ -43,9 +46,14 @@ pub fn seed_rules(pool: &Arc<rules::DbPool>) -> Result<()> {
             rules::RuleKind::Continuous => "continuous",
         };
         tx.execute(
-            "INSERT OR IGNORE INTO coach_rules
+            "INSERT INTO coach_rules
                (id, practice, severity, kind, enabled, updated_at)
-             VALUES (?1, ?2, ?3, ?4, 1, ?5)",
+             VALUES (?1, ?2, ?3, ?4, 1, ?5)
+             ON CONFLICT(id) DO UPDATE SET
+               practice   = excluded.practice,
+               severity   = excluded.severity,
+               kind       = excluded.kind,
+               updated_at = excluded.updated_at",
             rusqlite::params![r.id, r.practice, sev, kind, now_ms],
         )?;
     }
