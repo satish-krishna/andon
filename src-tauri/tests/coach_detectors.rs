@@ -221,6 +221,24 @@ async fn speed_accept_fires() {
 }
 
 #[tokio::test]
+async fn no_slash_commands_fires() {
+    let (pool, _dir) = common::fixture_pool();
+    andon_lib::coach::seed_rules(&pool).unwrap();
+    let now = chrono::Utc::now().timestamp_millis();
+    pool.get().unwrap().execute(
+        "INSERT INTO sessions (session_id, started_at, ended_at) VALUES ('s1', ?1, ?2)",
+        params![now - 45*60_000, now],
+    ).unwrap();
+    enable_only(&pool, &["no-slash-commands"]);
+    let win = Window { from_ms: 0, to_ms: now + 1, models: None };
+    engine::evaluate_window(&pool, &win).unwrap();
+    let n: i64 = pool.get().unwrap().query_row(
+        "SELECT COUNT(*) FROM coach_findings WHERE rule_id = 'no-slash-commands'",
+        [], |r| r.get(0)).unwrap();
+    assert_eq!(n, 1);
+}
+
+#[tokio::test]
 async fn abandon_sessions_fires() {
     let (pool, _dir) = common::fixture_pool();
     andon_lib::coach::seed_rules(&pool).unwrap();

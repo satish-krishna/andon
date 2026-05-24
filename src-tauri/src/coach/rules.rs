@@ -387,6 +387,31 @@ pub fn detect_speed_accept(pool: &std::sync::Arc<DbPool>, window: &Window) -> cr
     }).collect())
 }
 
+/// Fires for sessions longer than 30 minutes with zero slash commands.
+pub fn detect_no_slash_commands(pool: &std::sync::Arc<DbPool>, window: &Window) -> crate::coach::Result<Vec<Finding>> {
+    let conn = pool.get()?;
+    let thirty_min: i64 = 30 * 60 * 1000;
+    let mut stmt = conn.prepare(
+        "SELECT s.session_id, s.ended_at
+         FROM sessions s
+         LEFT JOIN (SELECT session_id, COUNT(*) AS n FROM slash_commands GROUP BY session_id) sc
+           ON sc.session_id = s.session_id
+         WHERE s.started_at >= ?1 AND s.started_at < ?2
+           AND s.ended_at IS NOT NULL
+           AND (s.ended_at - s.started_at) > ?3
+           AND COALESCE(sc.n, 0) = 0",
+    )?;
+    let rows = stmt.query_map(rusqlite::params![window.from_ms, window.to_ms, thirty_min], |r| {
+        Ok((r.get::<_, String>(0)?, r.get::<_, i64>(1)?))
+    })?;
+    Ok(rows.filter_map(|r| r.ok()).map(|(sid, ts)| Finding {
+        rule_id: "no-slash-commands".into(),
+        session_id: sid,
+        detected_at: ts,
+        payload_json: "{}".into(),
+    }).collect())
+}
+
 /// Fires when >=3 sessions in the window have tool decisions but zero accepts.
 pub fn detect_abandon_sessions(pool: &std::sync::Arc<DbPool>, window: &Window) -> crate::coach::Result<Vec<Finding>> {
     let conn = pool.get()?;
