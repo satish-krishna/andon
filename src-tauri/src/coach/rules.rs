@@ -346,6 +346,14 @@ pub fn detect_long_session_no_commit(pool: &std::sync::Arc<DbPool>, window: &Win
 /// Fires when >=5 sessions in the window started between 23:00 and 05:00 local time.
 pub fn detect_late_night_coding(pool: &std::sync::Arc<DbPool>, window: &Window) -> crate::coach::Result<Vec<Finding>> {
     let conn = pool.get()?;
+    // SQLite's `'localtime'` resolves the session's started_at against the
+    // HOST OS's current timezone. We don't store the user's local offset
+    // at session-end time, so this is a best-effort approximation: on a
+    // user's own machine it matches their wall-clock; on a build server or
+    // CI box (typically UTC) the "late night" hours shift accordingly.
+    // For Andon's single-user, local-only product this is the right trade —
+    // the rule fires on the user's-own-late-night, which is what users
+    // care about.
     let mut stmt = conn.prepare(
         "SELECT session_id, started_at
          FROM sessions
