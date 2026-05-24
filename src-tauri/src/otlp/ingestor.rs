@@ -160,17 +160,10 @@ impl Ingestor {
                         .as_ref()
                         .and_then(|b| anyvalue_to_string(b.value.as_ref()));
 
-                    // Privacy guarantee: never persist raw user prompt content.
-                    // For user_prompt events: drop the body and redact the
-                    // "prompt" attribute value before writing to log_events.
-                    let (body_str, attrs_json) = if event_name == "user_prompt" {
-                        (
-                            None,
-                            attrs_to_json_redacted(&record.attributes, &["prompt"]),
-                        )
-                    } else {
-                        (raw_body_str, attrs_to_json(&record.attributes))
-                    };
+                    // Privacy amendment (see docs/superpowers/specs/2026-05-24-ai-engineering-coach-integration-design.md
+                    // §Privacy contract amendment): prompts are now allowed at rest. The
+                    // forwarder strips them on egress (src/otlp/forwarder.rs::redact_user_prompt).
+                    let (body_str, attrs_json) = (raw_body_str, attrs_to_json(&record.attributes));
 
                     // 1. Always persist a (possibly redacted) copy.
                     let _ = tx.execute(
