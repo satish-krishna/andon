@@ -410,11 +410,39 @@ impl Ingestor {
                         params![parent_id, child_id, subagent_type, started_at],
                     );
                 }
-                // Task C1 will wire PromptTurn → prompt_turns table.
-                // For now we accept the event (so routing doesn't break) and
-                // discard it — the reducer already emits it and mod.rs routes
-                // it to the correct session bucket.
-                E::PromptTurn { .. } => {}
+                E::PromptTurn {
+                    session_id,
+                    request_id,
+                    turn_index,
+                    ts_ms,
+                    text,
+                    norm_hash,
+                    command,
+                    length,
+                    has_file_ref,
+                    has_code,
+                    has_constraint,
+                } => {
+                    let _ = tx.execute(
+                        "INSERT OR IGNORE INTO prompt_turns
+                           (session_id, request_id, turn_index, ts, source, text,
+                            norm_hash, command, length, has_file_ref, has_code, has_constraint)
+                         VALUES (?1, ?2, ?3, ?4, 'jsonl', ?5, ?6, ?7, ?8, ?9, ?10, ?11)",
+                        params![
+                            session_id,
+                            request_id,
+                            turn_index,
+                            ts_ms,
+                            text,
+                            norm_hash,
+                            command,
+                            length,
+                            *has_file_ref as i64,
+                            *has_code as i64,
+                            *has_constraint as i64,
+                        ],
+                    );
+                }
             }
         }
         tx.commit()?;
