@@ -79,3 +79,36 @@ pub fn practice_score(pool: &Arc<DbPool>, practice: &str, window: &Window) -> Re
         triggered_count: triggered_ids.len() as i64,
     })
 }
+
+pub fn trends_wow(pool: &Arc<DbPool>, practice: &str, now_ms: i64) -> Result<i64> {
+    let day = 86_400_000i64;
+    let last  = count_findings(pool, practice, now_ms - 7*day, now_ms)?;
+    let prev  = count_findings(pool, practice, now_ms - 14*day, now_ms - 7*day)?;
+    Ok(if prev > 0 { (((last - prev) as f64 / prev as f64) * 100.0).round() as i64 } else { 0 })
+}
+
+pub fn trends_mom(pool: &Arc<DbPool>, practice: &str, now_ms: i64) -> Result<i64> {
+    let day = 86_400_000i64;
+    let week_sum = |from: i64, to: i64| -> Result<f64> {
+        count_findings(pool, practice, from, to).map(|n| n as f64)
+    };
+    let recent: f64 = (0..4).map(|w|
+        week_sum(now_ms - (w+1)*7*day, now_ms - w*7*day).unwrap_or(0.0)
+    ).sum::<f64>() / 4.0;
+    let prior: f64 = (4..8).map(|w|
+        week_sum(now_ms - (w+1)*7*day, now_ms - w*7*day).unwrap_or(0.0)
+    ).sum::<f64>() / 4.0;
+    Ok(if prior > 0.0 { (((recent - prior) / prior) * 100.0).round() as i64 } else { 0 })
+}
+
+fn count_findings(pool: &Arc<DbPool>, practice: &str, from_ms: i64, to_ms: i64) -> Result<i64> {
+    let conn = pool.get()?;
+    let n: i64 = conn.query_row(
+        "SELECT COUNT(*) FROM coach_findings cf
+         JOIN coach_rules cr ON cr.id = cf.rule_id
+         WHERE cr.practice = ?1 AND cf.detected_at >= ?2 AND cf.detected_at < ?3",
+        rusqlite::params![practice, from_ms, to_ms],
+        |r| r.get(0),
+    ).unwrap_or(0);
+    Ok(n)
+}

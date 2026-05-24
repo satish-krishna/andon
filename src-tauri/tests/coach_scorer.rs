@@ -1,6 +1,7 @@
 mod common;
 
 use andon_lib::coach::{rules::Window, score};
+use rusqlite::params;
 
 #[tokio::test]
 async fn worked_example_three_detectors_one_high_triggers_67() {
@@ -47,4 +48,36 @@ async fn clean_practice_scores_100() {
     assert_eq!(s.score, Some(100));
     assert_eq!(s.status, "good");
     assert_eq!(s.triggered_count, 0);
+}
+
+#[tokio::test]
+async fn wow_pct_correct_signed_integer() {
+    let (pool, _dir) = common::fixture_pool();
+    andon_lib::coach::seed_rules(&pool).unwrap();
+
+    let now = chrono::Utc::now().timestamp_millis();
+    let day = 86_400_000i64;
+    let conn = pool.get().unwrap();
+    conn.execute("INSERT INTO sessions (session_id, started_at) VALUES ('s1', ?1)", params![now - 14*day]).unwrap();
+    // Last 7d: 10 findings; prior 7d: 8 findings → wow = +25
+    for i in 0..10 {
+        conn.execute("INSERT INTO coach_findings (rule_id, session_id, detected_at, payload)
+                      VALUES ('lazy-prompting', 's1', ?1, '{}')", params![now - (1+i) * 3600_000]).unwrap();
+    }
+    for i in 0..8 {
+        conn.execute("INSERT INTO coach_findings (rule_id, session_id, detected_at, payload)
+                      VALUES ('lazy-prompting', 's1', ?1, '{}')", params![now - 7*day - (1+i) * 3600_000]).unwrap();
+    }
+    drop(conn);
+    let wow = score::trends_wow(&pool, "prompt", now).unwrap();
+    assert_eq!(wow, 25);
+}
+
+#[tokio::test]
+async fn wow_pct_returns_zero_when_prev_is_zero() {
+    let (pool, _dir) = common::fixture_pool();
+    andon_lib::coach::seed_rules(&pool).unwrap();
+    let now = chrono::Utc::now().timestamp_millis();
+    let wow = score::trends_wow(&pool, "prompt", now).unwrap();
+    assert_eq!(wow, 0);
 }
