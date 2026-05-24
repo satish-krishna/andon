@@ -76,6 +76,7 @@ pub fn router(state: ApiState) -> Router {
         .route("/api/behaviour/subagents", get(behaviour_subagents))
         // Coach
         .route("/api/coach/scorecard", get(coach_scorecard))
+        .route("/api/coach/findings", get(coach_findings))
         .with_state(state)
 }
 
@@ -2853,6 +2854,75 @@ async fn behaviour_subagents(
 // ============================================================================
 // Coach endpoints (I1–I4)
 // ============================================================================
+
+#[derive(serde::Deserialize)]
+struct CoachFindingsQuery {
+    from: Option<i64>,
+    to: Option<i64>,
+    rule_id: Option<String>,
+    session_id: Option<String>,
+    limit: Option<i64>,
+    cursor: Option<i64>,
+}
+
+async fn coach_findings(
+    State(state): State<ApiState>,
+    Query(q): Query<CoachFindingsQuery>,
+) -> Result<Json<CoachFindingsResponse>, ApiError> {
+    let limit = q.limit.unwrap_or(50).clamp(1, 200);
+    let conn = state.pool.get().map_err(ApiError::pool)?;
+    let mut sql = String::from(
+        "SELECT cf.id, cf.rule_id, cr.practice, cr.severity, cf.session_id,
+                s.started_at, cf.detected_at, s.repo_name,
+                COALESCE((SELECT SUM(cost_usd) FROM cost_entries WHERE session_id = s.session_id), 0),
+                cf.payload
+         FROM coach_findings cf
+         JOIN coach_rules cr ON cr.id = cf.rule_id
+         JOIN sessions s ON s.session_id = cf.session_id
+         WHERE 1=1",
+    );
+    let mut binds: Vec<Box<dyn rusqlite::ToSql>> = vec![];
+    if let Some(f) = q.from { sql += " AND cf.detected_at >= ?"; binds.push(Box::new(f)); }
+    if let Some(t) = q.to   { sql += " AND cf.detected_at <  ?"; binds.push(Box::new(t)); }
+    if let Some(rid) = q.rule_id { sql += " AND cf.rule_id = ?"; binds.push(Box::new(rid)); }
+    if let Some(sid) = q.session_id { sql += " AND cf.session_id = ?"; binds.push(Box::new(sid)); }
+    if let Some(c) = q.cursor { sql += " AND cf.id < ?"; binds.push(Box::new(c)); }
+    sql += " ORDER BY cf.detected_at DESC, cf.id DESC LIMIT ?";
+    binds.push(Box::new(limit));
+
+    let bind_refs: Vec<&dyn rusqlite::ToSql> = binds.iter().map(|b| &**b).collect();
+    let mut stmt = conn.prepare(&sql)?;
+    let items: Vec<CoachFindingRow> = stmt
+        .query_map(bind_refs.as_slice(), |r| {
+            let payload_str: String = r.get(9)?;
+            let rule_id: String = r.get(1)?;
+            Ok((rule_id, payload_str, r.get::<_, i64>(0)?, r.get::<_, String>(2)?, r.get::<_, Option<String>>(3)?,
+                r.get::<_, String>(4)?, r.get::<_, i64>(5)?, r.get::<_, i64>(6)?,
+                r.get::<_, Option<String>>(7)?, r.get::<_, f64>(8)?))
+        })?
+        .filter_map(|r| r.ok())
+        .map(|(rule_id, payload_str, id, practice, severity, session_id, started_at, detected_at, repo, cost_usd)| {
+            let rule = crate::coach::rules::by_id(&rule_id);
+            CoachFindingRow {
+                id,
+                rule_id: rule_id.clone(),
+                practice,
+                severity,
+                session_id,
+                started_at,
+                detected_at,
+                repo,
+                cost_usd,
+                description: rule.map(|r| r.description.to_string()).unwrap_or_default(),
+                suggestion: rule.map(|r| r.suggestion.to_string()).unwrap_or_default(),
+                payload: serde_json::from_str(&payload_str).unwrap_or(serde_json::Value::Null),
+            }
+        })
+        .collect();
+
+    let next_cursor = if items.len() as i64 == limit { items.last().map(|f| f.id) } else { None };
+    Ok(Json(CoachFindingsResponse { items, next_cursor }))
+}
 
 async fn coach_scorecard(
     State(state): State<ApiState>,

@@ -275,6 +275,28 @@ pub struct CoachScorecardDto {
     pub sessions_in_window: i64,
 }
 
+#[derive(serde::Serialize)]
+pub struct CoachFindingRow {
+    pub id: i64,
+    pub rule_id: String,
+    pub practice: String,
+    pub severity: Option<String>,
+    pub session_id: String,
+    pub started_at: i64,
+    pub detected_at: i64,
+    pub repo: Option<String>,
+    pub cost_usd: f64,
+    pub description: String,
+    pub suggestion: String,
+    pub payload: serde_json::Value,
+}
+
+#[derive(serde::Serialize)]
+pub struct CoachFindingsResponse {
+    pub items: Vec<CoachFindingRow>,
+    pub next_cursor: Option<i64>,
+}
+
 // ---- Efficiency page DTOs ----
 
 #[derive(Debug, serde::Serialize)]
