@@ -61,4 +61,17 @@ export class CoachCardComponent {
   private persist(s: CoachSettings) {
     this.api.saveCoachSettings(s).subscribe(saved => this.settings.set(saved));
   }
+
+  groupedRules(): { practice: string; rules: CoachRule[] }[] {
+    const order = ['prompt', 'hygiene', 'review', 'tool', 'context'];
+    const by: Record<string, CoachRule[]> = {};
+    for (const r of this.rules()) (by[r.practice] ??= []).push(r);
+    return order.map(p => ({ practice: p, rules: by[p] ?? [] }));
+  }
+
+  toggleRule(id: string, enabled: boolean) {
+    this.api.updateCoachRule(id, enabled).subscribe(() => {
+      this.api.coachRules().subscribe(v => this.rules.set(v));
+    });
+  }
 }

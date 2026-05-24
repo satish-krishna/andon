@@ -59,5 +59,29 @@
       </div>
     }
     <!-- M4: Rules sub-section -->
+    <div>
+      <div class="text-xs font-medium mb-1">Rules</div>
+      @for (group of groupedRules(); track group.practice) {
+        <div class="border border-border/40 rounded p-2 mb-2">
+          <div class="text-[10px] uppercase tracking-wider text-muted mb-1">{{ group.practice }}</div>
+          <ul class="flex flex-col gap-1">
+            @for (r of group.rules; track r.id) {
+              <li class="flex items-center gap-2 text-xs">
+                @if (r.reserved) {
+                  <lucide-icon name="circle-slash" class="w-3.5 h-3.5 text-muted"></lucide-icon>
+                  <span class="text-muted line-through">{{ r.id }}</span>
+                  <span class="text-[10px] text-muted italic">data not captured yet</span>
+                } @else {
+                  <input type="checkbox" [checked]="r.enabled"
+                         (change)="toggleRule(r.id, $any($event.target).checked)">
+                  <span>{{ r.id }}</span>
+                  <span class="text-[10px] uppercase text-muted">{{ r.severity ?? r.kind }}</span>
+                }
+              </li>
+            }
+          </ul>
+        </div>
+      }
+    </div>
   </div>
 </section>
