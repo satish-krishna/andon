@@ -412,6 +412,29 @@ pub fn detect_no_slash_commands(pool: &std::sync::Arc<DbPool>, window: &Window) 
     }).collect())
 }
 
+// ---------------------------------------------------------------------------
+// E9: model-diversity (continuous) — returns a 0-100 score, not findings
+// ---------------------------------------------------------------------------
+
+/// Returns a 0–100 diversity score based on distinct models used in the window.
+/// 4+ models → 100, 3 → 80, 2 → 50, else → 20.
+pub fn score_model_diversity(pool: &std::sync::Arc<DbPool>, window: &Window) -> crate::coach::Result<i64> {
+    let conn = pool.get()?;
+    let n: i64 = conn.query_row(
+        "SELECT COUNT(DISTINCT model)
+         FROM cost_entries
+         WHERE timestamp >= ?1 AND timestamp < ?2",
+        rusqlite::params![window.from_ms, window.to_ms],
+        |r| r.get(0),
+    ).unwrap_or(0);
+    Ok(match n {
+        x if x >= 4 => 100,
+        3 => 80,
+        2 => 50,
+        _ => 20,
+    })
+}
+
 /// Fires when >=3 sessions in the window have tool decisions but zero accepts.
 pub fn detect_abandon_sessions(pool: &std::sync::Arc<DbPool>, window: &Window) -> crate::coach::Result<Vec<Finding>> {
     let conn = pool.get()?;

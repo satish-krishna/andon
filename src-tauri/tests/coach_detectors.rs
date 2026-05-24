@@ -261,3 +261,41 @@ async fn abandon_sessions_fires() {
         [], |r| r.get(0)).unwrap();
     assert_eq!(n, 1);
 }
+
+// ---------------------------------------------------------------------------
+// E9: model-diversity (continuous)
+// ---------------------------------------------------------------------------
+
+#[tokio::test]
+async fn model_diversity_score_four_models_is_100() {
+    let (pool, _dir) = common::fixture_pool();
+    andon_lib::coach::seed_rules(&pool).unwrap();
+    let now = chrono::Utc::now().timestamp_millis();
+    let conn = pool.get().unwrap();
+    conn.execute("INSERT INTO sessions (session_id, started_at) VALUES ('s1', ?1)", params![now-1000]).unwrap();
+    for m in ["claude-opus-4-7", "claude-sonnet-4-6", "claude-haiku-4-5", "claude-other"] {
+        conn.execute("INSERT INTO cost_entries (session_id, timestamp, model, cost_usd) VALUES ('s1', ?1, ?2, 0.1)",
+            params![now-500, m]).unwrap();
+    }
+    drop(conn);
+    let win = Window { from_ms: 0, to_ms: now + 1, models: None };
+    let score = andon_lib::coach::rules::score_model_diversity(&pool, &win).unwrap();
+    assert_eq!(score, 100);
+}
+
+#[tokio::test]
+async fn model_diversity_score_two_models_is_50() {
+    let (pool, _dir) = common::fixture_pool();
+    andon_lib::coach::seed_rules(&pool).unwrap();
+    let now = chrono::Utc::now().timestamp_millis();
+    let conn = pool.get().unwrap();
+    conn.execute("INSERT INTO sessions (session_id, started_at) VALUES ('s1', ?1)", params![now-1000]).unwrap();
+    for m in ["claude-opus-4-7", "claude-sonnet-4-6"] {
+        conn.execute("INSERT INTO cost_entries (session_id, timestamp, model, cost_usd) VALUES ('s1', ?1, ?2, 0.1)",
+            params![now-500, m]).unwrap();
+    }
+    drop(conn);
+    let win = Window { from_ms: 0, to_ms: now + 1, models: None };
+    let score = andon_lib::coach::rules::score_model_diversity(&pool, &win).unwrap();
+    assert_eq!(score, 50);
+}
