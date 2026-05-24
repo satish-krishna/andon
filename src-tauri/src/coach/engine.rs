@@ -63,6 +63,9 @@ fn write_findings(pool: &Arc<DbPool>, findings: &[Finding]) -> Result<()> {
 }
 
 /// Dispatch table — populated as detectors land in Section E.
-fn run_detector(_pool: &Arc<DbPool>, _rule: &Rule, _window: &Window) -> Result<Vec<Finding>> {
-    Ok(vec![])
+fn run_detector(pool: &Arc<DbPool>, rule: &Rule, window: &Window) -> Result<Vec<Finding>> {
+    match rule.id {
+        "repeated-prompts" => crate::coach::rules::detect_repeated_prompts(pool, window),
+        _ => Ok(vec![]),
+    }
 }

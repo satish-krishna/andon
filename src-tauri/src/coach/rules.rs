@@ -206,3 +206,41 @@ pub static RULES: &[Rule] = &[
 pub fn by_id(id: &str) -> Option<&'static Rule> {
     RULES.iter().find(|r| r.id == id)
 }
+
+// ---------------------------------------------------------------------------
+// Detector implementations (Section E — one function per rule)
+// ---------------------------------------------------------------------------
+
+/// Fires once per session when the same `norm_hash` appears 3 or more times.
+pub fn detect_repeated_prompts(pool: &std::sync::Arc<DbPool>, window: &Window) -> crate::coach::Result<Vec<Finding>> {
+    let conn = pool.get()?;
+    let mut stmt = conn.prepare(
+        "SELECT session_id, norm_hash, COUNT(*) AS n, MAX(ts) AS last_ts
+         FROM prompt_turns
+         JOIN sessions USING (session_id)
+         WHERE sessions.started_at >= ?1 AND sessions.started_at < ?2
+         GROUP BY session_id, norm_hash
+         HAVING n >= 3",
+    )?;
+    let rows = stmt.query_map(rusqlite::params![window.from_ms, window.to_ms], |r| {
+        let sid: String = r.get(0)?;
+        let hash: String = r.get(1)?;
+        let n: i64 = r.get(2)?;
+        let last_ts: i64 = r.get(3)?;
+        Ok((sid, hash, n, last_ts))
+    })?;
+    let mut out = vec![];
+    let mut sessions_seen = std::collections::HashSet::new();
+    for row in rows.filter_map(|r| r.ok()) {
+        if !sessions_seen.insert(row.0.clone()) {
+            continue;
+        }
+        out.push(Finding {
+            rule_id: "repeated-prompts".into(),
+            session_id: row.0,
+            detected_at: row.3,
+            payload_json: serde_json::json!({ "norm_hash": row.1, "count": row.2 }).to_string(),
+        });
+    }
+    Ok(out)
+}
