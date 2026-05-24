@@ -186,6 +186,30 @@ ALTER TABLE cost_entries ADD COLUMN is_subagent INTEGER NOT NULL DEFAULT 0;
 ALTER TABLE token_usage  ADD COLUMN is_subagent INTEGER NOT NULL DEFAULT 0;
 "#;
 
+const MIGRATION_V7: &str = r#"
+CREATE TABLE coach_rules (
+  id           TEXT PRIMARY KEY,
+  practice     TEXT NOT NULL,
+  severity     TEXT NOT NULL,
+  kind         TEXT NOT NULL,
+  enabled      INTEGER NOT NULL DEFAULT 1,
+  updated_at   INTEGER NOT NULL
+);
+
+CREATE TABLE coach_findings (
+  id          INTEGER PRIMARY KEY AUTOINCREMENT,
+  rule_id     TEXT NOT NULL,
+  session_id  TEXT NOT NULL,
+  detected_at INTEGER NOT NULL,
+  payload     TEXT NOT NULL DEFAULT '{}',
+  FOREIGN KEY (rule_id)    REFERENCES coach_rules(id)    ON DELETE CASCADE,
+  FOREIGN KEY (session_id) REFERENCES sessions(session_id) ON DELETE CASCADE
+);
+CREATE UNIQUE INDEX coach_findings_unique
+  ON coach_findings(rule_id, session_id, detected_at);
+CREATE INDEX coach_findings_session ON coach_findings(session_id);
+"#;
+
 const MIGRATIONS: &[(i32, &str)] = &[
     (1, MIGRATION_V1),
     (2, MIGRATION_V2),
@@ -193,6 +217,7 @@ const MIGRATIONS: &[(i32, &str)] = &[
     (4, MIGRATION_V4),
     (5, MIGRATION_V5),
     (6, MIGRATION_V6),
+    (7, MIGRATION_V7),
 ];
 
 pub fn apply(conn: &mut Connection) -> Result<()> {
@@ -260,7 +285,7 @@ mod tests {
         let v: i32 = conn.query_row(
             "SELECT MAX(version) FROM schema_version", [], |r| r.get(0)
         ).unwrap();
-        assert_eq!(v, 6);
+        assert_eq!(v, 9);
     }
 
     #[test]
@@ -271,7 +296,7 @@ mod tests {
         let v: i32 = conn.query_row(
             "SELECT MAX(version) FROM schema_version", [], |r| r.get(0)
         ).unwrap();
-        assert_eq!(v, 6);
+        assert_eq!(v, 9);
     }
 
     #[test]
@@ -302,7 +327,7 @@ mod tests {
         let v: i32 = conn.query_row(
             "SELECT MAX(version) FROM schema_version", [], |r| r.get(0),
         ).unwrap();
-        assert_eq!(v, 6);
+        assert_eq!(v, 9);
     }
 
     #[test]
@@ -335,7 +360,7 @@ mod tests {
         let v: i32 = conn.query_row(
             "SELECT MAX(version) FROM schema_version", [], |r| r.get(0),
         ).unwrap();
-        assert_eq!(v, 6);
+        assert_eq!(v, 9);
     }
 
     #[test]
@@ -354,6 +379,27 @@ mod tests {
         let v: i32 = conn.query_row(
             "SELECT MAX(version) FROM schema_version", [], |r| r.get(0),
         ).unwrap();
-        assert_eq!(v, 6);
+        assert_eq!(v, 9);
+    }
+
+    #[test]
+    fn v7_creates_coach_tables() {
+        let mut conn = Connection::open_in_memory().unwrap();
+        apply(&mut conn).unwrap();
+
+        for tbl in ["coach_rules", "coach_findings"] {
+            let n: i64 = conn.query_row(
+                "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name=?1",
+                [tbl], |r| r.get(0),
+            ).unwrap();
+            assert_eq!(n, 1, "missing table {tbl}");
+        }
+
+        let idxs: Vec<String> = conn
+            .prepare("SELECT name FROM sqlite_master WHERE type='index'").unwrap()
+            .query_map([], |r| r.get::<_, String>(0)).unwrap()
+            .map(|r| r.unwrap()).collect();
+        assert!(idxs.contains(&"coach_findings_unique".to_string()));
+        assert!(idxs.contains(&"coach_findings_session".to_string()));
     }
 }
