@@ -124,3 +124,30 @@ fn discover_window(pool: &Arc<DbPool>, settings: &CoachSettings, from_ms: i64, t
     tx.commit()?;
     Ok(())
 }
+
+// ---------------------------------------------------------------------------
+// G3: Examples reader
+// ---------------------------------------------------------------------------
+
+#[derive(Debug, serde::Serialize)]
+pub struct SkillExample {
+    pub session_id: String,
+    pub turn_index: i64,
+    pub ts: i64,
+    pub text: String,
+}
+
+pub fn examples_for_hash(pool: &Arc<DbPool>, norm_hash: &str, limit: i64) -> Result<Vec<SkillExample>> {
+    let conn = pool.get()?;
+    let mut stmt = conn.prepare(
+        "SELECT session_id, turn_index, ts, text
+         FROM prompt_turns
+         WHERE norm_hash = ?1
+         ORDER BY length ASC
+         LIMIT ?2",
+    )?;
+    let rows = stmt.query_map(rusqlite::params![norm_hash, limit], |r| Ok(SkillExample {
+        session_id: r.get(0)?, turn_index: r.get(1)?, ts: r.get(2)?, text: r.get(3)?,
+    }))?;
+    Ok(rows.filter_map(|r| r.ok()).collect())
+}

@@ -47,3 +47,21 @@ async fn discovery_idempotent() {
     let n2: i64 = pool.get().unwrap().query_row("SELECT COUNT(*) FROM skill_opportunities", [], |r| r.get(0)).unwrap();
     assert_eq!(n1, n2);
 }
+
+#[tokio::test]
+async fn examples_returns_shortest_first() {
+    let (pool, _dir) = common::fixture_pool();
+    let now = chrono::Utc::now().timestamp_millis();
+    let conn = pool.get().unwrap();
+    conn.execute("INSERT INTO sessions (session_id, started_at) VALUES ('s1', ?1)", params![now]).unwrap();
+    for (i, text) in [(0i64, "Package the extension"), (1, "package"), (2, "Package the extension please.")].iter() {
+        conn.execute(
+            "INSERT INTO prompt_turns (session_id, turn_index, ts, source, text, norm_hash, length, has_file_ref, has_code, has_constraint)
+             VALUES ('s1', ?1, ?2, 'jsonl', ?3, 'h1', ?4, 0, 0, 0)",
+            params![i, now + i*1000, text, text.chars().count() as i64]).unwrap();
+    }
+    drop(conn);
+    let examples = andon_lib::coach::skill::examples_for_hash(&pool, "h1", 3).unwrap();
+    assert_eq!(examples.len(), 3);
+    assert_eq!(examples[0].text, "package", "shortest first");
+}
