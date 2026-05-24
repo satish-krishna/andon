@@ -135,7 +135,8 @@ fn api_request_event_inserts_active_time_cli_row() {
 }
 
 // ---------------------------------------------------------------------------
-// user_prompt: inserts active_time row, does NOT persist prompt text
+// user_prompt: inserts active_time row; prompt text IS persisted at rest
+// (forwarder strips it on egress — see forwarder_no_prompt_leak.rs / B2-B3)
 // ---------------------------------------------------------------------------
 
 #[test]
@@ -163,64 +164,38 @@ fn user_prompt_event_inserts_active_time_user_row() {
     assert_eq!(kind, "user");
 }
 
-/// Privacy check: a `prompt` attribute on a `user_prompt` event must NOT be
-/// stored anywhere in the database. Raw user prompts are never persisted.
-/// The "prompt" key must still appear in attributes_json (with a redacted
-/// placeholder) so that key-existence and count analytics remain possible.
+/// Post-amendment behaviour (2026-05-24 privacy contract): a `prompt`
+/// attribute on a `user_prompt` event IS persisted in log_events.
+/// Redaction happens only at forwarder egress, not at ingest time.
+/// See `tests/otlp_user_prompt.rs` for the positive body-persistence test
+/// and `tests/forwarder_no_prompt_leak.rs` for the egress-strip invariant.
+///
+/// This test focuses on the ingest-path side-effects that are orthogonal to
+/// prompt content: the active_time row, the absence of a cost entry, and the
+/// absence of any dedicated prompt-storage table.
 #[test]
-fn user_prompt_raw_text_is_never_persisted() {
+fn user_prompt_ingest_path_side_effects_are_correct() {
     let (pool, _g) = common::fixture_pool();
     let ingestor = common::test_ingestor(&pool);
 
-    let secret = "super secret user input that must not land in DB";
+    let prompt_text = "some prompt text that is now allowed at rest";
     let payload = common::sample_export_logs(
-        vec![common::kv("session.id", "sess-privacy")],
+        vec![common::kv("session.id", "sess-prompt-side")],
         "user_prompt",
         vec![
-            common::kv("prompt", secret),
-            common::kv_int("prompt_length", secret.len() as i64),
+            common::kv("prompt", prompt_text),
+            common::kv_int("prompt_length", prompt_text.len() as i64),
         ],
     );
     ingestor.ingest_logs_v2(payload, "grpc").expect("ingest");
 
     let conn = pool.get().unwrap();
 
-    // Check log_events body and attributes_json columns.
-    let (body, attrs_json): (Option<String>, String) = conn
-        .query_row(
-            "SELECT body, attributes_json FROM log_events WHERE session_id = 'sess-privacy'",
-            [],
-            |r| Ok((r.get(0)?, r.get(1)?)),
-        )
-        .unwrap();
-
-    // Body must be NULL — raw prompt content is never written to log_events.body.
-    assert!(
-        body.is_none(),
-        "log_events.body must be NULL for user_prompt events, got: {body:?}"
-    );
-
-    // The secret must not appear anywhere in attributes_json.
-    assert!(
-        !attrs_json.contains(secret),
-        "raw prompt text found in log_events.attributes_json: {attrs_json}"
-    );
-
-    // The "prompt" key must still be present (with "[redacted]" value) so that
-    // key-existence and length-based analytics still work.
-    assert!(
-        attrs_json.contains("\"prompt\""),
-        "attributes_json must still contain the 'prompt' key: {attrs_json}"
-    );
-    assert!(
-        attrs_json.contains("[redacted]"),
-        "attributes_json 'prompt' value must be '[redacted]': {attrs_json}"
-    );
-
-    // One active_time row must still be written (prompt_length-based heuristic).
+    // One active_time row must be written (prompt_length-based heuristic).
+    // prompt_length = 44 chars → secs = max(44/5, 1) = 8.8
     let active_count: i64 = conn
         .query_row(
-            "SELECT COUNT(*) FROM active_time WHERE kind = 'user' AND session_id = 'sess-privacy'",
+            "SELECT COUNT(*) FROM active_time WHERE kind = 'user' AND session_id = 'sess-prompt-side'",
             [],
             |r| r.get(0),
         )
@@ -233,7 +208,8 @@ fn user_prompt_raw_text_is_never_persisted() {
         .unwrap();
     assert_eq!(cost_count, 0, "no cost entry should exist for a user_prompt event");
 
-    // Confirm no dedicated prompts / user_prompts table exists.
+    // Confirm no dedicated prompts / user_prompts table exists (prompts live
+    // in log_events.body and, once C1 lands, prompt_turns).
     let table_exists: i64 = conn
         .query_row(
             "SELECT COUNT(*) FROM sqlite_master \
@@ -245,45 +221,14 @@ fn user_prompt_raw_text_is_never_persisted() {
     assert_eq!(table_exists, 0, "no dedicated prompt-storage table should exist");
 }
 
-/// Privacy check: when the secret appears in the log record *body* (not just
-/// attributes), it must also be wiped for user_prompt events.
-#[test]
-fn user_prompt_body_text_is_never_persisted() {
-    let (pool, _g) = common::fixture_pool();
-    let ingestor = common::test_ingestor(&pool);
-
-    let secret = "another secret that must not land in DB via body";
-    // Build a payload where the body carries the secret text.
-    let payload = common::sample_export_logs_with_body(
-        vec![common::kv("session.id", "sess-privacy-body")],
-        "user_prompt",
-        secret,
-        vec![common::kv_int("prompt_length", secret.len() as i64)],
-    );
-    ingestor.ingest_logs_v2(payload, "grpc").expect("ingest");
-
-    let conn = pool.get().unwrap();
-
-    let (body, attrs_json): (Option<String>, String) = conn
-        .query_row(
-            "SELECT body, attributes_json FROM log_events WHERE session_id = 'sess-privacy-body'",
-            [],
-            |r| Ok((r.get(0)?, r.get(1)?)),
-        )
-        .unwrap();
-
-    // Body must be NULL — raw prompt content is never written to log_events.body.
-    assert!(
-        body.is_none(),
-        "log_events.body must be NULL for user_prompt events even when set on the record, got: {body:?}"
-    );
-
-    // Secret must not appear in attributes_json either.
-    assert!(
-        !attrs_json.contains(secret),
-        "raw prompt body text found in log_events.attributes_json: {attrs_json}"
-    );
-}
+// `user_prompt_raw_text_is_never_persisted` and
+// `user_prompt_body_text_is_never_persisted` were removed on 2026-05-24.
+// The invariant they asserted ("body must be NULL / secret must not appear")
+// was intentionally inverted by the privacy-contract amendment: prompts are
+// now persisted at rest in log_events.body so that Skill Finder and coach
+// detectors can read them. Egress redaction in the forwarder (forwarder.rs
+// ::redact_user_prompt) is the trust boundary, tested by
+// tests/forwarder_no_prompt_leak.rs (B3) and inline tests in forwarder.rs (B2).
 
 // ---------------------------------------------------------------------------
 // tool_decision / tool_result: inserts tool_decisions rows
