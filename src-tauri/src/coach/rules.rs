@@ -341,3 +341,30 @@ pub fn detect_late_night_coding(pool: &std::sync::Arc<DbPool>, window: &Window) 
         payload_json: serde_json::json!({ "count": late.len() }).to_string(),
     }])
 }
+
+/// Fires when >=3 sessions in the window have tool decisions but zero accepts.
+pub fn detect_abandon_sessions(pool: &std::sync::Arc<DbPool>, window: &Window) -> crate::coach::Result<Vec<Finding>> {
+    let conn = pool.get()?;
+    let mut stmt = conn.prepare(
+        "SELECT s.session_id, s.started_at
+         FROM sessions s
+         JOIN (
+           SELECT session_id, COUNT(*) AS total,
+                  SUM(CASE WHEN decision='accept' THEN 1 ELSE 0 END) AS accepts
+           FROM tool_decisions GROUP BY session_id
+         ) td ON td.session_id = s.session_id
+         WHERE s.started_at >= ?1 AND s.started_at < ?2
+           AND td.total > 0 AND td.accepts = 0",
+    )?;
+    let abandoned: Vec<(String, i64)> = stmt.query_map(rusqlite::params![window.from_ms, window.to_ms], |r| {
+        Ok((r.get::<_, String>(0)?, r.get::<_, i64>(1)?))
+    })?.filter_map(|r| r.ok()).collect();
+    if abandoned.len() < 3 { return Ok(vec![]); }
+    let latest = abandoned.iter().max_by_key(|(_, ts)| *ts).unwrap();
+    Ok(vec![Finding {
+        rule_id: "abandon-sessions".into(),
+        session_id: latest.0.clone(),
+        detected_at: latest.1,
+        payload_json: serde_json::json!({ "count": abandoned.len() }).to_string(),
+    }])
+}
