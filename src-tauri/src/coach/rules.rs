@@ -60,6 +60,7 @@ pub struct Finding {
     pub payload_json: String,
 }
 
+#[derive(Debug)]
 pub struct Window {
     pub from_ms: i64,
     pub to_ms: i64,
