@@ -110,3 +110,106 @@ async fn low_constraint_usage_fires_below_twenty_percent() {
         [], |r| r.get(0)).unwrap();
     assert_eq!(n, 1);
 }
+
+// ---------------------------------------------------------------------------
+// E4: long-session-no-commit
+// ---------------------------------------------------------------------------
+
+#[tokio::test]
+async fn long_session_no_commit_fires() {
+    let (pool, _dir) = common::fixture_pool();
+    andon_lib::coach::seed_rules(&pool).unwrap();
+    let now = chrono::Utc::now().timestamp_millis();
+    let two_hours = 120 * 60 * 1000;
+    pool.get().unwrap().execute(
+        "INSERT INTO sessions (session_id, started_at, ended_at) VALUES ('s1', ?1, ?2)",
+        params![now - two_hours, now],
+    ).unwrap();
+    enable_only(&pool, &["long-session-no-commit"]);
+    let win = Window { from_ms: now - 86400_000, to_ms: now + 1, models: None };
+    engine::evaluate_window(&pool, &win).unwrap();
+    let n: i64 = pool.get().unwrap().query_row(
+        "SELECT COUNT(*) FROM coach_findings WHERE rule_id = 'long-session-no-commit'",
+        [], |r| r.get(0)).unwrap();
+    assert_eq!(n, 1);
+}
+
+#[tokio::test]
+async fn long_session_with_commit_does_not_fire() {
+    let (pool, _dir) = common::fixture_pool();
+    andon_lib::coach::seed_rules(&pool).unwrap();
+    let now = chrono::Utc::now().timestamp_millis();
+    let two_hours = 120 * 60 * 1000;
+    let conn = pool.get().unwrap();
+    conn.execute(
+        "INSERT INTO sessions (session_id, started_at, ended_at) VALUES ('s1', ?1, ?2)",
+        params![now - two_hours, now],
+    ).unwrap();
+    conn.execute(
+        "INSERT INTO git_activity (session_id, timestamp, activity, count) VALUES ('s1', ?1, 'commit', 1)",
+        params![now - 1000],
+    ).unwrap();
+    enable_only(&pool, &["long-session-no-commit"]);
+    let win = Window { from_ms: now - 86400_000, to_ms: now + 1, models: None };
+    engine::evaluate_window(&pool, &win).unwrap();
+    let n: i64 = pool.get().unwrap().query_row(
+        "SELECT COUNT(*) FROM coach_findings WHERE rule_id = 'long-session-no-commit'",
+        [], |r| r.get(0)).unwrap();
+    assert_eq!(n, 0);
+}
+
+// ---------------------------------------------------------------------------
+// E5: late-night-coding
+// ---------------------------------------------------------------------------
+
+#[tokio::test]
+async fn late_night_fires_with_five_sessions() {
+    let (pool, _dir) = common::fixture_pool();
+    andon_lib::coach::seed_rules(&pool).unwrap();
+
+    use chrono::{TimeZone, Local};
+    for d in 0..5 {
+        let dt = Local.with_ymd_and_hms(2026, 5, 10 + d, 2, 0, 0).unwrap();
+        let ms = dt.timestamp_millis();
+        pool.get().unwrap().execute(
+            "INSERT INTO sessions (session_id, started_at) VALUES (?1, ?2)",
+            params![format!("late-{}", d), ms],
+        ).unwrap();
+    }
+    enable_only(&pool, &["late-night-coding"]);
+    let now = chrono::Utc::now().timestamp_millis();
+    let win = Window { from_ms: 0, to_ms: now + 86400_000, models: None };
+    engine::evaluate_window(&pool, &win).unwrap();
+    let n: i64 = pool.get().unwrap().query_row(
+        "SELECT COUNT(*) FROM coach_findings WHERE rule_id = 'late-night-coding'",
+        [], |r| r.get(0)).unwrap();
+    assert!(n >= 1, "should fire at least once for 5 late-night sessions");
+}
+
+// ---------------------------------------------------------------------------
+// E6: abandon-sessions
+// ---------------------------------------------------------------------------
+
+#[tokio::test]
+async fn abandon_sessions_fires() {
+    let (pool, _dir) = common::fixture_pool();
+    andon_lib::coach::seed_rules(&pool).unwrap();
+    let now = chrono::Utc::now().timestamp_millis();
+    let conn = pool.get().unwrap();
+    for i in 0..3i64 {
+        let sid = format!("aban-{}", i);
+        conn.execute("INSERT INTO sessions (session_id, started_at) VALUES (?1, ?2)",
+            params![sid, now - (i+1) * 60_000]).unwrap();
+        conn.execute(
+            "INSERT INTO tool_decisions (session_id, timestamp, tool_name, decision) VALUES (?1, ?2, 'Edit', 'reject')",
+            params![sid, now - (i+1) * 60_000]).unwrap();
+    }
+    drop(conn);
+    enable_only(&pool, &["abandon-sessions"]);
+    let win = Window { from_ms: 0, to_ms: now + 1, models: None };
+    engine::evaluate_window(&pool, &win).unwrap();
+    let n: i64 = pool.get().unwrap().query_row(
+        "SELECT COUNT(*) FROM coach_findings WHERE rule_id = 'abandon-sessions'",
+        [], |r| r.get(0)).unwrap();
+    assert_eq!(n, 1);
+}

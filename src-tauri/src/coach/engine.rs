@@ -68,6 +68,7 @@ fn run_detector(pool: &Arc<DbPool>, rule: &Rule, window: &Window) -> Result<Vec<
         "repeated-prompts" => crate::coach::rules::detect_repeated_prompts(pool, window),
         "lazy-prompting" => crate::coach::rules::detect_lazy_prompting(pool, window),
         "low-constraint-usage" => crate::coach::rules::detect_low_constraint_usage(pool, window),
+        "long-session-no-commit" => crate::coach::rules::detect_long_session_no_commit(pool, window),
         _ => Ok(vec![]),
     }
 }

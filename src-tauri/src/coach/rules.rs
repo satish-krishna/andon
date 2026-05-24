@@ -293,3 +293,28 @@ pub fn detect_repeated_prompts(pool: &std::sync::Arc<DbPool>, window: &Window) -
     }
     Ok(out)
 }
+
+/// Fires for sessions longer than 90 minutes that have no git activity.
+pub fn detect_long_session_no_commit(pool: &std::sync::Arc<DbPool>, window: &Window) -> crate::coach::Result<Vec<Finding>> {
+    let conn = pool.get()?;
+    let ninety_min_ms: i64 = 90 * 60 * 1000;
+    let mut stmt = conn.prepare(
+        "SELECT s.session_id, s.ended_at - s.started_at AS dur, s.ended_at
+         FROM sessions s
+         LEFT JOIN (SELECT session_id, COUNT(*) AS n FROM git_activity GROUP BY session_id) g
+           ON g.session_id = s.session_id
+         WHERE s.started_at >= ?1 AND s.started_at < ?2
+           AND s.ended_at IS NOT NULL
+           AND (s.ended_at - s.started_at) > ?3
+           AND COALESCE(g.n, 0) = 0",
+    )?;
+    let rows = stmt.query_map(rusqlite::params![window.from_ms, window.to_ms, ninety_min_ms], |r| {
+        Ok((r.get::<_, String>(0)?, r.get::<_, i64>(1)?, r.get::<_, i64>(2)?))
+    })?;
+    Ok(rows.filter_map(|r| r.ok()).map(|(sid, dur, ended)| Finding {
+        rule_id: "long-session-no-commit".into(),
+        session_id: sid,
+        detected_at: ended,
+        payload_json: serde_json::json!({ "duration_ms": dur, "commits": 0 }).to_string(),
+    }).collect())
+}
