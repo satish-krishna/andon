@@ -29,4 +29,36 @@ export class CoachCardComponent {
       skill_min_sessions:    which === 'sess' ? v : cur.skill_min_sessions };
     this.api.saveCoachSettings(next).subscribe(saved => this.settings.set(saved));
   }
+
+  readonly vocabFields = [
+    { key: 'planning_commands' as const,  label: 'Planning commands' },
+    { key: 'planning_keywords' as const,  label: 'Planning keywords' },
+    { key: 'constraint_keywords' as const, label: 'Constraint keywords' },
+  ];
+
+  asStringArray(s: CoachSettings, key: 'planning_commands' | 'planning_keywords' | 'constraint_keywords'): string[] {
+    return s[key];
+  }
+
+  addChip(field: 'planning_commands' | 'planning_keywords' | 'constraint_keywords', el: HTMLInputElement) {
+    const value = el.value.trim();
+    if (!value) return;
+    const cur = this.settings();
+    if (!cur) return;
+    const list = (cur[field] as string[]).slice();
+    if (!list.includes(value)) list.push(value);
+    this.persist({ ...cur, [field]: list });
+    el.value = '';
+  }
+
+  removeChip(field: 'planning_commands' | 'planning_keywords' | 'constraint_keywords', value: string) {
+    const cur = this.settings();
+    if (!cur) return;
+    const list = (cur[field] as string[]).filter(x => x !== value);
+    this.persist({ ...cur, [field]: list });
+  }
+
+  private persist(s: CoachSettings) {
+    this.api.saveCoachSettings(s).subscribe(saved => this.settings.set(saved));
+  }
 }

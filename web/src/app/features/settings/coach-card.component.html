@@ -31,6 +31,33 @@
       </div>
     }
     <!-- M3: Vocabulary editors -->
+    @if (settings(); as s) {
+      <div>
+        <div class="text-xs font-medium mb-1">Vocabulary</div>
+        <div class="flex flex-col gap-3 text-xs">
+          @for (field of vocabFields; track field.key) {
+            <div>
+              <div class="text-muted mb-1">{{ field.label }}</div>
+              <div class="flex flex-wrap gap-1">
+                @for (c of asStringArray(s, field.key); track c) {
+                  <span class="px-2 py-0.5 border border-border rounded text-[11px] flex items-center gap-1">
+                    {{ c }}
+                    <button (click)="removeChip(field.key, c)" class="text-muted hover:text-err">×</button>
+                  </span>
+                }
+                <input class="bg-bg border border-border px-1 text-[11px] w-32"
+                       placeholder="+ add" (keyup.enter)="addChip(field.key, $any($event.target))">
+              </div>
+            </div>
+          }
+        </div>
+        <p class="text-[11px] text-muted mt-2">
+          These lists power detection. Tweak them to match your team's vocabulary —
+          Andon won't infer them for you. Constraint-keyword changes apply to future
+          sessions only; re-run Backfill JSONL for full recomputation.
+        </p>
+      </div>
+    }
     <!-- M4: Rules sub-section -->
   </div>
 </section>
