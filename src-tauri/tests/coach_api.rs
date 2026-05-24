@@ -119,3 +119,33 @@ async fn coach_rules_toggle_real_rule_works() {
     ).unwrap();
     assert_eq!(enabled, 0);
 }
+
+#[tokio::test]
+async fn findings_for_disabled_rules_are_hidden() {
+    let (pool, _db_dir) = common::fixture_pool();
+    andon_lib::coach::seed_rules(&pool).unwrap();
+    let (router, _r_dir) = common::test_router(&pool);
+
+    // Seed: a session + a finding for lazy-prompting; then disable that rule.
+    let conn = pool.get().unwrap();
+    conn.execute("INSERT INTO sessions (session_id, started_at) VALUES ('s1', 100)", []).unwrap();
+    conn.execute(
+        "INSERT INTO coach_findings (rule_id, session_id, detected_at, payload)
+         VALUES ('lazy-prompting', 's1', 100, '{}')",
+        [],
+    ).unwrap();
+    drop(conn);
+
+    // Sanity: enabled by default — finding shows.
+    let (_, v_before) = get_json(router.clone(), "/api/coach/findings").await;
+    assert_eq!(v_before["items"].as_array().unwrap().len(), 1);
+
+    // Disable the rule.
+    pool.get().unwrap().execute(
+        "UPDATE coach_rules SET enabled = 0 WHERE id = 'lazy-prompting'", []
+    ).unwrap();
+
+    // After disable: finding hidden.
+    let (_, v_after) = get_json(router.clone(), "/api/coach/findings").await;
+    assert_eq!(v_after["items"].as_array().unwrap().len(), 0, "disabled rule's findings should be hidden");
+}

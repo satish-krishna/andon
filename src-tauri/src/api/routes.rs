@@ -2939,7 +2939,8 @@ async fn coach_findings(
          FROM coach_findings cf
          JOIN coach_rules cr ON cr.id = cf.rule_id
          JOIN sessions s ON s.session_id = cf.session_id
-         WHERE 1=1",
+         WHERE 1=1
+           AND cr.enabled = 1",
     );
     let mut binds: Vec<Box<dyn rusqlite::ToSql>> = vec![];
     if let Some(f) = q.from { sql += " AND cf.detected_at >= ?"; binds.push(Box::new(f)); }
