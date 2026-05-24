@@ -246,6 +246,10 @@ CREATE UNIQUE INDEX skill_opportunities_unique
   ON skill_opportunities(norm_hash, window_start, window_end);
 "#;
 
+const MIGRATION_V9: &str = r#"
+ALTER TABLE prompt_turns ADD COLUMN has_constraint INTEGER NOT NULL DEFAULT 0;
+"#;
+
 const MIGRATIONS: &[(i32, &str)] = &[
     (1, MIGRATION_V1),
     (2, MIGRATION_V2),
@@ -255,6 +259,7 @@ const MIGRATIONS: &[(i32, &str)] = &[
     (6, MIGRATION_V6),
     (7, MIGRATION_V7),
     (8, MIGRATION_V8),
+    (9, MIGRATION_V9),
 ];
 
 pub fn apply(conn: &mut Connection) -> Result<()> {
@@ -438,6 +443,22 @@ mod tests {
             .map(|r| r.unwrap()).collect();
         assert!(idxs.contains(&"coach_findings_unique".to_string()));
         assert!(idxs.contains(&"coach_findings_session".to_string()));
+    }
+
+    #[test]
+    fn v9_adds_has_constraint_to_prompt_turns() {
+        let mut conn = Connection::open_in_memory().unwrap();
+        apply(&mut conn).unwrap();
+
+        let cols: Vec<String> = conn.prepare("PRAGMA table_info(prompt_turns)").unwrap()
+            .query_map([], |r| r.get::<_, String>(1)).unwrap()
+            .map(|r| r.unwrap()).collect();
+        assert!(cols.contains(&"has_constraint".to_string()));
+
+        let v: i32 = conn.query_row(
+            "SELECT MAX(version) FROM schema_version", [], |r| r.get(0),
+        ).unwrap();
+        assert_eq!(v, 9);
     }
 
     #[test]
