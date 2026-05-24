@@ -12,13 +12,17 @@ use crate::coach::Result;
 
 /// Run every enabled, non-reserved detector against `window`.
 /// Findings persist via INSERT OR IGNORE on `coach_findings`.
-#[instrument(skip(pool))]
-pub fn evaluate_window(pool: &Arc<DbPool>, window: &Window) -> Result<()> {
+#[instrument(skip(pool, coach_settings))]
+pub fn evaluate_window(
+    pool: &Arc<DbPool>,
+    window: &Window,
+    coach_settings: &crate::settings::CoachSettings,
+) -> Result<()> {
     let enabled_ids = enabled_rule_ids(pool)?;
-    for rule in RULES.iter().filter(|r| !r.reserved && enabled_ids.contains(r.id)) {
+    for rule in RULES.iter().filter(|r| !r.reserved && enabled_ids.contains(&r.id.to_string())) {
         match rule.kind {
             RuleKind::Binary => {
-                match run_detector(pool, rule, window) {
+                match run_detector(pool, rule, window, coach_settings) {
                     Ok(findings) => write_findings(pool, &findings)?,
                     Err(e) => tracing::warn!(rule = rule.id, error = ?e, "detector failed"),
                 }
@@ -30,11 +34,15 @@ pub fn evaluate_window(pool: &Arc<DbPool>, window: &Window) -> Result<()> {
 }
 
 /// Convenience wrapper: run `evaluate_window` over the last 30 days.
-#[instrument(skip(pool))]
-pub fn evaluate_session(pool: &Arc<DbPool>, _session_id: &str) -> Result<()> {
+#[instrument(skip(pool, coach_settings))]
+pub fn evaluate_session(
+    pool: &Arc<DbPool>,
+    _session_id: &str,
+    coach_settings: &crate::settings::CoachSettings,
+) -> Result<()> {
     let now = chrono::Utc::now().timestamp_millis();
     let win = Window { from_ms: now - 30 * 86_400_000, to_ms: now, models: None };
-    evaluate_window(pool, &win)
+    evaluate_window(pool, &win, coach_settings)
 }
 
 fn enabled_rule_ids(pool: &Arc<DbPool>) -> Result<HashSet<String>> {
@@ -63,7 +71,12 @@ fn write_findings(pool: &Arc<DbPool>, findings: &[Finding]) -> Result<()> {
 }
 
 /// Dispatch table — populated as detectors land in Section E.
-fn run_detector(pool: &Arc<DbPool>, rule: &Rule, window: &Window) -> Result<Vec<Finding>> {
+fn run_detector(
+    pool: &Arc<DbPool>,
+    rule: &Rule,
+    window: &Window,
+    coach_settings: &crate::settings::CoachSettings,
+) -> Result<Vec<Finding>> {
     match rule.id {
         "repeated-prompts" => crate::coach::rules::detect_repeated_prompts(pool, window),
         "lazy-prompting" => crate::coach::rules::detect_lazy_prompting(pool, window),
@@ -74,6 +87,7 @@ fn run_detector(pool: &Arc<DbPool>, rule: &Rule, window: &Window) -> Result<Vec<
         "speed-accept" => crate::coach::rules::detect_speed_accept(pool, window),
         "no-slash-commands" => crate::coach::rules::detect_no_slash_commands(pool, window),
         "cache-hit-starvation" => crate::coach::rules::detect_cache_hit_starvation(pool, window),
+        "low-spec-rate" => crate::coach::rules::detect_low_spec_rate(pool, window, coach_settings),
         _ => Ok(vec![]),
     }
 }

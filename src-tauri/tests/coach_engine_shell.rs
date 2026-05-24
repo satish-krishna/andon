@@ -8,7 +8,7 @@ async fn evaluate_window_runs_without_errors_on_empty_db() {
     let now = chrono::Utc::now().timestamp_millis();
     let win = Window { from_ms: now - 30 * 86400_000, to_ms: now, models: None };
 
-    engine::evaluate_window(&pool, &win).expect("evaluate_window");
+    engine::evaluate_window(&pool, &win, &andon_lib::settings::CoachSettings::default()).expect("evaluate_window");
 
     let n: i64 = pool.get().unwrap()
         .query_row("SELECT COUNT(*) FROM coach_findings", [], |r| r.get(0))

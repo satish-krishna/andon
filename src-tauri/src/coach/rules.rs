@@ -470,6 +470,81 @@ pub fn detect_cache_hit_starvation(pool: &std::sync::Arc<DbPool>, window: &Windo
     }).collect())
 }
 
+// ---------------------------------------------------------------------------
+// E11: low-spec-rate (context, binary)
+// ---------------------------------------------------------------------------
+
+/// Fires when fewer than 20% of agent-mode sessions (those that produced file changes)
+/// start with a spec-driven first turn, evaluated over >=5 qualifying sessions.
+pub fn detect_low_spec_rate(
+    pool: &std::sync::Arc<DbPool>,
+    window: &Window,
+    coach_settings: &crate::settings::CoachSettings,
+) -> crate::coach::Result<Vec<Finding>> {
+    let conn = pool.get()?;
+    let mut stmt = conn.prepare(
+        "SELECT DISTINCT s.session_id, s.started_at,
+                (SELECT pt.text FROM prompt_turns pt
+                 WHERE pt.session_id = s.session_id AND pt.turn_index = 0) AS first_turn,
+                (SELECT pt.command FROM prompt_turns pt
+                 WHERE pt.session_id = s.session_id AND pt.turn_index = 0) AS first_cmd
+         FROM sessions s
+         JOIN file_changes fc ON fc.session_id = s.session_id
+         WHERE s.started_at >= ?1 AND s.started_at < ?2",
+    )?;
+    let sessions: Vec<(String, i64, Option<String>, Option<String>)> = stmt.query_map(
+        rusqlite::params![window.from_ms, window.to_ms],
+        |r| Ok((
+            r.get::<_, String>(0)?,
+            r.get::<_, i64>(1)?,
+            r.get::<_, Option<String>>(2)?,
+            r.get::<_, Option<String>>(3)?,
+        )),
+    )?.filter_map(|r| r.ok()).collect();
+    if sessions.len() < 5 { return Ok(vec![]); }
+
+    let planning_commands: std::collections::HashSet<&str> =
+        coach_settings.planning_commands.iter().map(|s| s.as_str()).collect();
+    let planning_keywords_lc: Vec<String> =
+        coach_settings.planning_keywords.iter().map(|s| s.to_lowercase()).collect();
+
+    let file_ref_re = regex::Regex::new(r"(?i)\.(md|txt|spec|prd|design|plan|rfc|adoc)\b").unwrap();
+    let bullet_re = regex::Regex::new(r"(?m)^(?:[-*]|\d+\.)\s").unwrap();
+    let heading_re = regex::Regex::new(r"(?m)^#").unwrap();
+
+    let is_spec_driven = |text: Option<&str>, cmd: Option<&str>| -> bool {
+        if let Some(c) = cmd {
+            if planning_commands.contains(c) { return true; }
+        }
+        let Some(t) = text else { return false; };
+        let lc = t.to_lowercase();
+        if planning_keywords_lc.iter().any(|kw| lc.contains(kw.as_str())) { return true; }
+        if file_ref_re.is_match(t) { return true; }
+        if bullet_re.find_iter(t).count() >= 3 { return true; }
+        if heading_re.is_match(t) { return true; }
+        false
+    };
+
+    let total = sessions.len() as f64;
+    let spec_count = sessions.iter().filter(|(_, _, text, cmd)|
+        is_spec_driven(text.as_deref(), cmd.as_deref())
+    ).count() as f64;
+
+    if spec_count / total < 0.2 {
+        let latest = sessions.iter().max_by_key(|(_, ts, _, _)| *ts).unwrap();
+        return Ok(vec![Finding {
+            rule_id: "low-spec-rate".into(),
+            session_id: latest.0.clone(),
+            detected_at: latest.1,
+            payload_json: serde_json::json!({
+                "total_sessions": total as i64,
+                "spec_sessions": spec_count as i64
+            }).to_string(),
+        }]);
+    }
+    Ok(vec![])
+}
+
 /// Fires when >=3 sessions in the window have tool decisions but zero accepts.
 pub fn detect_abandon_sessions(pool: &std::sync::Arc<DbPool>, window: &Window) -> crate::coach::Result<Vec<Finding>> {
     let conn = pool.get()?;

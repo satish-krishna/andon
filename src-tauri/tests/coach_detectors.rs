@@ -39,7 +39,7 @@ async fn repeated_prompts_fires_at_three_hits() {
     enable_only(&pool, &["repeated-prompts"]);
 
     let win = Window { from_ms: now - 86400_000, to_ms: now + 1, models: None };
-    engine::evaluate_window(&pool, &win).unwrap();
+    engine::evaluate_window(&pool, &win, &andon_lib::settings::CoachSettings::default()).unwrap();
 
     let n: i64 = pool.get().unwrap().query_row(
         "SELECT COUNT(*) FROM coach_findings WHERE rule_id = 'repeated-prompts'",
@@ -60,7 +60,7 @@ async fn repeated_prompts_skips_below_threshold() {
 
     enable_only(&pool, &["repeated-prompts"]);
     let win = Window { from_ms: now - 86400_000, to_ms: now + 1, models: None };
-    engine::evaluate_window(&pool, &win).unwrap();
+    engine::evaluate_window(&pool, &win, &andon_lib::settings::CoachSettings::default()).unwrap();
 
     let n: i64 = pool.get().unwrap().query_row(
         "SELECT COUNT(*) FROM coach_findings WHERE rule_id = 'repeated-prompts'",
@@ -81,7 +81,7 @@ async fn lazy_prompting_fires_when_third_are_short() {
     }
     enable_only(&pool, &["lazy-prompting"]);
     let win = Window { from_ms: now - 86400_000, to_ms: now + 1, models: None };
-    engine::evaluate_window(&pool, &win).unwrap();
+    engine::evaluate_window(&pool, &win, &andon_lib::settings::CoachSettings::default()).unwrap();
     let n: i64 = pool.get().unwrap().query_row(
         "SELECT COUNT(*) FROM coach_findings WHERE rule_id = 'lazy-prompting'",
         [], |r| r.get(0)).unwrap();
@@ -104,7 +104,7 @@ async fn low_constraint_usage_fires_below_twenty_percent() {
     }
     enable_only(&pool, &["low-constraint-usage"]);
     let win = Window { from_ms: now - 86400_000, to_ms: now + 1, models: None };
-    engine::evaluate_window(&pool, &win).unwrap();
+    engine::evaluate_window(&pool, &win, &andon_lib::settings::CoachSettings::default()).unwrap();
     let n: i64 = pool.get().unwrap().query_row(
         "SELECT COUNT(*) FROM coach_findings WHERE rule_id = 'low-constraint-usage'",
         [], |r| r.get(0)).unwrap();
@@ -127,7 +127,7 @@ async fn long_session_no_commit_fires() {
     ).unwrap();
     enable_only(&pool, &["long-session-no-commit"]);
     let win = Window { from_ms: now - 86400_000, to_ms: now + 1, models: None };
-    engine::evaluate_window(&pool, &win).unwrap();
+    engine::evaluate_window(&pool, &win, &andon_lib::settings::CoachSettings::default()).unwrap();
     let n: i64 = pool.get().unwrap().query_row(
         "SELECT COUNT(*) FROM coach_findings WHERE rule_id = 'long-session-no-commit'",
         [], |r| r.get(0)).unwrap();
@@ -151,7 +151,7 @@ async fn long_session_with_commit_does_not_fire() {
     ).unwrap();
     enable_only(&pool, &["long-session-no-commit"]);
     let win = Window { from_ms: now - 86400_000, to_ms: now + 1, models: None };
-    engine::evaluate_window(&pool, &win).unwrap();
+    engine::evaluate_window(&pool, &win, &andon_lib::settings::CoachSettings::default()).unwrap();
     let n: i64 = pool.get().unwrap().query_row(
         "SELECT COUNT(*) FROM coach_findings WHERE rule_id = 'long-session-no-commit'",
         [], |r| r.get(0)).unwrap();
@@ -179,7 +179,7 @@ async fn late_night_fires_with_five_sessions() {
     enable_only(&pool, &["late-night-coding"]);
     let now = chrono::Utc::now().timestamp_millis();
     let win = Window { from_ms: 0, to_ms: now + 86400_000, models: None };
-    engine::evaluate_window(&pool, &win).unwrap();
+    engine::evaluate_window(&pool, &win, &andon_lib::settings::CoachSettings::default()).unwrap();
     let n: i64 = pool.get().unwrap().query_row(
         "SELECT COUNT(*) FROM coach_findings WHERE rule_id = 'late-night-coding'",
         [], |r| r.get(0)).unwrap();
@@ -213,7 +213,7 @@ async fn speed_accept_fires() {
     drop(conn);
     enable_only(&pool, &["speed-accept"]);
     let win = Window { from_ms: 0, to_ms: now + 1, models: None };
-    engine::evaluate_window(&pool, &win).unwrap();
+    engine::evaluate_window(&pool, &win, &andon_lib::settings::CoachSettings::default()).unwrap();
     let n: i64 = pool.get().unwrap().query_row(
         "SELECT COUNT(*) FROM coach_findings WHERE rule_id = 'speed-accept'",
         [], |r| r.get(0)).unwrap();
@@ -231,7 +231,7 @@ async fn no_slash_commands_fires() {
     ).unwrap();
     enable_only(&pool, &["no-slash-commands"]);
     let win = Window { from_ms: 0, to_ms: now + 1, models: None };
-    engine::evaluate_window(&pool, &win).unwrap();
+    engine::evaluate_window(&pool, &win, &andon_lib::settings::CoachSettings::default()).unwrap();
     let n: i64 = pool.get().unwrap().query_row(
         "SELECT COUNT(*) FROM coach_findings WHERE rule_id = 'no-slash-commands'",
         [], |r| r.get(0)).unwrap();
@@ -255,7 +255,7 @@ async fn abandon_sessions_fires() {
     drop(conn);
     enable_only(&pool, &["abandon-sessions"]);
     let win = Window { from_ms: 0, to_ms: now + 1, models: None };
-    engine::evaluate_window(&pool, &win).unwrap();
+    engine::evaluate_window(&pool, &win, &andon_lib::settings::CoachSettings::default()).unwrap();
     let n: i64 = pool.get().unwrap().query_row(
         "SELECT COUNT(*) FROM coach_findings WHERE rule_id = 'abandon-sessions'",
         [], |r| r.get(0)).unwrap();
@@ -325,9 +325,43 @@ async fn cache_hit_starvation_fires_below_ten_percent() {
     drop(conn);
     enable_only(&pool, &["cache-hit-starvation"]);
     let win = Window { from_ms: 0, to_ms: now + 1, models: None };
-    engine::evaluate_window(&pool, &win).unwrap();
+    engine::evaluate_window(&pool, &win, &andon_lib::settings::CoachSettings::default()).unwrap();
     let n: i64 = pool.get().unwrap().query_row(
         "SELECT COUNT(*) FROM coach_findings WHERE rule_id = 'cache-hit-starvation'",
+        [], |r| r.get(0)).unwrap();
+    assert_eq!(n, 1);
+}
+
+// ---------------------------------------------------------------------------
+// E11: low-spec-rate (context, binary)
+// ---------------------------------------------------------------------------
+
+#[tokio::test]
+async fn low_spec_rate_fires_when_below_twenty_percent() {
+    let (pool, _dir) = common::fixture_pool();
+    andon_lib::coach::seed_rules(&pool).unwrap();
+    let now = chrono::Utc::now().timestamp_millis();
+    let conn = pool.get().unwrap();
+    // 6 sessions producing code (file_changes rows). Only 1 has a spec-driven first turn.
+    for i in 0..6i64 {
+        let sid = format!("s{}", i);
+        conn.execute("INSERT INTO sessions (session_id, started_at) VALUES (?1, ?2)",
+            params![sid, now - 1000 - i*100]).unwrap();
+        conn.execute(
+            "INSERT INTO file_changes (session_id, timestamp, file_path, lines_added) VALUES (?1, ?2, 'a.rs', 5)",
+            params![sid, now - 900 - i*100]).unwrap();
+        let text = if i == 0 { "spec: must do thing" } else { "just go" };
+        conn.execute(
+            "INSERT INTO prompt_turns (session_id, turn_index, ts, source, text, norm_hash, length, has_file_ref, has_code, has_constraint)
+             VALUES (?1, 0, ?2, 'jsonl', ?3, ?4, ?5, 0, 0, 0)",
+            params![sid, now - 950 - i*100, text, format!("h{}", i), text.chars().count() as i64]).unwrap();
+    }
+    drop(conn);
+    enable_only(&pool, &["low-spec-rate"]);
+    let win = Window { from_ms: 0, to_ms: now + 1, models: None };
+    engine::evaluate_window(&pool, &win, &andon_lib::settings::CoachSettings::default()).unwrap();
+    let n: i64 = pool.get().unwrap().query_row(
+        "SELECT COUNT(*) FROM coach_findings WHERE rule_id = 'low-spec-rate'",
         [], |r| r.get(0)).unwrap();
     assert_eq!(n, 1);
 }
