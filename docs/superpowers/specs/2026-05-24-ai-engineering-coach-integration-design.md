@@ -26,6 +26,26 @@ holds. Andon is still a local tool: prompts stay on the machine they were
 typed on. The thing the original guarantee actually protected against —
 exfiltration — is unaffected, because there is no exfil path.
 
+### Reducer trust boundary
+
+The JSONL reducer (`src-tauri/src/jsonl/reducer.rs`) currently enforces
+"no prompt or response text" as a **type-level** invariant — its output
+enum has no variant that carries text, and `tests/jsonl_privacy.rs`
+enforces this empirically. This amendment requires both layers to change
+in coordination:
+
+1. **Add a `PromptTurn` variant** to the reducer's output enum, carrying
+   `{ session_id, turn_index, ts, text, norm_hash, length, has_file_ref,
+   has_code, has_constraint, command }`. The reducer remains the single
+   chokepoint for what JSONL data is persisted — implementers must not
+   bypass it by writing directly to `prompt_turns` from the parser.
+2. **Delete the corresponding assertion** in `tests/jsonl_privacy.rs`
+   (the local-DB leak proptest); replace it with the forwarder-side
+   leak proptest described under *Privacy & safety*.
+3. **Update the reducer's module doc** to state the new structural
+   invariant: *prompts persisted to `prompt_turns` flow through the
+   reducer's typed output; everything else still cannot carry text.*
+
 Implementation must update `CLAUDE.md`, `docs/architecture.md`,
 `docs/features.md`, and `README.md` to reflect the new posture in the
 same PR that adds the schema. The forwarder gets one new rule (see
@@ -106,14 +126,14 @@ re-litigate them.
 
 | # | Decision | Choice |
 |---|---|---|
-| 1 | Integration shape | **Option A — port the rules into Andon as a native Coach module.** Rationale below. |
-| 2 | Rule storage | Hard-coded in Rust (`coach/rules.rs`), one struct per rule. No DSL, no migration. User-tunable in v2. |
+| 1 | Integration shape | **Option A — port AIEC's scoring math exactly and its rule catalogue as adapted detectors mapped to Andon's data.** Rule *names* mirror upstream filenames where applicable; trigger *conditions* are documented per-rule and frequently differ to match Andon's schema. We are not claiming pin-for-pin parity on detection logic. Rationale below. |
+| 2 | Rule storage | Hard-coded in Rust (`coach/rules.rs`), one struct per rule. No DSL, no migration. User-tunable in v2; vocabulary lists are settings-tunable in v1 (see *Vocabulary as configuration*). |
 | 3 | Findings storage | A new `coach_findings` table written by a background re-evaluator. Cached, not recomputed per request. |
-| 4 | Re-evaluation trigger | On session-end (the existing SessionEnd hook touches every session) **and** on every successful JSONL backfill batch. No periodic cron. |
-| 5 | Scoring model | **Exact AIEC formula** — severity-weighted detector penalty over the maximum possible penalty for the practice area. See *Scoring* below. |
-| 5a | Trend model | **Exact AIEC trends** — WoW (last week vs previous week, % change) and MoM (most-recent 4-week average vs the prior 4-week average, % change). Both rendered on every scorecard tile. |
-| 6 | Page placement | New `/coach` route, between **Efficiency** and **Sessions** in the nav (icon: `graduation-cap` from lucide). |
-| 7 | License + attribution | AIEC is MIT. Each ported rule carries an `aiec_origin: Option<&'static str>` field with the upstream rule id when applicable; `docs/features.md` and the Coach page footer credit Microsoft AIEC. |
+| 4 | Re-evaluation trigger | On session-end (the existing SessionEnd hook touches every session) **and** on every successful JSONL backfill batch. No periodic cron. The session-end task is spawned via `tokio::spawn` after the existing SessionEnd writes commit, takes a fresh pool connection, and never blocks the OTLP receiver. Failures log via `tracing::warn!` and never propagate. |
+| 5 | Scoring model | **Exact AIEC formula** — `sevPenalty = {high:12, medium:7, low:3}`, `maxPenalty = maxDetectors × 12`, status bands `≥70 good / ≥40 needs / <40 critical`. Verified against `src/core/analyzer-patterns.ts`. AIEC's hardcoded `|| 8` fallback (when `groupDetectorCount[group]` is unset) does **not** apply in Andon's port — every practice has an explicit detector count from the seeded catalogue. |
+| 5a | Trend model | **Exact AIEC trends** — WoW (last week vs previous week, % change) and MoM (most-recent 4-week average vs the prior 4-week average, % change). Both rendered on every scorecard tile. The `n/a` 4th status (zero enabled detectors in a practice) is an Andon-specific addition; AIEC has only three statuses. Documented inline in `coach::score`. |
+| 6 | Page placement | New `/coach` route, after **Efficiency** in the nav (icon: `graduation-cap` from lucide). |
+| 7 | License + attribution | AIEC is MIT. Each ported rule carries an `aiec_origin: Option<&'static str>` field with the upstream rule id when applicable, or `None` for Andon-original rules inspired by AIEC concepts. `docs/features.md` and the Coach page footer credit Microsoft AIEC. |
 
 ### Why Option A, not B or C
 
@@ -253,17 +273,18 @@ against it without an on-disk JSONL re-read.
 
 ```sql
 CREATE TABLE prompt_turns (
-  session_id   TEXT NOT NULL,
-  request_id   TEXT,                      -- nullable; user turns w/o a request
-  turn_index   INTEGER NOT NULL,          -- ordinal within the session
-  ts           INTEGER NOT NULL,          -- unix ms
-  source       TEXT NOT NULL,             -- 'jsonl' | 'otlp'
-  text         TEXT NOT NULL,             -- the raw prompt
-  norm_hash    TEXT NOT NULL,             -- BLAKE3 hex of normalised text (clustering key)
-  command      TEXT,                      -- slash-command name if the prompt was one
-  length       INTEGER NOT NULL,          -- char count of `text`
-  has_file_ref INTEGER NOT NULL,          -- 0/1 — contains `@path` or absolute path
-  has_code     INTEGER NOT NULL,          -- 0/1 — contains a ``` fence
+  session_id     TEXT NOT NULL,
+  request_id     TEXT,                      -- nullable; user turns w/o a request
+  turn_index     INTEGER NOT NULL,          -- ordinal within the session
+  ts             INTEGER NOT NULL,          -- unix ms
+  source         TEXT NOT NULL,             -- 'jsonl' | 'otlp'
+  text           TEXT NOT NULL,             -- the raw prompt
+  norm_hash      TEXT NOT NULL,             -- BLAKE3 hex of normalised text (clustering key)
+  command        TEXT,                      -- slash-command name if the prompt was one
+  length         INTEGER NOT NULL,          -- char count of `text`
+  has_file_ref   INTEGER NOT NULL,          -- 0/1 — contains `@path` or absolute path
+  has_code       INTEGER NOT NULL,          -- 0/1 — contains a ``` fence
+  has_constraint INTEGER NOT NULL DEFAULT 0,-- 0/1 — matches any keyword in settings.coach.constraint_keywords
   PRIMARY KEY (session_id, turn_index),
   FOREIGN KEY (session_id) REFERENCES sessions(session_id) ON DELETE CASCADE
 );
@@ -323,36 +344,39 @@ discovery time — the API serves it directly without a join.
 
 ## Starter rule set
 
-Ten rules, two per practice area, all derivable from data Andon already has.
+Ten binary rules plus one continuous check in Phase 1, with one
+review-discipline slot intentionally reserved. The starter set is
+deliberately small and high-signal; expansion follows in later specs.
 Each is implemented as a `Rule { id, practice, severity, aiec_origin,
-description, suggestion, query }`. The starter set is deliberately small and
-high-signal; expansion follows in later specs.
+description, suggestion, query }`. `aiec_origin` is set to the upstream
+filename when applicable, or `None` for Andon-original rules.
 
-Twelve rules in Phase 1 — ten binary detectors plus two continuous checks
-— each mapped to an AIEC upstream where one exists (the AIEC catalogue at
-`src/core/rules/` has 51 rule documents). Andon ports the subset whose
-input signals are already in our schema; the rest are deferred or out of
-scope for the data we collect.
+The AIEC catalogue at `src/core/rules/` has **44** rule documents.
+Andon ports the subset whose input signals are already in our schema;
+the rest are deferred. Where Andon's trigger differs materially from
+upstream (different signal, different threshold), the row carries an
+explicit note so the divergence is greppable.
 
-| Practice | Rule id | Kind | Sev | AIEC origin | Triggers when… |
-|---|---|---|---|---|---|
-| **Prompt quality** | `repeated-prompts` | binary | medium | `repeated-prompts.md` | Same `norm_hash` (see `prompt_turns`) appears ≥ 3× in one session |
-| Prompt quality | `lazy-prompting` | binary | low | `lazy-prompting.md` | First user turn has `length_bin = 0` *and* the session writes > 5 file edits |
-| Prompt quality | `low-constraint-usage` | binary | low | `low-constraint-usage.md` | < 20 % of user turns in a session contain a constraint keyword (`must`, `should`, `limit`, …; matched on the un-hashed prompt at ingest, recorded as a flag) |
-| **Session hygiene** | `mega-sessions` | binary | high | `mega-sessions.md` + `metrics/mega-sessions.metric.md` | `sessions.ended_at − started_at > 90 min` *and* `git_activity` for that session is empty |
-| Session hygiene | `late-night-coding` | binary | low | `late-night-coding.md` | ≥ 5 sessions in the window started between 23:00 and 05:00 local time |
-| Session hygiene | `abandon-sessions` | binary | medium | `abandon-sessions.md` | ≥ 3 sessions in the window with `tool_decisions` but zero accepts |
-| **Code review discipline** | `speed-accept` | binary | high | `speed-accept.md` | Median time between consecutive `tool_decisions.decision = 'accept'` in a session < 5 s, over ≥ 10 decisions |
-| Code review discipline | `high-cancellation` | binary | medium | `high-cancellation.md` | Session-level `aborts / (accepts + rejects + aborts) > 0.3` over ≥ 10 decisions |
-| **Tool mastery** | `no-slash-commands` | binary | low | `no-slash-commands.md` | Session > 30 min with zero `slash_commands` rows |
-| Tool mastery | `model-diversity` | **continuous** | — | (AIEC's PatternsAnalyzer "Model Diversity") | Score = `100 if distinct models ≥ 4, 80 if ≥ 3, 50 if ≥ 2, else 20` over the window |
-| **Context management** | `cache-hit-starvation` | binary | high | `cache-hit-starvation.md` | Session-level `cacheCreation / (cacheRead + cacheCreation) > 0.7` over ≥ 5 turns |
-| Context management | `planning-usage` | **continuous** | — | (AIEC's PatternsAnalyzer "Planning Usage") | Score = `100 if planning-ratio > 0.1, 70 if > 0.05, 40 if > 0, else 10`. Planning ratio = `slash_commands(name='plan') / sessions` over the window |
+| Practice | Rule id | Kind | Sev | AIEC origin | Triggers when… | Respects model filter |
+|---|---|---|---|---|---|---|
+| **Prompt quality** | `repeated-prompts` | binary | medium | `repeated-prompts.md` | Same `norm_hash` (see `prompt_turns`) appears ≥ 3× in one session. *AIEC uses `duplicateGroups(matched, similarity=10, minDuplicates=3)` — edit-distance clustering. Andon ships exact-hash equality in Phase 1; revisit if hashes fragment in practice.* | no |
+| Prompt quality | `lazy-prompting` | binary | medium | `lazy-prompting.md` | Per-session ratio of user turns where `prompt_turns.length < 30` is `> 0.3`, with `count > 10`. **Matches upstream** (`minChars: 30, maxRatio: 0.3, minSample: 10`). | no |
+| Prompt quality | `low-constraint-usage` | binary | low | `low-constraint-usage.md` | < 20 % of user turns in a session have `prompt_turns.has_constraint = 1`. The flag is set at ingest time by matching against `settings.coach.constraint_keywords` (see *Vocabulary as configuration*). | no |
+| **Session hygiene** | `long-session-no-commit` | binary | high | *Andon-original; inspired by `mega-sessions.md`* | `sessions.ended_at − started_at > 90 min` AND `git_activity` for the session is empty. **Renamed from `mega-sessions`** so the difference from upstream (`maxMessages: 50`, no git check) is explicit. | no |
+| Session hygiene | `late-night-coding` | binary | low | `late-night-coding.md` | ≥ 5 sessions in the window started between 23:00 and 05:00 local time. | no |
+| Session hygiene | `abandon-sessions` | binary | medium | `abandon-sessions.md` | ≥ 3 sessions in the window with `tool_decisions` rows but zero `decision = 'accept'`. | no |
+| **Code review discipline** | `speed-accept` | binary | high | `speed-accept.md` | Per-session: ≥ 5 occurrences of a user turn following an assistant `accept` decision within 15 s, where the preceding turn touched a file via `file_changes.lines_added ≥ 20`. **Matches upstream** (`maxGapMs: 15000, minAiLoc: 20, minOccurrences: 5`). | no |
+| Code review discipline | *(slot reserved)* | — | — | `high-cancellation.md` | **Deferred** — upstream signal (`isCanceled` on requests) is not currently captured by Andon's OTLP ingest. Re-add in a later phase once request-level cancellation is ingested. The Settings → Coach UI shows this row as a visible reservation rather than silently omitting it. | — |
+| **Tool mastery** | `no-slash-commands` | binary | low | `no-slash-commands.md` | Session > 30 min with zero `slash_commands` rows. | no |
+| Tool mastery | `model-diversity` | **continuous** | — | AIEC `PatternsAnalyzer` "Model Diversity" | Score = `100 if distinct models ≥ 4, 80 if ≥ 3, 50 if ≥ 2, else 20` over the window. **Matches upstream tiers.** | yes |
+| **Context management** | `cache-hit-starvation` | binary | high | `cache-hit-starvation.md` | Per-session: `cacheRead / (cacheRead + cacheCreation + non-cached input) < 0.1` over ≥ 20 turns with prompt input ≥ 5000 tokens. **Matches upstream direction** (`minCacheRate: 0.1, minSample: 20, minPromptTokens: 5000`) — alert on *low cache hits*, not high creation. | yes |
+| Context management | `low-spec-rate` | binary | medium | `no-spec-driven-development.md` | Over ≥ 5 agent-mode sessions in the window, the fraction that look spec-driven is `< 0.2`. A session is *spec-driven* if its first user turn satisfies **any**: invokes a slash command in `settings.coach.planning_commands`, references a file matching `\.(md\|txt\|spec\|prd\|design\|plan\|rfc\|adoc)$`, matches any keyword in `settings.coach.planning_keywords`, contains ≥ 3 bullet/numbered-list lines, or contains a markdown heading. Replaces the prior `planning-usage` continuous detector — content-aware, vocabulary-configurable. | yes |
 
 Each rule's SQL lives in `coach/rules.rs` next to its `Rule` literal — close
 to the schema it queries, easy to grep. `aiec_origin` is set to the upstream
-AIEC rule id where one exists; the two continuous checks reference the
-AIEC analyzer they were ported from.
+AIEC rule id where one exists. Rows whose AIEC origin column carries the
+"Andon-original" marker port the *concept* without claiming behavioural
+parity.
 
 **Severity values match AIEC exactly** (`high` / `medium` / `low`) because
 the scoring formula reads `sevPenalty[severity]` directly. Renaming them
@@ -364,6 +388,45 @@ New rules are pure-data: append a `Rule { … }` to `RULES` and write its
 detector closure (a `fn(&Pool, Window) -> Result<Vec<Finding>>`). A unit test
 per rule (TDD: failing test first) seeds a curated DB via `test-support` and
 asserts the expected `Finding`s come back. No engine change.
+
+### Vocabulary as configuration
+
+Rules that depend on user-specific vocabulary read their match lists from
+`settings.json` under `coach.*`. Defaults ship with the binary; user
+overrides persist in the user's settings file. Adding a new
+vocabulary-dependent rule means picking a settings key and writing the
+detector — no schema change, no migration.
+
+**Day-one keys:**
+
+| Key | Used by | Default |
+|---|---|---|
+| `coach.planning_commands` | `low-spec-rate` | `["plan", "brainstorm", "design", "spec", "specify", "rfc"]` |
+| `coach.planning_keywords` | `low-spec-rate` | `["spec", "specs", "requirement", "requirements", "acceptance criteria", "design doc", "PRD", "RFC", "plan file", "constraint", "must", "should", "ensure"]` |
+| `coach.constraint_keywords` | `low-constraint-usage` (via `prompt_turns.has_constraint`) | `["must", "should", "limit", "ensure", "require", "only", "without", "never", "always"]` |
+| `coach.skill_min_occurrences` | Skill Finder | `3` |
+| `coach.skill_min_sessions` | Skill Finder | `2` |
+
+**Settings semantics.** Lists are read fresh on every coach evaluation —
+no caching, no restart required. Changes to `constraint_keywords` do
+**not** retroactively recompute `prompt_turns.has_constraint` for
+historical rows; the flag reflects the keyword list at ingest time.
+This is documented in the Settings UI: *"Constraint keyword changes
+apply to future sessions only."* Users wanting full recomputation can
+re-run JSONL backfill.
+
+**Deferred (needs data capture first).** `coach.planning_skills` —
+matching against the `Skill` tool's `skill` argument requires extending
+`tool_decisions` (or a sibling table) to persist tool arguments for
+`tool_name = 'Skill'`. The captured value would be the full
+`plugin:skill` identifier (e.g. `superpowers:brainstorming`). Tracked
+as a separate migration; `low-spec-rate` consumes it when available.
+Until then, the rule catalogue UI shows a `<datasource-needed>` marker
+for the skills-list dimension rather than silently skipping.
+
+**The general design rule:** never hardcode domain-vocabulary strings
+in `rules.rs`. If a rule matches on text the user might phrase
+differently than someone else, the vocabulary belongs in settings.
 
 ## Scoring
 
@@ -437,17 +500,28 @@ A scorecard request returns: `score`, `status`, `wow_pct`, `mom_pct`, and
 ### Per-rule sub-scores (AIEC continuous detectors)
 
 AIEC also has *continuous* checks — detectors that emit a 0-100 score
-directly (e.g. Model Diversity: `count ≥ 4 → 100, ≥ 3 → 80, ≥ 2 → 50,
-else 20`; Planning Usage: `ratio > 0.1 → 100, > 0.05 → 70, > 0 → 40,
-else 10`). These coexist with the binary-trigger rules above.
+directly. These coexist with the binary-trigger rules above.
 
 In this port, continuous checks are modelled as a separate `Rule::Continuous`
 variant returning a `score: i64` (0-100) and *no* findings. The Coach page
 renders them as additional tiles in their practice section, side-by-side
-with the binary-trigger scorecard. Phase 1 ships two continuous checks —
-**Model Diversity** and **Planning Usage** — using the exact AIEC tier
-thresholds quoted above. Both data sources (`cost_entries.model`,
-`slash_commands.name = 'plan'`) are already in the DB.
+with the binary-trigger scorecard.
+
+**Phase 1 ships one continuous check:**
+
+- **Model Diversity** — `count ≥ 4 → 100, ≥ 3 → 80, ≥ 2 → 50, else 20`
+  over the window. Source: `cost_entries.model`. Tiers match upstream
+  exactly.
+
+AIEC's **Planning Usage** continuous detector (`ratio > 0.1 → 100,
+> 0.05 → 70, > 0 → 40, else 10`, where ratio counts literal `/plan`
+slash commands) is intentionally **not ported**. Its signal —
+slash-command match on the string `plan` — is too narrow to be useful
+once users have multiple planning skills/commands. The `low-spec-rate`
+binary rule (in the rule catalogue above) replaces it with a
+content-aware, vocabulary-configurable detector that catches
+spec-driven sessions regardless of which command or phrasing the user
+prefers.
 
 ## Skill discovery
 
@@ -479,8 +553,8 @@ flowchart LR
 A straightforward two-pass on `prompt_turns`:
 
 ```
-threshold_occurrences = 3        // configurable, AIEC parity default
-threshold_sessions    = 2        // configurable
+threshold_occurrences = settings.coach.skill_min_occurrences  // default 3
+threshold_sessions    = settings.coach.skill_min_sessions     // default 2
 
 for each look_back ∈ {30d, 90d, 180d}:
     rows = SELECT norm_hash, session_id, command,
@@ -544,13 +618,19 @@ so as soon as a shorter example arrives the label updates.
 
 ### Thresholds in Settings
 
-Two new Settings inputs (under the Coach → Rules section):
+Two new Settings inputs (under Coach → Skill Finder):
 
-- **Skill Finder: min occurrences** (default 3)
-- **Skill Finder: min sessions** (default 2)
+- **Min occurrences** (default 3) — minimum repetitions of a normalised
+  prompt before it surfaces as an opportunity
+- **Min sessions** (default 2) — minimum distinct sessions the prompt
+  must appear in
 
-Stored as integers in `settings.json` next to `budget`. The Coach skills
-endpoint reads these on every request — no caching, no migration on change.
+Stored as integers in `settings.json` under `coach.skill_min_occurrences`
+and `coach.skill_min_sessions`. The Coach skills endpoint reads these on
+every request — no caching, no migration on change. Defaults are
+Andon's, picked for sensitivity over precision in early data; upstream
+AIEC does not publish its production defaults, so this is not a parity
+claim.
 
 ## Re-evaluation
 
@@ -561,9 +641,12 @@ session twice (re-ingest) does not duplicate findings.
 Triggers:
 
 - **SessionEnd hook handler** in `integration.rs` calls
-  `coach::eval::evaluate_session(pool, session_id)` after the existing
-  session-end writes complete. Scope: the one session's rules, plus an
-  incremental skill-discovery refresh.
+  `coach::eval::evaluate_session(pool, session_id)` via `tokio::spawn`
+  after the existing session-end writes commit — never inline, never
+  before. The spawned task takes a fresh pool connection (never
+  inherits one across the spawn boundary) and never blocks the OTLP
+  receiver. Scope: the one session's rules, plus an incremental
+  skill-discovery refresh.
 - **JSONL backfill** calls `coach::eval::evaluate_window(pool, 30d)` and
   `coach::skill::discover_all(pool)` (all three look-back windows) once at
   the end of a backfill batch (not per file). A backfill may surface old
@@ -571,9 +654,9 @@ Triggers:
   writers of `prompt_turns` (the other is the OTLP `user_prompt` log
   ingest path).
 
-The evaluator never blocks the OTLP path. It runs on the existing tokio
-runtime as a spawned task. Failures are logged via `tracing::warn!` and never
-surface to Claude Code (consistent with the receiver-always-`Ok` rule).
+The evaluator never blocks the OTLP path. Failures are logged via
+`tracing::warn!` and never surface to Claude Code (consistent with the
+receiver-always-`Ok` rule).
 
 ## API
 
@@ -614,9 +697,7 @@ Response mirrors AIEC's scorecard shape (`score`, `status`, `wow_pct`,
     {
       "practice": "context", "score": 80, "status": "good",
       "wow_pct": 0, "mom_pct": 0, "triggered_count": 0,
-      "continuous": [
-        { "id": "planning-usage", "score": 70 }
-      ]
+      "continuous": []
     }
   ],
   "window": { "from": 1748044800000, "to": 1748131200000 },
@@ -733,14 +814,14 @@ hash has no matching rows.
 
 ```
 web/src/app/features/coach/
-  coach.component.ts          // /coach — scorecard + findings
-  coach.component.html
-  coach.component.spec.ts
-  coach-skills.component.ts   // /coach/skills — Skill Finder sub-route
-  coach-skills.component.html
-  coach-skills.component.spec.ts
-  coach-rules.component.ts    // Settings → Rules sub-page (catalogue + toggles)
-  coach-rules.component.html
+  coach.component.{ts,html,spec.ts}          // /coach — scorecard + findings
+  coach-skills.component.{ts,html,spec.ts}   // /coach/skills — Skill Finder
+
+web/src/app/features/settings/
+  coach-card.component.{ts,html,spec.ts}     // Settings → Coach card
+                                             //   (skill-finder thresholds,
+                                             //    vocabulary editors,
+                                             //    rules catalogue)
 ```
 
 Page structure (top to bottom):
@@ -764,7 +845,7 @@ Page structure (top to bottom):
    cost.
 6. **Skill Finder link** — prominent CTA "X custom-skill opportunities in
    the last 90 days →" routing to `/coach/skills`.
-7. **Rules link** — footer link to Settings → Rules.
+7. **Rules link** — footer link to Settings → Coach.
 
 ### Skill Finder sub-route (`/coach/skills`)
 
@@ -783,10 +864,25 @@ A simpler page sharing the same `CoachComponent` parent layout:
 - Empty state: a one-liner pointing at Settings → "Ingest JSONL history"
   when no `prompt_turns` exist for the window.
 
-Settings page gains a new anchor section **Rules** rendering
-`CoachRulesComponent`: the catalogue with one toggle per rule, grouped by
-practice area, with description and suggestion visible. Toggling calls
-`POST /api/coach/rules/:id`.
+Settings page gains a new **Coach** card (sibling to the existing
+`<app-budget-card>` and `<app-forwarder-card>`) with three sub-sections:
+
+1. **Skill Finder** — `coach.skill_min_occurrences` and
+   `coach.skill_min_sessions` number inputs, with a one-line caption
+   *"Surfaces prompt patterns that meet both thresholds."*
+2. **Vocabulary** — chip-list editors (reusing the `<app-filter-bar />`
+   model-chip styling) for `coach.planning_commands`,
+   `coach.planning_keywords`, `coach.constraint_keywords`. Caption:
+   *"These lists power detection. Tweak them to match your team's
+   vocabulary — Andon won't infer them for you. Constraint-keyword
+   changes apply to future sessions only; re-run Backfill JSONL for
+   full recomputation."*
+3. **Rules** — `CoachRulesComponent` rendering the catalogue grouped
+   by practice area, with description and suggestion visible. Toggling
+   calls `POST /api/coach/rules/:id`. The reserved review-discipline
+   slot (`high-cancellation`) renders with a `circle-slash` icon, a
+   `data not captured yet` muted caption, and no toggle — making the
+   reservation visible rather than silent.
 
 `ApiService` gains `coachScorecard`, `coachFindings`, `coachRules`,
 `updateCoachRule`, `coachSkills`, `coachSkillExamples`. DTOs mirror the
@@ -810,11 +906,14 @@ JSON above, declared in `core/`.
   rows have been deleted (cascade from a session delete). The endpoint
   returns `{ "examples": [] }`. A follow-up discovery pass garbage-collects
   the orphaned opportunity.
-- **Sessions without JSONL ingest.** Rules that depend on JSONL-only data
-  (`subagent-cost-spike`, `cache-anti-pattern` at session granularity)
-  simply skip those sessions — no false positives from missing data. The
-  rule catalogue lists each rule's data dependencies so the Coach page
-  can surface a "X rules need JSONL backfill" hint when relevant.
+- **Sessions without JSONL ingest.** Rules that depend on JSONL-only
+  data (anything that reads `prompt_turns` — `repeated-prompts`,
+  `lazy-prompting`, `low-constraint-usage`, `low-spec-rate`, plus the
+  Skill Finder) simply skip those sessions — no false positives from
+  missing data. The rule catalogue carries each rule's data
+  dependencies so the Coach page can surface a "X rules need JSONL
+  backfill" hint when JSONL-derivable sessions exist but
+  `prompt_turns` rows for them don't.
 - **A rule's SQL is wrong.** Each rule is independent; the engine catches
   per-rule errors, logs, and continues. One broken rule never breaks the
   scorecard.
@@ -869,8 +968,12 @@ TDD throughout. Rust tests under `cargo test --features test-support`.
 
 **Rust unit (per rule):** seed a DB through `test-support` with the
 minimum data each rule needs; assert the expected `Finding`(s) come back
-with the right `payload`. Ten rules → at least ten unit tests, each
-covering the trigger and a near-miss.
+with the right `payload`. **11 active rules** (10 binary + 1 continuous;
+the reserved review-discipline slot has no test) → at least 11 unit
+tests, each covering the trigger and a near-miss. Vocabulary-dependent
+rules (`low-constraint-usage`, `low-spec-rate`) also cover *"keyword
+list change flips the detector output on next eval"* via a second
+sub-test.
 
 **Rust integration:** `src-tauri/tests/coach_api.rs` — seeded DB, hit all
 four endpoints, snapshot the JSON. Adds one new `.snap`.
@@ -896,7 +999,7 @@ different hashes.
 
 **Angular (Vitest):** `coach.component.spec.ts` renders the scorecard and
 findings from a mocked `ApiService`; empty-state coverage; toggling a rule
-in `coach-rules.component.spec.ts` fires the correct POST.
+in `coach-card.component.spec.ts` fires the correct POST.
 
 **Smoke:** the existing OTLP smoke scripts (`scripts/smoke_*.{js,py}`) need
 no change — the coach module is read-side only relative to the OTLP path.
@@ -907,7 +1010,7 @@ This design covers Phase 1. Each later phase ships under its own spec.
 
 | Phase | Scope | Spec |
 |---|---|---|
-| **1 (this design)** | Coach module + 10 binary rules + 2 continuous checks + AIEC scorecard formula (incl. WoW/MoM) + Skill Finder (custom opportunities) + Settings toggles | this doc |
+| **1 (this design)** | Coach module · 10 binary rules (1 review-discipline slot reserved) · 1 continuous check · AIEC scoring formula (incl. WoW/MoM) · Skill Finder (custom opportunities) · vocabulary settings · Coach UI page + Skill Finder sub-route + Settings → Coach card | this doc |
 | 2 | **Rule DSL + Playground** — port AIEC's `rule-parser`/`rule-compiler`/`rule-pipeline`/`dsl` so users can author detectors without recompiling Andon; in-app playground to test a rule against historical data | later |
 | 3 | **Per-rule trends** — sparklines per rule and per practice area; integrate with the Tape | later |
 | 4 | **Community skill catalog** (opt-in, off by default; modelled on the OTel forwarder) — fetch the AIEC community skill index and surface matches alongside custom opportunities | later |
@@ -921,31 +1024,46 @@ of premature DSL design is not.
 
 **Rust**
 
-- `src-tauri/migrations/NNN_coach.sql` — `coach_rules` + `coach_findings`
-  + indexes + seed inserts.
-- `src-tauri/migrations/NNN_skill_finder.sql` — `prompt_turns` +
-  `skill_opportunities` + indexes.
+- `src-tauri/src/db/migrations.rs` — three new entries in the `MIGRATIONS`
+  slice:
+  - `MIGRATION_V7` — `coach_rules` + `coach_findings` + indexes + seed
+    inserts for the static catalogue.
+  - `MIGRATION_V8` — `prompt_turns` + `skill_opportunities` + indexes.
+  - `MIGRATION_V9` — `has_constraint INTEGER NOT NULL DEFAULT 0` column
+    on `prompt_turns`.
+  - Update the `assert_eq!(v, 6)` lines in the existing migration tests
+    to `9`.
 - `src-tauri/src/coach/{mod,rules,engine,score,skill,eval,queries}.rs` — new.
 - `src-tauri/src/api/routes.rs` — six handlers + route registration.
 - `src-tauri/src/api/dto.rs` — `CoachScorecard`, `CoachFinding`, `CoachRule`,
   `UpdateCoachRule`, `SkillOpportunity`, `SkillExample`.
-- `src-tauri/src/jsonl/reducer.rs` — emit a `PromptTurn` derived event
-  for every user turn (text + norm hash + structural flags).
+- `src-tauri/src/jsonl/reducer.rs` — add a `PromptTurn { … }` variant to
+  the reducer's output enum (the reducer remains the single chokepoint
+  for JSONL data persisted to the DB). Update the module-level trust
+  boundary doc-comment per *Privacy contract amendment §Reducer trust
+  boundary*. Compute `norm_hash`, `length`, `has_code`, `has_file_ref`,
+  and `has_constraint` at emit time.
 - `src-tauri/src/otlp/ingestor.rs` — drop the `user_prompt` body
-  redaction; write the body through to `log_events` and also emit a
-  `PromptTurn` row tagged `source = 'otlp'`.
+  redaction (currently lines 162-168). On `user_prompt` log events,
+  write `body` through to `log_events` *and* write a `prompt_turns` row
+  tagged `source = 'otlp'`. Compute the same derived fields the reducer
+  computes.
 - `src-tauri/src/otlp/forwarder.rs` — new `redact_user_prompt` filter
   pass on outgoing OTLP log records (see *Privacy & safety* rule 5).
-- `src-tauri/src/integration.rs` — call `coach::eval::evaluate_session` on
-  SessionEnd, after existing writes.
-- `src-tauri/src/jsonl/runner.rs` (or equivalent backfill driver) — call
+- `src-tauri/src/integration.rs` — `tokio::spawn` `coach::eval::evaluate_session`
+  on SessionEnd, *after* existing writes commit (never inline).
+- `src-tauri/src/jsonl/walker.rs` (the backfill driver) — call
   `coach::eval::evaluate_window` *and* `coach::skill::discover_all` on
   batch completion.
-- `src-tauri/src/settings.rs` — two new keys
-  (`skill_min_occurrences`, `skill_min_sessions`).
+- `src-tauri/src/settings.rs` — five new keys under `coach.*`:
+  `planning_commands`, `planning_keywords`, `constraint_keywords`,
+  `skill_min_occurrences`, `skill_min_sessions`. Defaults per
+  *Vocabulary as configuration*.
 - `src-tauri/src/lib.rs` — register the `coach` module.
 - `src-tauri/tests/coach_api.rs` (+ a new `.snap`) — endpoint coverage.
-- `src-tauri/tests/coach_rules.rs` — per-rule unit tests (12 rules).
+- `src-tauri/tests/coach_rules.rs` — per-rule unit tests (10 binary +
+  1 continuous = 11 active; the reserved review-discipline slot has
+  no test).
 - `src-tauri/tests/coach_scorer.rs` — AIEC-formula correctness +
   worked-example regression.
 - `src-tauri/tests/coach_skill.rs` — normaliser + discovery thresholds
@@ -961,17 +1079,20 @@ of premature DSL design is not.
 
 - `web/src/app/features/coach/coach.component.{ts,html,spec.ts}` — new.
 - `web/src/app/features/coach/coach-skills.component.{ts,html,spec.ts}` — new.
-- `web/src/app/features/coach/coach-rules.component.{ts,html,spec.ts}` — new.
 - `web/src/app/core/api.service.ts` (+ DTO interfaces in `core/`) — six
   new methods.
 - `web/src/app/app.routes.ts` — `/coach` + `/coach/skills` routes.
-- `web/src/app/app.component.html` — nav item (between Efficiency and
-  Sessions).
-- `web/src/app/features/settings/settings.component.html` — anchor link
-  to the new Rules sub-section, plus two number inputs for the Skill
-  Finder thresholds.
-- `web/src/app/core/icons.ts` — register `graduation-cap` and
-  `lightbulb` (Skill Finder).
+- `web/src/app/app.component.html` — nav item placed after Efficiency
+  (order: Overview · Sessions · Behaviour · Files · Efficiency ·
+  **Coach** · Diagnostics · Settings).
+- `web/src/app/features/settings/coach-card.component.{ts,html,spec.ts}` —
+  new sibling to `budget-card` / `forwarder-card`. Houses Skill Finder
+  thresholds, Vocabulary chip-list editors, and the Rules catalogue.
+- `web/src/app/features/settings/settings.component.html` — include the
+  new `<app-coach-card />`.
+- `web/src/app/core/icons.ts` — register `graduation-cap`, `lightbulb`
+  (Skill Finder), `circle-slash` (reserved-rule indicator),
+  `chevron-down` (disclosure for description / examples).
 
 **Docs (canonical privacy-contract edits in the same PR)**
 
@@ -1024,6 +1145,22 @@ of premature DSL design is not.
   the Efficiency page uses: a contextual hint pointing at Settings →
   Backfill JSONL when JSONL-dependent rules return no data despite
   qualifying sessions existing.
+- **Vocabulary defaults won't match every user.** The planning- and
+  constraint-keyword lists ship with sensible defaults but are
+  inevitably opinionated. Mitigation: every list is one inline-edit
+  away in Settings → Coach. The Settings page explicitly explains
+  *"these lists power detection; tweak them to match your team's
+  vocabulary — Andon won't infer them for you."*
+- **`low-spec-rate` may fire on agent-mode-heavy sessions that
+  legitimately don't need specs** (e.g. exploratory data analysis,
+  pure-Q&A debugging). Mitigation: the rule only counts sessions whose
+  first turn precedes `file_changes` rows (a proxy for *"this session
+  produced code, so an upfront spec was relevant"*). Pure-Q&A sessions
+  don't qualify as denominators.
+- **`high-cancellation` is missing from Phase 1 and users may notice.**
+  The reserved-slot row in the catalogue and the Settings → Coach UI
+  make the absence explicit rather than silent. A spec follow-up tracks
+  the OTLP signal we'd need to capture.
 
 ## Attribution
 
