@@ -46,4 +46,9 @@ export const routes: Routes = [
         (m) => m.DiagnosticsComponent,
       ),
   },
+  {
+    path: 'coach',
+    loadComponent: () =>
+      import('./features/coach/coach.component').then((m) => m.CoachComponent),
+  },
 ];
