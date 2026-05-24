@@ -15,7 +15,8 @@ Claude Code already emits a rich stream of OpenTelemetry metrics and logs — co
 - A bundled OTLP receiver (gRPC `:4317` + HTTP/protobuf `:4318`) accepts the telemetry directly from the Claude Code CLI.
 - An embedded SQLite database persists every metric and log event, denormalised by session.
 - **Retroactive backfill:** Andon also reads `~/.claude/projects/**/*.jsonl`, so a fresh install populates months of historical sessions in one pass. Per-API-call dedup via `requestId` keeps costs honest.
-- An Angular dashboard, served by a localhost API on `:8765`, renders the data across **Overview**, **Efficiency**, **Sessions**, **Files**, **Behaviour**, **Diagnostics**, and **Settings** pages.
+- An Angular dashboard, served by a localhost API on `:8765`, renders the data across **Overview**, **Efficiency**, **Coach**, **Sessions**, **Files**, **Behaviour**, **Diagnostics**, and **Settings** pages.
+- **Coach** — anti-pattern rules, practice-area scorecards, and a Skill Finder for repeated prompts (experimental)
 - An **Efficiency** page surfaces prompt-cache savings (gross / premium / net) and per-model-family cost-efficiency, split into *main* vs *subagent* rows so a Haiku subagent's spend stops being folded into its Opus parent.
 - A **Behaviour** page (JSONL-derived) shows model mix, slash-command frequency, and sub-agent usage — things OTel can't see.
 - **Budget alerts:** set a monthly cap and Andon repaints its tray icon (neutral → amber → red) and fires a one-shot desktop notification as your projected end-of-month spend crosses 80% / 100%.
@@ -142,10 +143,13 @@ cargo tauri build        # release binary in src-tauri/target/release/bundle/
 
 - All ports bind to `127.0.0.1`. Nothing is exposed to the network.
 - No outbound calls. Andon never phones home.
-- Raw user prompts are never persisted even if `OTEL_LOG_USER_PROMPTS=1` upstream.
+- Prompts are persisted to the local SQLite database. The opt-in OTel forwarder strips `user_prompt` bodies before re-emitting.
 - SQLite DB is user-only read/write.
 - Andon installs a Claude Code `SessionStart` hook (in addition to the existing `PostToolUse` and `SessionEnd` hooks) that POSTs the session id and working directory to `http://127.0.0.1:8765/api/session/context`. Git metadata (toplevel, remote, branch) is computed by Andon locally — git is invoked from the cwd you launched Claude Code from. Nothing leaves the machine.
 
 ## License
 
 MIT.
+
+The Coach feature ports the rule set and scoring approach from
+[Microsoft AI Engineering Coach](https://github.com/microsoft/AI-Engineering-Coach) (MIT).

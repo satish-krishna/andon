@@ -91,7 +91,7 @@ Full rationale lives in [`CONTRIBUTING.md`](CONTRIBUTING.md). Short list for in-
 ## Privacy guarantees the code must keep
 
 1. All listeners bind to `127.0.0.1` only — never `0.0.0.0`.
-2. Raw user prompts are never persisted, even if `OTEL_LOG_USER_PROMPTS=1` upstream.
+2. Prompts persisted to the local DB never leave it. The OTel forwarder strips `user_prompt` bodies before re-emitting.
 3. No outbound network calls except the opt-in OTel forwarder.
 4. No "telemetry of telemetry" — the app does not phone home.
 

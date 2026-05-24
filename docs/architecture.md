@@ -39,6 +39,7 @@ flowchart TB
   - `:8765` — axum JSON API consumed by the SPA. CORS allow-any so a browser pointed at a built `dist/` also works for development.
 - **Window is optional.** Closing it hides to tray; quitting from the tray shuts the runtime down cleanly.
 - **Budget monitor.** A background task wakes every 30 minutes (and once at startup), projects month-end cost from `cost_entries`, compares it to the user's monthly budget, repaints the tray icon, and fires desktop notifications. Notification de-dup state is persisted to `budget-alerts.json` in the data directory; the budget amount itself lives in `settings.json` under the `budget` key.
+- **Coach re-evaluator.** On `SessionEnd`, the coach re-evaluator runs in a spawned tokio task (never inline) and writes findings to `coach_findings`. The JSONL backfill also runs the evaluator and Skill Finder at batch completion.
 
 ## Ingestion path
 
@@ -125,6 +126,10 @@ WAL mode, applied incrementally via numbered migrations on first run. Indexes on
 | `session_jsonl_calls`  | Per-session count of distinct `requestId`s observed in the JSONL transcript. Powers partial-OTLP detection via `GET /api/jsonl/coverage-gaps`. |
 | `jsonl_errors`         | Per-line JSONL parse errors with file path + line number; surfaced on the Diagnostics page. |
 | `jsonl_ingest_runs`    | One row per JSONL ingest run (backfill or session-end), with start/end timestamps, files processed, records processed, and error counts. |
+| `prompt_turns`         | Per-user-turn prompt rows with derived flags: `length`, `has_file_ref`, `has_code`, `has_constraint`. Source for Coach anti-pattern evaluation. |
+| `skill_opportunities`  | Skill Finder cached opportunities per look-back window. Rebuilt on each evaluation run. |
+| `coach_rules`          | Static catalogue of anti-pattern rules, persisted for per-rule enable/disable state. |
+| `coach_findings`       | Per-evaluation findings, idempotent via unique index on `(session_id, rule_slug, turn_index)`. |
 
 ## OTel resource attributes captured
 
@@ -142,7 +147,7 @@ WAL mode, applied incrementally via numbered migrations on first run. Indexes on
 ## Privacy & safety rules
 
 1. All listeners bind to `127.0.0.1` only. Never `0.0.0.0`.
-2. Raw user prompts are not logged even if `OTEL_LOG_USER_PROMPTS=1` is set upstream.
+2. Prompts persisted to the local DB never leave it. The OTel forwarder strips `user_prompt` bodies before re-emitting.
 3. SQLite DB file is user-only read/write.
 4. No outbound network calls except the optional, opt-in OTel forwarder.
 5. No telemetry of telemetry — andon does not phone home.

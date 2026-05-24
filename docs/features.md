@@ -39,6 +39,22 @@ A filterable page answering "am I spending tokens well?".
 
 All figures respect the global filter bar (window + model chips).
 
+## Coach (experimental)
+
+Anti-pattern rules + Skill Finder over your local sessions. The `/coach`
+page shows a five-practice scorecard (Prompt quality, Session hygiene,
+Code review, Tool mastery, Context management) with WoW/MoM trends, a
+findings list, and a continuous "Model diversity" tile. The
+`/coach/skills` sub-route surfaces repeated prompt patterns as
+custom-skill opportunities you can copy as starter slash commands.
+
+All processing is local — no outbound calls. Rules and vocabulary
+lists are configurable in **Settings → Coach**.
+
+Inspired by [Microsoft AI Engineering Coach](https://github.com/microsoft/AI-Engineering-Coach) (MIT).
+The scoring formula is ported verbatim; the rule catalogue is adapted
+to Andon's data schema.
+
 ## Sessions
 
 Every Claude Code session andon has seen, filterable and sortable.
