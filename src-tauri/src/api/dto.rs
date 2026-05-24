@@ -266,6 +266,15 @@ pub struct SubAgentEntry {
     pub invocations: i64,
 }
 
+// ---- Coach DTOs ----
+
+#[derive(serde::Serialize)]
+pub struct CoachScorecardDto {
+    pub practices: Vec<crate::coach::score::PracticeRow>,
+    pub window: crate::coach::score::WindowDto,
+    pub sessions_in_window: i64,
+}
+
 // ---- Efficiency page DTOs ----
 
 #[derive(Debug, serde::Serialize)]

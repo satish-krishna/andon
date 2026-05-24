@@ -74,6 +74,8 @@ pub fn router(state: ApiState) -> Router {
         .route("/api/behaviour/model-mix", get(behaviour_model_mix))
         .route("/api/behaviour/slash-commands", get(behaviour_slash_commands))
         .route("/api/behaviour/subagents", get(behaviour_subagents))
+        // Coach
+        .route("/api/coach/scorecard", get(coach_scorecard))
         .with_state(state)
 }
 
@@ -867,6 +869,15 @@ impl From<rusqlite::Error> for ApiError {
         Self {
             status: StatusCode::INTERNAL_SERVER_ERROR,
             message: format!("sqlite: {e}"),
+        }
+    }
+}
+
+impl From<crate::coach::CoachError> for ApiError {
+    fn from(e: crate::coach::CoachError) -> Self {
+        Self {
+            status: StatusCode::INTERNAL_SERVER_ERROR,
+            message: format!("coach: {e}"),
         }
     }
 }
@@ -2837,6 +2848,26 @@ async fn behaviour_subagents(
     .await
     .unwrap_or_default();
     Json(out)
+}
+
+// ============================================================================
+// Coach endpoints (I1–I4)
+// ============================================================================
+
+async fn coach_scorecard(
+    State(state): State<ApiState>,
+    Query(q): Query<FilterQuery>,
+) -> Result<Json<CoachScorecardDto>, ApiError> {
+    let (from, to) = q.window();
+    let models = if q.model_list().is_empty() { None } else { Some(q.model_list()) };
+    let win = crate::coach::rules::Window { from_ms: from, to_ms: to, models };
+    let card = crate::coach::score::scorecard(&state.pool, &win, &state.settings.coach())
+        .map_err(ApiError::from)?;
+    Ok(Json(CoachScorecardDto {
+        practices: card.practices,
+        window: card.window,
+        sessions_in_window: card.sessions_in_window,
+    }))
 }
 
 #[cfg(test)]
