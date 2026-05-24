@@ -81,6 +81,7 @@ pub fn router(state: ApiState) -> Router {
         .route("/api/coach/rules/:id", post(coach_rules_update))
         .route("/api/coach/skills", get(coach_skills))
         .route("/api/coach/skills/:hash/examples", get(coach_skill_examples))
+        .route("/api/settings/coach", get(get_coach_settings).put(put_coach_settings))
         .with_state(state)
 }
 
@@ -3073,6 +3074,31 @@ async fn coach_skill_examples(
     let limit = q.limit.unwrap_or(3).clamp(1, 10);
     let ex = crate::coach::skill::examples_for_hash(&state.pool, &hash, limit)?;
     Ok(Json(CoachSkillExamplesResponse { examples: ex }))
+}
+
+// ============================================================================
+// I8: GET /PUT /api/settings/coach
+// ============================================================================
+
+async fn get_coach_settings(
+    State(state): State<ApiState>,
+) -> Json<crate::settings::CoachSettings> {
+    Json(state.settings.coach())
+}
+
+async fn put_coach_settings(
+    State(state): State<ApiState>,
+    body: Result<Json<crate::settings::CoachSettings>, JsonRejection>,
+) -> Result<Json<crate::settings::CoachSettings>, ApiError> {
+    let Json(new) = body.map_err(|e| ApiError {
+        status: StatusCode::BAD_REQUEST,
+        message: format!("invalid coach settings: {e}"),
+    })?;
+    let saved = state.settings.save_coach(new).map_err(|e| ApiError {
+        status: StatusCode::INTERNAL_SERVER_ERROR,
+        message: format!("save_coach: {e}"),
+    })?;
+    Ok(Json(saved))
 }
 
 #[cfg(test)]
