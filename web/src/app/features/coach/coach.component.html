@@ -17,9 +17,47 @@
 <app-filter-bar />
 
 <div class="px-6 py-5 flex flex-col gap-4">
-  <!-- K2 fills in scorecard, K3 findings, K4 CTA -->
   <section class="panel">
     <div class="panel-title">Scorecard</div>
-    <div class="panel-body text-xs text-muted">(coming up — Task K2)</div>
+    <div class="panel-body">
+      @if (scorecard(); as sc) {
+        <div class="grid grid-cols-5 gap-4">
+          @for (p of sc.practices; track p.practice) {
+            <div data-test="practice-tile" class="border border-border rounded p-3 flex flex-col gap-2">
+              <div class="text-[11px] uppercase tracking-wider text-muted flex items-center justify-between">
+                <span>{{ practiceLabel(p.practice) }}</span>
+                <span>{{ p.triggered_count }} {{ p.triggered_count === 1 ? 'hit' : 'hits' }}</span>
+              </div>
+              <div class="text-5xl font-mono tabular-nums"
+                   [class.text-ok]="scoreColor(p) === 'ok'"
+                   [class.text-warn]="scoreColor(p) === 'warn'"
+                   [class.text-err]="scoreColor(p) === 'err'"
+                   [class.text-muted]="scoreColor(p) === 'muted'">
+                {{ p.score ?? '—' }}
+              </div>
+              <div class="h-1.5 bg-border rounded-sm overflow-hidden">
+                <div class="h-full"
+                     [class.bg-ok]="scoreColor(p) === 'ok'"
+                     [class.bg-warn]="scoreColor(p) === 'warn'"
+                     [class.bg-err]="scoreColor(p) === 'err'"
+                     [style.width.%]="p.score ?? 0"></div>
+              </div>
+              <div class="flex items-center gap-2 text-[11px] font-mono">
+                <span [class]="trendCls(p.wow_pct)">{{ trendGlyph(p.wow_pct) }} {{ absPct(p.wow_pct) }}% w</span>
+                <span [class]="trendCls(p.mom_pct)">{{ trendGlyph(p.mom_pct) }} {{ absPct(p.mom_pct) }}% m</span>
+              </div>
+              @for (c of p.continuous; track c.id) {
+                <div class="inline-flex items-center gap-1.5 px-2 py-0.5 rounded bg-border/40 text-[11px] font-mono">
+                  <span class="text-muted">{{ continuousLabel(c.id) }}</span>
+                  <span class="tabular-nums">{{ c.score }}</span>
+                </div>
+              }
+            </div>
+          }
+        </div>
+      } @else {
+        <div class="text-xs text-muted">Loading…</div>
+      }
+    </div>
   </section>
 </div>

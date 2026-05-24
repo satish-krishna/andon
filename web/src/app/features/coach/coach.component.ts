@@ -33,4 +33,33 @@ export class CoachComponent {
       this.api.coachSkills('90d').subscribe(v => this.skills.set(v));
     });
   }
+
+  practiceLabel(p: string): string {
+    const labels: Record<string, string> = {
+      prompt: 'Prompt quality',
+      hygiene: 'Session hygiene',
+      review: 'Code review',
+      tool: 'Tool mastery',
+      context: 'Context mgmt',
+    };
+    return labels[p] ?? p;
+  }
+
+  continuousLabel(id: string): string {
+    return id === 'model-diversity' ? 'Model diversity' : id;
+  }
+
+  scoreColor(p: { score: number | null }): 'ok' | 'warn' | 'err' | 'muted' {
+    if (p.score == null) return 'muted';
+    if (p.score >= 70) return 'ok';
+    if (p.score >= 40) return 'warn';
+    return 'err';
+  }
+
+  trendGlyph(pct: number): string { return pct < 0 ? '▾' : pct > 0 ? '▴' : '—'; }
+  trendCls(pct: number): string {
+    // Fewer findings is better — invert the colour.
+    return pct < 0 ? 'text-ok' : pct > 0 ? 'text-err' : 'text-muted';
+  }
+  absPct(p: number): number { return Math.abs(p); }
 }
