@@ -73,6 +73,7 @@ fn run_detector(pool: &Arc<DbPool>, rule: &Rule, window: &Window) -> Result<Vec<
         "abandon-sessions" => crate::coach::rules::detect_abandon_sessions(pool, window),
         "speed-accept" => crate::coach::rules::detect_speed_accept(pool, window),
         "no-slash-commands" => crate::coach::rules::detect_no_slash_commands(pool, window),
+        "cache-hit-starvation" => crate::coach::rules::detect_cache_hit_starvation(pool, window),
         _ => Ok(vec![]),
     }
 }

@@ -435,6 +435,41 @@ pub fn score_model_diversity(pool: &std::sync::Arc<DbPool>, window: &Window) -> 
     })
 }
 
+// ---------------------------------------------------------------------------
+// E10: cache-hit-starvation (context, binary)
+// ---------------------------------------------------------------------------
+
+/// Fires per-session when cacheRead / (cacheRead + cacheCreation + input) < 10%
+/// over sessions with >=20 distinct-timestamp turns and >=5000 total input tokens.
+pub fn detect_cache_hit_starvation(pool: &std::sync::Arc<DbPool>, window: &Window) -> crate::coach::Result<Vec<Finding>> {
+    let conn = pool.get()?;
+    let mut stmt = conn.prepare(
+        "SELECT session_id, last_ts, total_input, cache_read, cache_create
+         FROM (
+           SELECT s.session_id, MAX(tu.timestamp) AS last_ts,
+             SUM(CASE WHEN tu.token_type = 'input' THEN tu.count ELSE 0 END) AS total_input,
+             SUM(CASE WHEN tu.token_type = 'cacheRead' THEN tu.count ELSE 0 END) AS cache_read,
+             SUM(CASE WHEN tu.token_type = 'cacheCreation' THEN tu.count ELSE 0 END) AS cache_create,
+             COUNT(DISTINCT tu.timestamp) AS turns
+           FROM token_usage tu
+           JOIN sessions s USING (session_id)
+           WHERE s.started_at >= ?1 AND s.started_at < ?2
+           GROUP BY s.session_id
+         )
+         WHERE turns >= 20 AND total_input >= 5000
+           AND CAST(cache_read AS REAL) / (cache_read + cache_create + total_input) < 0.1",
+    )?;
+    let rows = stmt.query_map(rusqlite::params![window.from_ms, window.to_ms], |r| {
+        Ok((r.get::<_, String>(0)?, r.get::<_, i64>(1)?, r.get::<_, i64>(2)?, r.get::<_, i64>(3)?, r.get::<_, i64>(4)?))
+    })?;
+    Ok(rows.filter_map(|r| r.ok()).map(|(sid, ts, input, read, create)| Finding {
+        rule_id: "cache-hit-starvation".into(),
+        session_id: sid,
+        detected_at: ts,
+        payload_json: serde_json::json!({ "input": input, "cache_read": read, "cache_create": create }).to_string(),
+    }).collect())
+}
+
 /// Fires when >=3 sessions in the window have tool decisions but zero accepts.
 pub fn detect_abandon_sessions(pool: &std::sync::Arc<DbPool>, window: &Window) -> crate::coach::Result<Vec<Finding>> {
     let conn = pool.get()?;

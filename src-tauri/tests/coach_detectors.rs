@@ -299,3 +299,35 @@ async fn model_diversity_score_two_models_is_50() {
     let score = andon_lib::coach::rules::score_model_diversity(&pool, &win).unwrap();
     assert_eq!(score, 50);
 }
+
+// ---------------------------------------------------------------------------
+// E10: cache-hit-starvation (context, binary)
+// ---------------------------------------------------------------------------
+
+#[tokio::test]
+async fn cache_hit_starvation_fires_below_ten_percent() {
+    let (pool, _dir) = common::fixture_pool();
+    andon_lib::coach::seed_rules(&pool).unwrap();
+    let now = chrono::Utc::now().timestamp_millis();
+    let conn = pool.get().unwrap();
+    conn.execute("INSERT INTO sessions (session_id, started_at) VALUES ('s1', ?1)", params![now-1000]).unwrap();
+
+    // 25 turns, each with 5000 input + 100 cacheRead + 50 cacheCreation
+    // cacheRate = 2500 / (2500 + 1250 + 125000) ≈ 2% < 10% → trigger
+    for i in 0..25 {
+        let t = now - 1000 + i*100;
+        for (kind, count) in [("input", 5000i64), ("cacheRead", 100), ("cacheCreation", 50)] {
+            conn.execute(
+                "INSERT INTO token_usage (session_id, timestamp, model, token_type, count) VALUES ('s1', ?1, 'm', ?2, ?3)",
+                params![t, kind, count]).unwrap();
+        }
+    }
+    drop(conn);
+    enable_only(&pool, &["cache-hit-starvation"]);
+    let win = Window { from_ms: 0, to_ms: now + 1, models: None };
+    engine::evaluate_window(&pool, &win).unwrap();
+    let n: i64 = pool.get().unwrap().query_row(
+        "SELECT COUNT(*) FROM coach_findings WHERE rule_id = 'cache-hit-starvation'",
+        [], |r| r.get(0)).unwrap();
+    assert_eq!(n, 1);
+}
