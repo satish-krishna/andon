@@ -71,6 +71,7 @@ fn run_detector(pool: &Arc<DbPool>, rule: &Rule, window: &Window) -> Result<Vec<
         "long-session-no-commit" => crate::coach::rules::detect_long_session_no_commit(pool, window),
         "late-night-coding" => crate::coach::rules::detect_late_night_coding(pool, window),
         "abandon-sessions" => crate::coach::rules::detect_abandon_sessions(pool, window),
+        "speed-accept" => crate::coach::rules::detect_speed_accept(pool, window),
         _ => Ok(vec![]),
     }
 }

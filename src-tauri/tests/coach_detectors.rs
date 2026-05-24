@@ -191,6 +191,36 @@ async fn late_night_fires_with_five_sessions() {
 // ---------------------------------------------------------------------------
 
 #[tokio::test]
+async fn speed_accept_fires() {
+    let (pool, _dir) = common::fixture_pool();
+    andon_lib::coach::seed_rules(&pool).unwrap();
+    let now = chrono::Utc::now().timestamp_millis();
+    let conn = pool.get().unwrap();
+    conn.execute("INSERT INTO sessions (session_id, started_at) VALUES ('s1', ?1)", params![now - 60_000]).unwrap();
+    for i in 0..5i64 {
+        let base = now - 50_000 + i*10_000;
+        conn.execute(
+            "INSERT INTO file_changes (session_id, timestamp, file_path, lines_added) VALUES ('s1', ?1, 'a.rs', 25)",
+            params![base]).unwrap();
+        conn.execute(
+            "INSERT INTO tool_decisions (session_id, timestamp, tool_name, decision) VALUES ('s1', ?1, 'Edit', 'accept')",
+            params![base + 100]).unwrap();
+        conn.execute(
+            "INSERT INTO prompt_turns (session_id, turn_index, ts, source, text, norm_hash, length, has_file_ref, has_code, has_constraint)
+             VALUES ('s1', ?1, ?2, 'jsonl', 'go on', ?3, 5, 0, 0, 0)",
+            params![i, base + 5_000, format!("h{}", i)]).unwrap();
+    }
+    drop(conn);
+    enable_only(&pool, &["speed-accept"]);
+    let win = Window { from_ms: 0, to_ms: now + 1, models: None };
+    engine::evaluate_window(&pool, &win).unwrap();
+    let n: i64 = pool.get().unwrap().query_row(
+        "SELECT COUNT(*) FROM coach_findings WHERE rule_id = 'speed-accept'",
+        [], |r| r.get(0)).unwrap();
+    assert_eq!(n, 1);
+}
+
+#[tokio::test]
 async fn abandon_sessions_fires() {
     let (pool, _dir) = common::fixture_pool();
     andon_lib::coach::seed_rules(&pool).unwrap();

@@ -342,6 +342,51 @@ pub fn detect_late_night_coding(pool: &std::sync::Arc<DbPool>, window: &Window) 
     }])
 }
 
+/// Fires when a session has 5+ accept events followed within 15s by a user turn,
+/// where the accepted change had >=20 lines added.
+pub fn detect_speed_accept(pool: &std::sync::Arc<DbPool>, window: &Window) -> crate::coach::Result<Vec<Finding>> {
+    let conn = pool.get()?;
+    let mut stmt = conn.prepare(
+        "WITH accepts AS (
+           SELECT td.session_id, td.timestamp AS acc_ts
+           FROM tool_decisions td
+           JOIN sessions s USING (session_id)
+           WHERE td.decision = 'accept'
+             AND s.started_at >= ?1 AND s.started_at < ?2
+         ),
+         qualifying AS (
+           SELECT a.session_id, a.acc_ts
+           FROM accepts a
+           WHERE EXISTS (
+             SELECT 1 FROM file_changes fc
+              WHERE fc.session_id = a.session_id
+                AND fc.timestamp <= a.acc_ts
+                AND fc.timestamp >= a.acc_ts - 60000
+                AND fc.lines_added >= 20
+           )
+           AND EXISTS (
+             SELECT 1 FROM prompt_turns pt
+              WHERE pt.session_id = a.session_id
+                AND pt.ts > a.acc_ts
+                AND pt.ts <= a.acc_ts + 15000
+           )
+         )
+         SELECT session_id, COUNT(*) AS n, MAX(acc_ts) AS last_ts
+         FROM qualifying
+         GROUP BY session_id
+         HAVING n >= 5",
+    )?;
+    let rows = stmt.query_map(rusqlite::params![window.from_ms, window.to_ms], |r| {
+        Ok((r.get::<_, String>(0)?, r.get::<_, i64>(1)?, r.get::<_, i64>(2)?))
+    })?;
+    Ok(rows.filter_map(|r| r.ok()).map(|(sid, n, ts)| Finding {
+        rule_id: "speed-accept".into(),
+        session_id: sid,
+        detected_at: ts,
+        payload_json: serde_json::json!({ "occurrences": n }).to_string(),
+    }).collect())
+}
+
 /// Fires when >=3 sessions in the window have tool decisions but zero accepts.
 pub fn detect_abandon_sessions(pool: &std::sync::Arc<DbPool>, window: &Window) -> crate::coach::Result<Vec<Finding>> {
     let conn = pool.get()?;
