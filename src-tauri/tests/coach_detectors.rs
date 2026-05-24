@@ -87,3 +87,26 @@ async fn lazy_prompting_fires_when_third_are_short() {
         [], |r| r.get(0)).unwrap();
     assert_eq!(n, 1);
 }
+
+#[tokio::test]
+async fn low_constraint_usage_fires_below_twenty_percent() {
+    let (pool, _dir) = common::fixture_pool();
+    andon_lib::coach::seed_rules(&pool).unwrap();
+    let now = chrono::Utc::now().timestamp_millis();
+    pool.get().unwrap().execute("INSERT INTO sessions (session_id, started_at) VALUES ('s1', ?1)", params![now - 1000]).unwrap();
+    // 6 turns, only 1 has constraint -> 16.7% < 20% -> trigger
+    for i in 0..6 {
+        pool.get().unwrap().execute(
+            "INSERT INTO prompt_turns (session_id, turn_index, ts, source, text, norm_hash, length, has_file_ref, has_code, has_constraint)
+             VALUES ('s1', ?1, ?2, 'jsonl', 'x', ?3, 1, 0, 0, ?4)",
+            params![i, now - (1000 - i*10), format!("h{}", i), if i == 0 { 1 } else { 0 }],
+        ).unwrap();
+    }
+    enable_only(&pool, &["low-constraint-usage"]);
+    let win = Window { from_ms: now - 86400_000, to_ms: now + 1, models: None };
+    engine::evaluate_window(&pool, &win).unwrap();
+    let n: i64 = pool.get().unwrap().query_row(
+        "SELECT COUNT(*) FROM coach_findings WHERE rule_id = 'low-constraint-usage'",
+        [], |r| r.get(0)).unwrap();
+    assert_eq!(n, 1);
+}
