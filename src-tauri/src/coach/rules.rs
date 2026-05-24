@@ -208,6 +208,30 @@ pub fn by_id(id: &str) -> Option<&'static Rule> {
 }
 
 // ---------------------------------------------------------------------------
+// Helper: build the optional model-filter clause for session-scoped queries
+// ---------------------------------------------------------------------------
+
+/// Returns `(sql_fragment, bind_values)` where `sql_fragment` is either empty
+/// or an `AND s.session_id IN (SELECT DISTINCT session_id FROM cost_entries
+/// WHERE model IN (?, …))` clause, and `bind_values` are the corresponding
+/// model strings to bind.
+///
+/// Used by detectors that declare `respects_model_filter: true` and filter
+/// sessions via the `cost_entries` join table.
+fn build_session_model_filter(window: &Window) -> (String, Vec<String>) {
+    match &window.models {
+        Some(models) if !models.is_empty() => {
+            let placeholders = models.iter().map(|_| "?").collect::<Vec<_>>().join(", ");
+            let clause = format!(
+                " AND s.session_id IN (SELECT DISTINCT session_id FROM cost_entries WHERE model IN ({placeholders}))"
+            );
+            (clause, models.clone())
+        }
+        _ => (String::new(), vec![]),
+    }
+}
+
+// ---------------------------------------------------------------------------
 // Detector implementations (Section E — one function per rule)
 // ---------------------------------------------------------------------------
 
@@ -418,15 +442,30 @@ pub fn detect_no_slash_commands(pool: &std::sync::Arc<DbPool>, window: &Window) 
 
 /// Returns a 0–100 diversity score based on distinct models used in the window.
 /// 4+ models → 100, 3 → 80, 2 → 50, else → 20.
+///
+/// When `window.models` is `Some(non-empty)`, only cost_entries whose `model`
+/// is in the list are counted.
 pub fn score_model_diversity(pool: &std::sync::Arc<DbPool>, window: &Window) -> crate::coach::Result<i64> {
     let conn = pool.get()?;
-    let n: i64 = conn.query_row(
-        "SELECT COUNT(DISTINCT model)
-         FROM cost_entries
-         WHERE timestamp >= ?1 AND timestamp < ?2",
-        rusqlite::params![window.from_ms, window.to_ms],
-        |r| r.get(0),
-    ).unwrap_or(0);
+
+    let mut sql = String::from(
+        "SELECT COUNT(DISTINCT model) FROM cost_entries WHERE timestamp >= ? AND timestamp < ?",
+    );
+    let mut params: Vec<Box<dyn rusqlite::ToSql>> =
+        vec![Box::new(window.from_ms), Box::new(window.to_ms)];
+
+    if let Some(models) = &window.models {
+        if !models.is_empty() {
+            let placeholders = models.iter().map(|_| "?").collect::<Vec<_>>().join(", ");
+            sql.push_str(&format!(" AND model IN ({placeholders})"));
+            for m in models {
+                params.push(Box::new(m.clone()));
+            }
+        }
+    }
+
+    let refs: Vec<&dyn rusqlite::ToSql> = params.iter().map(|b| &**b).collect();
+    let n: i64 = conn.query_row(&sql, refs.as_slice(), |r| r.get(0)).unwrap_or(0);
     Ok(match n {
         x if x >= 4 => 100,
         3 => 80,
@@ -441,9 +480,16 @@ pub fn score_model_diversity(pool: &std::sync::Arc<DbPool>, window: &Window) -> 
 
 /// Fires per-session when cacheRead / (cacheRead + cacheCreation + input) < 10%
 /// over sessions with >=20 distinct-timestamp turns and >=5000 total input tokens.
+///
+/// When `window.models` is `Some(non-empty)`, only sessions that have at least
+/// one `cost_entries` row for one of the listed models are considered.
 pub fn detect_cache_hit_starvation(pool: &std::sync::Arc<DbPool>, window: &Window) -> crate::coach::Result<Vec<Finding>> {
     let conn = pool.get()?;
-    let mut stmt = conn.prepare(
+
+    // Build an optional model-filter clause scoped to `sessions`.
+    let (model_clause, model_params) = build_session_model_filter(window);
+
+    let sql = format!(
         "SELECT session_id, last_ts, total_input, cache_read, cache_create
          FROM (
            SELECT s.session_id, MAX(tu.timestamp) AS last_ts,
@@ -453,13 +499,22 @@ pub fn detect_cache_hit_starvation(pool: &std::sync::Arc<DbPool>, window: &Windo
              COUNT(DISTINCT tu.timestamp) AS turns
            FROM token_usage tu
            JOIN sessions s USING (session_id)
-           WHERE s.started_at >= ?1 AND s.started_at < ?2
+           WHERE s.started_at >= ? AND s.started_at < ?{model_clause}
            GROUP BY s.session_id
          )
          WHERE turns >= 20 AND total_input >= 5000
            AND CAST(cache_read AS REAL) / (cache_read + cache_create + total_input) < 0.1",
-    )?;
-    let rows = stmt.query_map(rusqlite::params![window.from_ms, window.to_ms], |r| {
+    );
+
+    let mut params: Vec<Box<dyn rusqlite::ToSql>> =
+        vec![Box::new(window.from_ms), Box::new(window.to_ms)];
+    for m in model_params {
+        params.push(Box::new(m));
+    }
+    let refs: Vec<&dyn rusqlite::ToSql> = params.iter().map(|b| &**b).collect();
+
+    let mut stmt = conn.prepare(&sql)?;
+    let rows = stmt.query_map(refs.as_slice(), |r| {
         Ok((r.get::<_, String>(0)?, r.get::<_, i64>(1)?, r.get::<_, i64>(2)?, r.get::<_, i64>(3)?, r.get::<_, i64>(4)?))
     })?;
     Ok(rows.filter_map(|r| r.ok()).map(|(sid, ts, input, read, create)| Finding {
@@ -476,13 +531,19 @@ pub fn detect_cache_hit_starvation(pool: &std::sync::Arc<DbPool>, window: &Windo
 
 /// Fires when fewer than 20% of agent-mode sessions (those that produced file changes)
 /// start with a spec-driven first turn, evaluated over >=5 qualifying sessions.
+///
+/// When `window.models` is `Some(non-empty)`, only sessions that have at least
+/// one `cost_entries` row for one of the listed models are considered.
 pub fn detect_low_spec_rate(
     pool: &std::sync::Arc<DbPool>,
     window: &Window,
     coach_settings: &crate::settings::CoachSettings,
 ) -> crate::coach::Result<Vec<Finding>> {
     let conn = pool.get()?;
-    let mut stmt = conn.prepare(
+
+    let (model_clause, model_params) = build_session_model_filter(window);
+
+    let sql = format!(
         "SELECT DISTINCT s.session_id, s.started_at,
                 (SELECT pt.text FROM prompt_turns pt
                  WHERE pt.session_id = s.session_id AND pt.turn_index = 0) AS first_turn,
@@ -490,10 +551,19 @@ pub fn detect_low_spec_rate(
                  WHERE pt.session_id = s.session_id AND pt.turn_index = 0) AS first_cmd
          FROM sessions s
          JOIN file_changes fc ON fc.session_id = s.session_id
-         WHERE s.started_at >= ?1 AND s.started_at < ?2",
-    )?;
+         WHERE s.started_at >= ? AND s.started_at < ?{model_clause}",
+    );
+
+    let mut params: Vec<Box<dyn rusqlite::ToSql>> =
+        vec![Box::new(window.from_ms), Box::new(window.to_ms)];
+    for m in model_params {
+        params.push(Box::new(m));
+    }
+    let refs: Vec<&dyn rusqlite::ToSql> = params.iter().map(|b| &**b).collect();
+
+    let mut stmt = conn.prepare(&sql)?;
     let sessions: Vec<(String, i64, Option<String>, Option<String>)> = stmt.query_map(
-        rusqlite::params![window.from_ms, window.to_ms],
+        refs.as_slice(),
         |r| Ok((
             r.get::<_, String>(0)?,
             r.get::<_, i64>(1)?,

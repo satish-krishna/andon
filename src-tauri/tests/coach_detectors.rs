@@ -333,6 +333,128 @@ async fn cache_hit_starvation_fires_below_ten_percent() {
 }
 
 // ---------------------------------------------------------------------------
+// Model filter — rules that declare respects_model_filter: true
+// ---------------------------------------------------------------------------
+
+/// Seed two sessions, each with cost_entries on a different model.
+/// When `window.models` is filtered to only one of them,
+/// `score_model_diversity` must count only 1 distinct model (score = 20),
+/// not 2 (score = 50).
+#[tokio::test]
+async fn model_diversity_filter_restricts_to_selected_model() {
+    let (pool, _dir) = common::fixture_pool();
+    andon_lib::coach::seed_rules(&pool).unwrap();
+    let now = chrono::Utc::now().timestamp_millis();
+    let conn = pool.get().unwrap();
+    conn.execute("INSERT INTO sessions (session_id, started_at) VALUES ('s1', ?1)", params![now-2000]).unwrap();
+    conn.execute("INSERT INTO sessions (session_id, started_at) VALUES ('s2', ?1)", params![now-1000]).unwrap();
+    conn.execute("INSERT INTO cost_entries (session_id, timestamp, model, cost_usd) VALUES ('s1', ?1, 'claude-opus-4-7', 0.1)",
+        params![now-1500]).unwrap();
+    conn.execute("INSERT INTO cost_entries (session_id, timestamp, model, cost_usd) VALUES ('s2', ?1, 'claude-haiku-4-5', 0.1)",
+        params![now-500]).unwrap();
+    drop(conn);
+
+    // Unfiltered — both models visible → score = 50.
+    let win_all = Window { from_ms: 0, to_ms: now + 1, models: None };
+    let score_all = andon_lib::coach::rules::score_model_diversity(&pool, &win_all).unwrap();
+    assert_eq!(score_all, 50, "unfiltered: two models → 50");
+
+    // Filtered to one model — only 1 distinct model should be seen → score = 20.
+    let win_filtered = Window { from_ms: 0, to_ms: now + 1, models: Some(vec!["claude-opus-4-7".into()]) };
+    let score_filtered = andon_lib::coach::rules::score_model_diversity(&pool, &win_filtered).unwrap();
+    assert_eq!(score_filtered, 20, "filtered: one model → 20 (not 50)");
+}
+
+/// cache-hit-starvation fires for s1 (model-a). s2 uses model-b and also
+/// has poor cache stats. When the window is filtered to model-a only, only
+/// the finding for s1 should appear.
+#[tokio::test]
+async fn cache_hit_starvation_filter_excludes_other_model_session() {
+    let (pool, _dir) = common::fixture_pool();
+    andon_lib::coach::seed_rules(&pool).unwrap();
+    let now = chrono::Utc::now().timestamp_millis();
+    let conn = pool.get().unwrap();
+    // Two sessions, each on a different model.
+    for (sid, model) in [("s1", "model-a"), ("s2", "model-b")] {
+        conn.execute("INSERT INTO sessions (session_id, started_at) VALUES (?1, ?2)",
+            params![sid, now - 2000]).unwrap();
+        // seed cost_entries so the session is associated with the model
+        conn.execute("INSERT INTO cost_entries (session_id, timestamp, model, cost_usd) VALUES (?1, ?2, ?3, 0.1)",
+            params![sid, now - 1900, model]).unwrap();
+        // 25 token_usage rows with poor cache rate (< 10 %)
+        for i in 0..25i64 {
+            let t = now - 1000 + i * 10;
+            for (kind, count) in [("input", 5000i64), ("cacheRead", 100), ("cacheCreation", 50)] {
+                conn.execute(
+                    "INSERT INTO token_usage (session_id, timestamp, model, token_type, count) VALUES (?1, ?2, ?3, ?4, ?5)",
+                    params![sid, t, model, kind, count],
+                ).unwrap();
+            }
+        }
+    }
+    drop(conn);
+
+    enable_only(&pool, &["cache-hit-starvation"]);
+
+    // Filter to model-a only — only s1 should fire.
+    let win = Window { from_ms: 0, to_ms: now + 1, models: Some(vec!["model-a".into()]) };
+    andon_lib::coach::rules::detect_cache_hit_starvation(&pool, &win)
+        .unwrap()
+        .iter()
+        .for_each(|f| assert_eq!(f.session_id, "s1", "model-b session s2 should be filtered out"));
+
+    let findings = andon_lib::coach::rules::detect_cache_hit_starvation(&pool, &win).unwrap();
+    assert_eq!(findings.len(), 1, "only one session matches model-a filter");
+    assert_eq!(findings[0].session_id, "s1");
+}
+
+/// low-spec-rate respects the model filter: 6 agent-mode sessions exist, but only
+/// those whose cost_entries use the filtered model are counted.  If all sessions
+/// on the filtered model are spec-driven, the rule must NOT fire.
+#[tokio::test]
+async fn low_spec_rate_filter_counts_only_matching_model_sessions() {
+    let (pool, _dir) = common::fixture_pool();
+    andon_lib::coach::seed_rules(&pool).unwrap();
+    let now = chrono::Utc::now().timestamp_millis();
+    let conn = pool.get().unwrap();
+    // 5 sessions on model-x: all spec-driven (first turn text contains "spec:").
+    // 5 sessions on model-y: none spec-driven.
+    for i in 0..10i64 {
+        let sid = format!("s{}", i);
+        let model = if i < 5 { "model-x" } else { "model-y" };
+        let text = if i < 5 { "spec: design the feature" } else { "just do it" };
+        conn.execute("INSERT INTO sessions (session_id, started_at) VALUES (?1, ?2)",
+            params![sid, now - 1000 - i * 100]).unwrap();
+        conn.execute(
+            "INSERT INTO file_changes (session_id, timestamp, file_path, lines_added) VALUES (?1, ?2, 'a.rs', 5)",
+            params![sid, now - 900 - i * 100]).unwrap();
+        conn.execute(
+            "INSERT INTO cost_entries (session_id, timestamp, model, cost_usd) VALUES (?1, ?2, ?3, 0.1)",
+            params![sid, now - 950 - i * 100, model]).unwrap();
+        conn.execute(
+            "INSERT INTO prompt_turns (session_id, turn_index, ts, source, text, norm_hash, length, has_file_ref, has_code, has_constraint)
+             VALUES (?1, 0, ?2, 'jsonl', ?3, ?4, ?5, 0, 0, 0)",
+            params![sid, now - 950 - i * 100, text, format!("h{}", i), text.chars().count() as i64]).unwrap();
+    }
+    drop(conn);
+    enable_only(&pool, &["low-spec-rate"]);
+
+    // Filtered to model-x: 5 sessions, all spec-driven → should NOT fire.
+    let win_x = Window { from_ms: 0, to_ms: now + 1, models: Some(vec!["model-x".into()]) };
+    let findings_x = andon_lib::coach::rules::detect_low_spec_rate(
+        &pool, &win_x, &andon_lib::settings::CoachSettings::default(),
+    ).unwrap();
+    assert!(findings_x.is_empty(), "all model-x sessions are spec-driven; rule must not fire");
+
+    // Filtered to model-y: 5 sessions, none spec-driven → should fire.
+    let win_y = Window { from_ms: 0, to_ms: now + 1, models: Some(vec!["model-y".into()]) };
+    let findings_y = andon_lib::coach::rules::detect_low_spec_rate(
+        &pool, &win_y, &andon_lib::settings::CoachSettings::default(),
+    ).unwrap();
+    assert_eq!(findings_y.len(), 1, "model-y sessions are all non-spec; rule must fire");
+}
+
+// ---------------------------------------------------------------------------
 // E11: low-spec-rate (context, binary)
 // ---------------------------------------------------------------------------
 
