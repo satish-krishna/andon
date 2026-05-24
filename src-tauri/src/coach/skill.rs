@@ -65,10 +65,13 @@ fn discover_window(pool: &Arc<DbPool>, settings: &CoachSettings, from_ms: i64, t
                 (SELECT text FROM prompt_turns p2
                   WHERE p2.norm_hash = p.norm_hash
                   ORDER BY length ASC, ts ASC LIMIT 1) AS shortest_text,
-                (SELECT command FROM prompt_turns p3
-                  WHERE p3.norm_hash = p.norm_hash AND command IS NOT NULL
-                  GROUP BY command
-                  HAVING COUNT(DISTINCT command) = 1 LIMIT 1) AS unique_command
+                CASE
+                  WHEN (SELECT COUNT(DISTINCT command) FROM prompt_turns p3
+                        WHERE p3.norm_hash = p.norm_hash AND command IS NOT NULL) = 1
+                  THEN (SELECT command FROM prompt_turns p4
+                        WHERE p4.norm_hash = p.norm_hash AND command IS NOT NULL LIMIT 1)
+                  ELSE NULL
+                END AS unique_command
          FROM prompt_turns p
          JOIN sessions s USING (session_id)
          WHERE s.started_at >= ?1 AND s.started_at < ?2

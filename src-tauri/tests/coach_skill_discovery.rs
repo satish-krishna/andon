@@ -48,6 +48,48 @@ async fn discovery_idempotent() {
     assert_eq!(n1, n2);
 }
 
+/// When the same norm_hash appears with two *different* commands, unique_command
+/// must be NULL and the label must fall back to the shortest text, not one of
+/// the command strings.
+#[tokio::test]
+async fn discovery_divergent_commands_yields_null_command() {
+    let (pool, _dir) = common::fixture_pool();
+    let now = chrono::Utc::now().timestamp_millis();
+    let conn = pool.get().unwrap();
+    // Two sessions so the session_count threshold (>=2 by default) is met.
+    for sid in ["s1", "s2"] {
+        conn.execute("INSERT INTO sessions (session_id, started_at) VALUES (?1, ?2)",
+            params![sid, now - 86400_000]).unwrap();
+    }
+    // Three rows all sharing norm_hash "hx", but two different commands: "/foo" and "/bar".
+    // Two of them are in s1 (occurrences=3, sessions=2 — meets default thresholds).
+    for (sid, turn, ts, cmd) in [
+        ("s1", 0, now - 80_000_000, Some("foo")),
+        ("s1", 1, now - 70_000_000, Some("bar")), // diverges from above
+        ("s2", 0, now - 60_000_000, Some("foo")),
+    ] {
+        conn.execute(
+            "INSERT INTO prompt_turns (session_id, turn_index, ts, source, text, norm_hash, length, has_file_ref, has_code, has_constraint, command)
+             VALUES (?1, ?2, ?3, 'jsonl', 'package ext', 'hx', 11, 0, 0, 0, ?4)",
+            params![sid, turn, ts, cmd],
+        ).unwrap();
+    }
+    drop(conn);
+
+    skill::discover_all(&pool, &CoachSettings::default()).unwrap();
+
+    let (label, cmd): (String, Option<String>) = pool.get().unwrap().query_row(
+        "SELECT label, command FROM skill_opportunities WHERE norm_hash = 'hx' ORDER BY window_end DESC LIMIT 1",
+        [], |r| Ok((r.get(0)?, r.get(1)?)),
+    ).unwrap();
+
+    // command column in skill_opportunities must be NULL (divergent)
+    assert!(cmd.is_none(), "command must be NULL when norm_hash has divergent commands, got: {:?}", cmd);
+    // label must fall back to the shortest text, not a slash command
+    assert!(!label.starts_with('/'), "label must not be a slash command when commands diverge, got: {}", label);
+    assert!(label.contains("package"), "label should be derived from the shortest text, got: {}", label);
+}
+
 #[tokio::test]
 async fn examples_returns_shortest_first() {
     let (pool, _dir) = common::fixture_pool();
