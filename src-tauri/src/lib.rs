@@ -1,9 +1,10 @@
 pub mod api;
 mod autostart;
+mod budget;
+pub mod coach;
 mod config;
 pub mod db;
 pub mod jsonl;
-mod budget;
 
 #[cfg(feature = "test-support")]
 pub mod diagnostics;
