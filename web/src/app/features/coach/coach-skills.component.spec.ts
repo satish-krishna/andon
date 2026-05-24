@@ -3,7 +3,7 @@ import { of } from 'rxjs';
 import { importProvidersFrom } from '@angular/core';
 import { LucideAngularModule, GraduationCap, Lightbulb, ChevronRight } from 'lucide-angular';
 import { provideRouter } from '@angular/router';
-import { CoachSkillsComponent } from './coach-skills.component';
+import { CoachSkillsComponent, slugifyForFilename } from './coach-skills.component';
 import { ApiService } from '../../core/api.service';
 
 describe('CoachSkillsComponent', () => {
@@ -22,5 +22,20 @@ describe('CoachSkillsComponent', () => {
     const fix = TestBed.createComponent(CoachSkillsComponent);
     fix.detectChanges();
     expect(fix.nativeElement.textContent).toContain('Skill Finder');
+  });
+});
+
+describe('slugifyForFilename', () => {
+  it('lowercases and replaces non-word with hyphens', () => {
+    expect(slugifyForFilename('Package the Extension!')).toBe('package-the-extension');
+  });
+  it('strips leading/trailing hyphens', () => {
+    expect(slugifyForFilename('---hello---')).toBe('hello');
+  });
+  it('truncates at 40 chars', () => {
+    expect(slugifyForFilename('a'.repeat(100)).length).toBeLessThanOrEqual(40);
+  });
+  it('handles empty input', () => {
+    expect(slugifyForFilename('')).toBe('');
   });
 });
