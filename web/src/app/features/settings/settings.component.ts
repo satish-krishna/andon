@@ -7,11 +7,12 @@ import { ApiService, IntegrationStatus } from '../../core/api.service';
 import { DbStats, JsonlIngestRun } from '../../core/models';
 import { ForwarderCardComponent } from './forwarder-card.component';
 import { BudgetCardComponent } from './budget-card.component';
+import { CoachCardComponent } from './coach-card.component';
 
 @Component({
   selector: 'app-settings',
   standalone: true,
-  imports: [CommonModule, DecimalPipe, RouterLink, LucideAngularModule, ForwarderCardComponent, BudgetCardComponent],
+  imports: [CommonModule, DecimalPipe, RouterLink, LucideAngularModule, ForwarderCardComponent, BudgetCardComponent, CoachCardComponent],
   templateUrl: './settings.component.html',
 })
 export class SettingsComponent implements OnInit {
