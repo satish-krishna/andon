@@ -58,11 +58,18 @@ pub fn practice_score(pool: &Arc<DbPool>, practice: &str, window: &Window) -> Re
         .collect();
 
     let penalty: i64 = triggered_ids.iter().map(|id| {
-        RULES.iter()
+        let sev = RULES.iter()
             .find(|r| r.id == id)
-            .and_then(|r| r.severity)
-            .map(|s| s.penalty())
-            .unwrap_or(5)
+            .and_then(|r| r.severity);
+        debug_assert!(
+            sev.is_some(),
+            "triggered rule '{}' has no severity — this should be unreachable: \
+             no-severity rules are either reserved (filtered out before enabled_ids \
+             is computed) or continuous (not in the binary dispatch). If you're \
+             seeing this assert, the rule catalogue invariant has been violated.",
+            id
+        );
+        sev.map(|s| s.penalty()).unwrap_or(0)
     }).sum();
 
     let max_penalty = enabled_ids.len() as i64 * 12;
