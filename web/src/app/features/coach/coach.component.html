@@ -98,4 +98,23 @@
       }
     </div>
   </section>
+
+  @if ((skills()?.opportunities?.length ?? 0) > 0) {
+    <a routerLink="/coach/skills"
+       class="panel block hover:bg-accent/10 transition-colors">
+      <div class="panel-body flex items-center gap-3">
+        <lucide-icon name="lightbulb" class="w-5 h-5 text-accent"></lucide-icon>
+        <span class="flex-1 text-sm">
+          <span class="font-medium">{{ skills()!.opportunities.length }}</span>
+          custom-skill {{ skills()!.opportunities.length === 1 ? 'opportunity' : 'opportunities' }}
+          in the last 90 days
+        </span>
+        <lucide-icon name="chevron-right" class="w-4 h-4 text-muted"></lucide-icon>
+      </div>
+    </a>
+  }
+
+  <div class="text-xs text-muted">
+    Rules → <a routerLink="/settings" class="underline">Settings → Coach</a>
+  </div>
 </div>
