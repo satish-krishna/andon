@@ -211,6 +211,31 @@ pub fn by_id(id: &str) -> Option<&'static Rule> {
 // Detector implementations (Section E — one function per rule)
 // ---------------------------------------------------------------------------
 
+/// Fires when >30% of prompts in a session are under 30 chars, with >10 turns total.
+pub fn detect_lazy_prompting(pool: &std::sync::Arc<DbPool>, window: &Window) -> crate::coach::Result<Vec<Finding>> {
+    let conn = pool.get()?;
+    let mut stmt = conn.prepare(
+        "SELECT session_id,
+                COUNT(*) AS total,
+                SUM(CASE WHEN length < 30 THEN 1 ELSE 0 END) AS short_count,
+                MAX(ts) AS last_ts
+         FROM prompt_turns
+         JOIN sessions USING (session_id)
+         WHERE sessions.started_at >= ?1 AND sessions.started_at < ?2
+         GROUP BY session_id
+         HAVING total > 10 AND CAST(short_count AS REAL) / total > 0.3",
+    )?;
+    let rows = stmt.query_map(rusqlite::params![window.from_ms, window.to_ms], |r| {
+        Ok((r.get::<_, String>(0)?, r.get::<_, i64>(1)?, r.get::<_, i64>(2)?, r.get::<_, i64>(3)?))
+    })?;
+    Ok(rows.filter_map(|r| r.ok()).map(|(sid, total, short, ts)| Finding {
+        rule_id: "lazy-prompting".into(),
+        session_id: sid,
+        detected_at: ts,
+        payload_json: serde_json::json!({ "total": total, "short_count": short }).to_string(),
+    }).collect())
+}
+
 /// Fires once per session when the same `norm_hash` appears 3 or more times.
 pub fn detect_repeated_prompts(pool: &std::sync::Arc<DbPool>, window: &Window) -> crate::coach::Result<Vec<Finding>> {
     let conn = pool.get()?;

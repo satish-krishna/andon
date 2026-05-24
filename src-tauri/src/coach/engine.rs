@@ -66,6 +66,7 @@ fn write_findings(pool: &Arc<DbPool>, findings: &[Finding]) -> Result<()> {
 fn run_detector(pool: &Arc<DbPool>, rule: &Rule, window: &Window) -> Result<Vec<Finding>> {
     match rule.id {
         "repeated-prompts" => crate::coach::rules::detect_repeated_prompts(pool, window),
+        "lazy-prompting" => crate::coach::rules::detect_lazy_prompting(pool, window),
         _ => Ok(vec![]),
     }
 }

@@ -68,3 +68,22 @@ async fn repeated_prompts_skips_below_threshold() {
     ).unwrap();
     assert_eq!(n, 0);
 }
+
+#[tokio::test]
+async fn lazy_prompting_fires_when_third_are_short() {
+    let (pool, _dir) = common::fixture_pool();
+    andon_lib::coach::seed_rules(&pool).unwrap();
+    let now = chrono::Utc::now().timestamp_millis();
+    pool.get().unwrap().execute("INSERT INTO sessions (session_id, started_at) VALUES ('s1', ?1)", params![now - 1000]).unwrap();
+    for i in 0..15 {
+        let text = if i < 5 { "fix bug" } else { "Refactor authentication middleware to use JWT with rotation" };
+        seed_prompt_turn(&pool, "s1", i, now - (1000 - i*10), text, &format!("h{}", i));
+    }
+    enable_only(&pool, &["lazy-prompting"]);
+    let win = Window { from_ms: now - 86400_000, to_ms: now + 1, models: None };
+    engine::evaluate_window(&pool, &win).unwrap();
+    let n: i64 = pool.get().unwrap().query_row(
+        "SELECT COUNT(*) FROM coach_findings WHERE rule_id = 'lazy-prompting'",
+        [], |r| r.get(0)).unwrap();
+    assert_eq!(n, 1);
+}
