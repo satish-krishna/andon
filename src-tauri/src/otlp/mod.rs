@@ -45,8 +45,9 @@ pub async fn serve(
     control: IngestionControl,
     diagnostics: Diagnostics,
     forwarder: Arc<forwarder::Forwarder>,
+    coach_settings: crate::settings::CoachSettings,
 ) -> Result<()> {
-    let ingestor = Arc::new(Ingestor::new(pool, control, diagnostics.clone(), crate::settings::CoachSettings::default()));
+    let ingestor = Arc::new(Ingestor::new(pool, control, diagnostics.clone(), coach_settings));
 
     let grpc = tokio::spawn(grpc_server::serve(
         ingestor.clone(),

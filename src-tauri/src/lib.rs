@@ -174,8 +174,9 @@ pub fn run() {
             let control_for_otlp = control.clone();
             let diag_for_otlp = diagnostics.clone();
             let forwarder_for_otlp = forwarder.clone();
+            let coach_settings_for_otlp = settings_store.coach();
             tauri::async_runtime::spawn(async move {
-                if let Err(e) = otlp::serve(pool, control_for_otlp, diag_for_otlp, forwarder_for_otlp).await {
+                if let Err(e) = otlp::serve(pool, control_for_otlp, diag_for_otlp, forwarder_for_otlp, coach_settings_for_otlp).await {
                     tracing::error!(error = ?e, "otlp server exited with error");
                 }
             });
