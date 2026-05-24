@@ -8,6 +8,28 @@
   <div class="panel-body flex flex-col gap-4">
     <p class="text-xs text-muted">Anti-pattern rules and the Skill Finder. All processing is local.</p>
     <!-- M2: Skill Finder thresholds -->
+    @if (settings(); as s) {
+      <div>
+        <div class="text-xs font-medium mb-1">Skill Finder</div>
+        <div class="flex items-center gap-3 text-xs">
+          <label class="flex items-center gap-2">
+            Min occurrences
+            <input type="number" min="1" max="100"
+                   class="w-16 bg-bg border border-border px-1 py-0.5 font-mono"
+                   [value]="s.skill_min_occurrences"
+                   (change)="updateThreshold('occ', $any($event.target).value)">
+          </label>
+          <label class="flex items-center gap-2">
+            Min sessions
+            <input type="number" min="1" max="100"
+                   class="w-16 bg-bg border border-border px-1 py-0.5 font-mono"
+                   [value]="s.skill_min_sessions"
+                   (change)="updateThreshold('sess', $any($event.target).value)">
+          </label>
+        </div>
+        <p class="text-[11px] text-muted mt-1">Surfaces prompt patterns that meet both thresholds.</p>
+      </div>
+    }
     <!-- M3: Vocabulary editors -->
     <!-- M4: Rules sub-section -->
   </div>
