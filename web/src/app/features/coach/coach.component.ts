@@ -1,4 +1,5 @@
 import { ChangeDetectionStrategy, Component, effect, inject, signal } from '@angular/core';
+import { CurrencyPipe, DatePipe } from '@angular/common';
 import { RouterLink } from '@angular/router';
 import { LucideAngularModule } from 'lucide-angular';
 
@@ -10,7 +11,7 @@ import { FilterBarComponent } from '../../shared/filter-bar.component';
 @Component({
   selector: 'app-coach',
   standalone: true,
-  imports: [RouterLink, LucideAngularModule, FilterBarComponent],
+  imports: [CurrencyPipe, DatePipe, RouterLink, LucideAngularModule, FilterBarComponent],
   changeDetection: ChangeDetectionStrategy.OnPush,
   templateUrl: './coach.component.html',
 })

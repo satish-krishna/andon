@@ -60,4 +60,42 @@
       }
     </div>
   </section>
+
+  <section class="panel">
+    <div class="panel-title flex items-center justify-between">
+      <span>Findings <span class="text-muted">({{ findings()?.items?.length ?? 0 }})</span></span>
+    </div>
+    <div class="panel-body">
+      @if (findings(); as f) {
+        @if (f.items.length === 0) {
+          <div class="text-xs text-muted">No coaching findings in this window — your habits look healthy.</div>
+        } @else {
+          <ul class="flex flex-col gap-2">
+            @for (row of f.items; track row.id) {
+              <li class="border-b border-border/40 pb-2 last:border-0">
+                <div class="flex items-center gap-2 text-[11px] text-muted">
+                  <span [class.text-err]="row.severity === 'high'"
+                        [class.text-warn]="row.severity === 'medium'">●</span>
+                  <span class="uppercase tracking-wider">{{ row.practice }}</span>
+                  <span>·</span>
+                  <span>{{ row.severity ?? '—' }}</span>
+                  <span>·</span>
+                  <span class="font-mono tabular-nums">{{ row.started_at | date: 'yyyy-MM-dd HH:mm' }}</span>
+                  <span>·</span>
+                  <span>{{ row.repo ?? '—' }}</span>
+                  <span>·</span>
+                  <span class="font-mono tabular-nums">{{ row.cost_usd | currency }}</span>
+                </div>
+                <div class="text-sm text-text">{{ row.rule_id }}</div>
+                <div class="text-xs text-muted">{{ row.description }}</div>
+                <div class="text-xs text-muted italic">{{ row.suggestion }}</div>
+              </li>
+            }
+          </ul>
+        }
+      } @else {
+        <div class="text-xs text-muted">Loading…</div>
+      }
+    </div>
+  </section>
 </div>
