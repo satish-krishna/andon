@@ -80,6 +80,7 @@ pub fn router(state: ApiState) -> Router {
         .route("/api/coach/rules", get(coach_rules))
         .route("/api/coach/rules/:id", post(coach_rules_update))
         .route("/api/coach/skills", get(coach_skills))
+        .route("/api/coach/skills/:hash/examples", get(coach_skill_examples))
         .with_state(state)
 }
 
@@ -3053,6 +3054,25 @@ async fn coach_skills(
         .filter_map(|r| r.ok())
         .collect();
     Ok(Json(CoachSkillsResponse { lookback, opportunities: opps }))
+}
+
+// ============================================================================
+// I6: GET /api/coach/skills/:hash/examples
+// ============================================================================
+
+#[derive(serde::Deserialize)]
+struct ExamplesQuery {
+    limit: Option<i64>,
+}
+
+async fn coach_skill_examples(
+    State(state): State<ApiState>,
+    Path(hash): Path<String>,
+    Query(q): Query<ExamplesQuery>,
+) -> Result<Json<CoachSkillExamplesResponse>, ApiError> {
+    let limit = q.limit.unwrap_or(3).clamp(1, 10);
+    let ex = crate::coach::skill::examples_for_hash(&state.pool, &hash, limit)?;
+    Ok(Json(CoachSkillExamplesResponse { examples: ex }))
 }
 
 #[cfg(test)]

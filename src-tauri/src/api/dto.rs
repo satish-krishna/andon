@@ -334,6 +334,11 @@ pub struct CoachSkillsResponse {
     pub opportunities: Vec<SkillOpportunityRow>,
 }
 
+#[derive(serde::Serialize)]
+pub struct CoachSkillExamplesResponse {
+    pub examples: Vec<crate::coach::skill::SkillExample>,
+}
+
 // ---- Efficiency page DTOs ----
 
 #[derive(Debug, serde::Serialize)]
