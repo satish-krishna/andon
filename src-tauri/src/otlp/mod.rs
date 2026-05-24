@@ -46,7 +46,7 @@ pub async fn serve(
     diagnostics: Diagnostics,
     forwarder: Arc<forwarder::Forwarder>,
 ) -> Result<()> {
-    let ingestor = Arc::new(Ingestor::new(pool, control, diagnostics.clone()));
+    let ingestor = Arc::new(Ingestor::new(pool, control, diagnostics.clone(), crate::settings::CoachSettings::default()));
 
     let grpc = tokio::spawn(grpc_server::serve(
         ingestor.clone(),

@@ -135,7 +135,7 @@ use andon_lib::{
         forwarder::Forwarder,
         ingestor::Ingestor,
     },
-    settings::SettingsStore,
+    settings::{CoachSettings, SettingsStore},
 };
 use axum::Router;
 
@@ -144,7 +144,7 @@ use axum::Router;
 pub fn test_ingestor(pool: &Arc<DbPool>) -> Ingestor {
     let control = IngestionControl::default();
     let diagnostics = Diagnostics::default();
-    Ingestor::new(Arc::clone(pool), control, diagnostics)
+    Ingestor::new(Arc::clone(pool), control, diagnostics, CoachSettings::default())
 }
 
 /// Like `test_ingestor` but also returns the `IngestionControl` so tests can
@@ -152,7 +152,7 @@ pub fn test_ingestor(pool: &Arc<DbPool>) -> Ingestor {
 pub fn test_ingestor_with_control(pool: &Arc<DbPool>) -> (Ingestor, IngestionControl) {
     let control = IngestionControl::default();
     let diagnostics = Diagnostics::default();
-    let ingestor = Ingestor::new(Arc::clone(pool), control.clone(), diagnostics);
+    let ingestor = Ingestor::new(Arc::clone(pool), control.clone(), diagnostics, CoachSettings::default());
     (ingestor, control)
 }
 
@@ -165,7 +165,7 @@ pub fn test_ingestor_with(
     diagnostics: Diagnostics,
     control: IngestionControl,
 ) -> Ingestor {
-    Ingestor::new(Arc::clone(pool), control, diagnostics)
+    Ingestor::new(Arc::clone(pool), control, diagnostics, CoachSettings::default())
 }
 
 /// Like `test_router` but accepts externally-created `Diagnostics` and

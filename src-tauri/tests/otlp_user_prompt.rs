@@ -1,5 +1,31 @@
 mod common;
 
+#[tokio::test]
+async fn user_prompt_otlp_writes_prompt_turn_row() {
+    let (pool, _db_dir) = common::fixture_pool();
+    let ingestor = common::test_ingestor(&pool);
+    {
+        let conn = pool.get().unwrap();
+        conn.execute("INSERT INTO sessions (session_id, started_at) VALUES ('s1', 1)", []).unwrap();
+    }
+
+    let logs = common::sample_export_logs_with_body(
+        vec![common::kv("session.id", "s1")],
+        "user_prompt",
+        "tell me about wizards",
+        vec![common::kv_int("prompt_length", 21)],
+    );
+    ingestor.ingest_logs_v2(logs, "grpc").expect("ingest");
+
+    let (text, source): (String, String) = pool.get().unwrap().query_row(
+        "SELECT text, source FROM prompt_turns WHERE session_id='s1'",
+        [],
+        |r| Ok((r.get(0)?, r.get(1)?)),
+    ).unwrap();
+    assert_eq!(text, "tell me about wizards");
+    assert_eq!(source, "otlp");
+}
+
 #[test]
 fn user_prompt_body_is_persisted_to_log_events() {
     let (pool, _db_dir) = common::fixture_pool();

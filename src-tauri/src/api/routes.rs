@@ -972,9 +972,10 @@ async fn hook_session_end(
                 let pool_j = state.pool.clone();
                 let control_j = state.control.clone();
                 let diag_j = state.diagnostics.clone();
+                let coach_j = state.settings.coach();
                 tokio::spawn(async move {
                     let ing =
-                        crate::otlp::ingestor::Ingestor::new(pool_j.clone(), control_j, diag_j);
+                        crate::otlp::ingestor::Ingestor::new(pool_j.clone(), control_j, diag_j, coach_j);
                     if let Err(e) = crate::jsonl::ingest_one(&pool_j, &ing, &path).await {
                         tracing::error!(error = ?e, "session-end JSONL ingest failed");
                     }
@@ -2559,6 +2560,7 @@ async fn jsonl_backfill(State(state): State<ApiState>) -> axum::response::Respon
         std::sync::Arc::clone(&state.pool),
         state.control.clone(),
         state.diagnostics.clone(),
+        state.settings.coach(),
     );
     match crate::jsonl::backfill(&pool, &ingestor, &claude_home).await {
         Ok(stats) => Json(crate::api::dto::JsonlBackfillResponse::from(stats)).into_response(),

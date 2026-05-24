@@ -85,9 +85,10 @@ async fn ingest_one_inner(
     let pool_for_ing = Arc::clone(pool);
     let control = ingestor.control.clone();
     let diag = ingestor.diagnostics.clone();
+    let coach_settings = ingestor.coach_settings.clone();
 
     let result = tokio::task::spawn_blocking(move || {
-        let fresh_ing = Ingestor::new(pool_for_ing.clone(), control, diag);
+        let fresh_ing = Ingestor::new(pool_for_ing.clone(), control, diag, coach_settings);
         let mut stats = IngestStats {
             files_processed: 1,
             ..Default::default()

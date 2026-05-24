@@ -12,6 +12,7 @@ use rusqlite::params;
 
 use crate::db::DbPool;
 use crate::diagnostics::Diagnostics;
+use crate::settings::CoachSettings;
 
 use super::IngestionControl;
 
@@ -46,14 +47,21 @@ pub struct Ingestor {
     pub(crate) pool: Arc<DbPool>,
     pub(crate) control: IngestionControl,
     pub(crate) diagnostics: Diagnostics,
+    pub(crate) coach_settings: CoachSettings,
 }
 
 impl Ingestor {
-    pub fn new(pool: Arc<DbPool>, control: IngestionControl, diagnostics: Diagnostics) -> Self {
+    pub fn new(
+        pool: Arc<DbPool>,
+        control: IngestionControl,
+        diagnostics: Diagnostics,
+        coach_settings: CoachSettings,
+    ) -> Self {
         Self {
             pool,
             control,
             diagnostics,
+            coach_settings,
         }
     }
 
@@ -184,6 +192,38 @@ impl Ingestor {
                         handle_event(&tx, &record_ctx, &event_name, ts_ms, &record.attributes)
                     {
                         tracing::warn!(event = %event_name, error = ?e, "typed mapping failed; raw row still saved");
+                    }
+
+                    // 3. Phase-1 coach: persist a prompt_turns row for user_prompt events.
+                    if event_name == "user_prompt" {
+                        if let (Some(sid), Some(body)) = (record_ctx.session_id.as_deref(), body_str.as_ref()) {
+                            let text = body.clone();
+                            let length = text.chars().count() as i64;
+                            let has_file_ref = text.contains('@');
+                            let has_code = text.contains("```");
+                            let lc = text.to_lowercase();
+                            let has_constraint = self.coach_settings
+                                .constraint_keywords.iter()
+                                .any(|kw| lc.contains(&kw.to_lowercase()));
+                            let command = text.strip_prefix('/').and_then(|rest| {
+                                rest.split_whitespace().next().map(|s| s.to_string())
+                            });
+                            let norm_hash = blake3::hash(text.as_bytes()).to_string();
+                            let turn_index: i64 = tx.query_row(
+                                "SELECT COALESCE(MAX(turn_index), -1) + 1 FROM prompt_turns WHERE session_id = ?1",
+                                params![sid], |r| r.get(0),
+                            ).unwrap_or(0);
+                            let _ = tx.execute(
+                                "INSERT OR IGNORE INTO prompt_turns
+                                   (session_id, request_id, turn_index, ts, source, text,
+                                    norm_hash, command, length, has_file_ref, has_code, has_constraint)
+                                 VALUES (?1, NULL, ?2, ?3, 'otlp', ?4, ?5, ?6, ?7, ?8, ?9, ?10)",
+                                params![
+                                    sid, turn_index, ts_ms, text, norm_hash, command,
+                                    length, has_file_ref as i64, has_code as i64, has_constraint as i64,
+                                ],
+                            );
+                        }
                     }
                 }
             }
