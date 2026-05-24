@@ -12,31 +12,31 @@
   <!-- TOC -->
   <nav class="sticky top-4 self-start">
     <div class="text-[10px] uppercase tracking-wider text-muted mb-2 px-3">Sections</div>
-    <a href="#integration" class="block px-3 py-1.5 font-mono text-[11px] text-muted hover:text-text border-l border-border flex items-center gap-1.5">
+    <a href="#integration" (click)="scrollToSection('integration', $event)" class="block px-3 py-1.5 font-mono text-[11px] text-muted hover:text-text border-l border-border flex items-center gap-1.5">
       <lucide-icon name="plug" class="w-3 h-3"></lucide-icon>Integration
     </a>
-    <a href="#ingestion" class="block px-3 py-1.5 font-mono text-[11px] text-muted hover:text-text border-l border-border flex items-center gap-1.5">
+    <a href="#ingestion" (click)="scrollToSection('ingestion', $event)" class="block px-3 py-1.5 font-mono text-[11px] text-muted hover:text-text border-l border-border flex items-center gap-1.5">
       <lucide-icon name="radio" class="w-3 h-3"></lucide-icon>Ingestion
     </a>
-    <a href="#forwarder" class="block px-3 py-1.5 font-mono text-[11px] text-muted hover:text-text border-l border-border flex items-center gap-1.5">
+    <a href="#forwarder" (click)="scrollToSection('forwarder', $event)" class="block px-3 py-1.5 font-mono text-[11px] text-muted hover:text-text border-l border-border flex items-center gap-1.5">
       <lucide-icon name="share-2" class="w-3 h-3"></lucide-icon>Forwarder
     </a>
-    <a href="#budget" class="block px-3 py-1.5 font-mono text-[11px] text-muted hover:text-text border-l border-border flex items-center gap-1.5">
+    <a href="#budget" (click)="scrollToSection('budget', $event)" class="block px-3 py-1.5 font-mono text-[11px] text-muted hover:text-text border-l border-border flex items-center gap-1.5">
       <lucide-icon name="gauge" class="w-3 h-3"></lucide-icon>Budget
     </a>
-    <a href="#coach" class="block px-3 py-1.5 font-mono text-[11px] text-muted hover:text-text border-l border-border flex items-center gap-1.5">
+    <a href="#coach" (click)="scrollToSection('coach', $event)" class="block px-3 py-1.5 font-mono text-[11px] text-muted hover:text-text border-l border-border flex items-center gap-1.5">
       <lucide-icon name="graduation-cap" class="w-3 h-3"></lucide-icon>Coach
     </a>
-    <a href="#data" class="block px-3 py-1.5 font-mono text-[11px] text-muted hover:text-text border-l border-border flex items-center gap-1.5">
+    <a href="#data" (click)="scrollToSection('data', $event)" class="block px-3 py-1.5 font-mono text-[11px] text-muted hover:text-text border-l border-border flex items-center gap-1.5">
       <lucide-icon name="database" class="w-3 h-3"></lucide-icon>Data
     </a>
-    <a href="#app" class="block px-3 py-1.5 font-mono text-[11px] text-muted hover:text-text border-l border-border flex items-center gap-1.5">
+    <a href="#app" (click)="scrollToSection('app', $event)" class="block px-3 py-1.5 font-mono text-[11px] text-muted hover:text-text border-l border-border flex items-center gap-1.5">
       <lucide-icon name="zap" class="w-3 h-3"></lucide-icon>App
     </a>
-    <a href="#about" class="block px-3 py-1.5 font-mono text-[11px] text-muted hover:text-text border-l border-border flex items-center gap-1.5">
+    <a href="#about" (click)="scrollToSection('about', $event)" class="block px-3 py-1.5 font-mono text-[11px] text-muted hover:text-text border-l border-border flex items-center gap-1.5">
       <lucide-icon name="info" class="w-3 h-3"></lucide-icon>About
     </a>
-    <a href="#danger" class="block px-3 py-1.5 font-mono text-[11px] text-err hover:text-err border-l border-border flex items-center gap-1.5">
+    <a href="#danger" (click)="scrollToSection('danger', $event)" class="block px-3 py-1.5 font-mono text-[11px] text-err hover:text-err border-l border-border flex items-center gap-1.5">
       <lucide-icon name="alert-triangle" class="w-3 h-3"></lucide-icon>Danger zone
     </a>
   </nav>

@@ -139,6 +139,15 @@ export class SettingsComponent implements OnInit {
     return Object.entries(s.tables);
   }
 
+  // In-page scroll for the TOC. Plain `href="#id"` collides with hash-based
+  // routing (`withHashLocation()` in app.config.ts): the router would treat
+  // `#coach` as a navigation to the `/coach` route. preventDefault + manual
+  // scrollIntoView keeps the URL fragment in sync without triggering routing.
+  scrollToSection(id: string, e: Event): void {
+    e.preventDefault();
+    document.getElementById(id)?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+  }
+
   integrationBadgeClass(i: IntegrationStatus | null): string {
     if (!i) return 'text-muted';
     switch (i.state) {
