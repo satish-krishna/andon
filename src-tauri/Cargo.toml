@@ -47,6 +47,7 @@ tracing-appender = "0.2"
 
 dirs = "5"
 chrono = { version = "0.4", default-features = false, features = ["clock", "serde"] }
+blake3 = "1"
 minijinja = "2"
 tauri-plugin-opener = "2"
 

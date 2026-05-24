@@ -185,7 +185,8 @@ async fn ingest_one_inner(
 fn event_session_id(ev: &reducer::DerivedEvent) -> Option<String> {
     use reducer::DerivedEvent::*;
     match ev {
-        SessionLifecycle { session_id, .. }
+        PromptTurn { session_id, .. }
+        | SessionLifecycle { session_id, .. }
         | TokenUsage { session_id, .. }
         | CostEntry { session_id, .. }
         | ToolCall { session_id, .. }

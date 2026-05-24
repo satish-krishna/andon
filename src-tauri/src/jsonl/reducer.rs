@@ -1,15 +1,44 @@
 //! Trust boundary between JSONL (raw, contains prompt text) and the rest
-//! of the ingest pipeline (text-free by type). Anything that reads
-//! `record::Message.content[].text` must do so inside this module and
-//! drop the text before returning.
+//! of the ingest pipeline.
+//!
+//! Prior to the 2026-05-24 privacy-contract amendment, no reducer output
+//! variant could carry prompt text. The amendment introduces one
+//! exception: `DerivedEvent::PromptTurn` carries the raw prompt for
+//! Skill Finder and coach detectors. The reducer remains the SINGLE
+//! chokepoint for prompts entering the local DB — no other module reads
+//! `record::Message.content[].text`. See
+//! docs/superpowers/specs/2026-05-24-ai-engineering-coach-integration-design.md
+//! §Privacy contract amendment.
+
+use std::collections::HashMap;
 
 use crate::jsonl::record::{ContentBlock, JsonlRecord, Message};
 
-/// Output of the reducer. No variant carries prompt or response text.
-/// The privacy property test in `tests/jsonl_privacy.rs` enforces this empirically;
-/// the type system enforces it structurally.
+/// Output of the reducer.
+///
+/// All variants are text-free EXCEPT `PromptTurn`, which is the single
+/// amendment introduced by the 2026-05-24 privacy-contract update.
+/// `PromptTurn` carries the raw user prompt text for Skill Finder and coach
+/// detectors. The privacy property test in `tests/jsonl_privacy.rs` carves
+/// out `PromptTurn` from its "no text leak" assertion accordingly.
 #[derive(Debug, Clone)]
 pub enum DerivedEvent {
+    /// Carries the raw user prompt text.
+    /// Privacy-contract amendment: this is the ONLY variant permitted to
+    /// hold prompt text. All other variants remain text-free.
+    PromptTurn {
+        session_id: String,
+        request_id: Option<String>,
+        turn_index: i64,
+        ts_ms: i64,
+        text: String,
+        norm_hash: String,
+        command: Option<String>,
+        length: i64,
+        has_file_ref: bool,
+        has_code: bool,
+        has_constraint: bool,
+    },
     SessionLifecycle {
         session_id: String,
         started_at: i64,
@@ -58,15 +87,36 @@ pub enum DerivedEvent {
     },
 }
 
+/// Options that control reducer behaviour. Pass `ReduceOptions::default()`
+/// (via `Reducer::new()`) for no behaviour change relative to pre-B4.
+#[derive(Default, Clone)]
+pub struct ReduceOptions {
+    /// Keywords whose presence in a user prompt sets `has_constraint = true`
+    /// on the emitted `PromptTurn`. Case-insensitive substring match.
+    pub constraint_keywords: Vec<String>,
+}
+
 #[derive(Default)]
 pub struct Reducer {
     first_turn_seen: bool,
     seen_requests: std::collections::HashSet<String>,
+    /// Per-session count of user turns seen (for `turn_index`).
+    turn_counters: HashMap<String, i64>,
+    opts: ReduceOptions,
 }
 
 impl Reducer {
     pub fn new() -> Self {
         Self::default()
+    }
+
+    /// Create a reducer with custom options (e.g. constraint keywords for
+    /// the AI Engineering Coach).
+    pub fn with_options(opts: ReduceOptions) -> Self {
+        Self {
+            opts,
+            ..Self::default()
+        }
     }
 
     pub fn reduce(&mut self, rec: &JsonlRecord) -> Vec<DerivedEvent> {
@@ -103,6 +153,17 @@ impl Reducer {
                     arg_count,
                 });
             }
+        }
+        // Emit PromptTurn for every user record that carries non-empty text.
+        // The turn_index is a per-session ordinal starting at 0.
+        let turn_index = {
+            let counter = self.turn_counters.entry(sid.to_string()).or_insert(0);
+            let idx = *counter;
+            *counter += 1;
+            idx
+        };
+        if let Some(ev) = build_prompt_turn(rec, sid, turn_index, ts, &self.opts) {
+            out.push(ev);
         }
         out
     }
@@ -191,6 +252,81 @@ impl Reducer {
         }
         out
     }
+}
+
+/// Build a `PromptTurn` event from a user record if the record carries
+/// non-empty text content.
+///
+/// `ts` is passed in (already computed by the caller) to avoid a redundant
+/// parse. `turn_index` is a per-session ordinal maintained by `Reducer`.
+fn build_prompt_turn(
+    rec: &JsonlRecord,
+    sid: &str,
+    turn_index: i64,
+    ts: i64,
+    opts: &ReduceOptions,
+) -> Option<DerivedEvent> {
+    let msg = rec.message.as_ref()?;
+    if msg.role.as_deref() != Some("user") {
+        return None;
+    }
+
+    let text: String = msg
+        .content
+        .iter()
+        .filter_map(|b| match b {
+            ContentBlock::Text { text: Some(t) } => Some(t.as_str()),
+            _ => None,
+        })
+        .collect::<Vec<_>>()
+        .join("\n");
+
+    if text.is_empty() {
+        return None;
+    }
+
+    let length = text.chars().count() as i64;
+
+    // `has_file_ref`: '@' sigil, absolute Unix paths (/…), or Windows-style
+    // drive letters (C:\…) detected by a ':' as the second byte of a word.
+    let has_file_ref = text.contains('@')
+        || text.split_whitespace().any(|w| {
+            w.starts_with('/') || (w.len() > 2 && w.as_bytes().get(1) == Some(&b':'))
+        });
+
+    let has_code = text.contains("```");
+
+    let lc = text.to_lowercase();
+    let has_constraint = opts
+        .constraint_keywords
+        .iter()
+        .any(|kw| lc.contains(&kw.to_lowercase()));
+
+    // A slash command in the plain text (not the XML-tag form handled by
+    // `detect_slash_command`). Only set when the ENTIRE prompt starts with '/'.
+    let command = text
+        .trim()
+        .strip_prefix('/')
+        .and_then(|rest| rest.split_whitespace().next())
+        .map(|s| s.to_string());
+
+    // Placeholder hash: purely byte-based blake3. Task G1 replaces this with
+    // a keyed-hash normaliser that collapses semantically equivalent prompts.
+    let norm_hash = blake3::hash(text.as_bytes()).to_string();
+
+    Some(DerivedEvent::PromptTurn {
+        session_id: sid.to_string(),
+        request_id: rec.request_id.clone(),
+        turn_index,
+        ts_ms: ts,
+        text,
+        norm_hash,
+        command,
+        length,
+        has_file_ref,
+        has_code,
+        has_constraint,
+    })
 }
 
 fn parse_ts(s: Option<&str>) -> Option<i64> {
@@ -417,5 +553,121 @@ mod tests {
             .iter()
             .any(|e| matches!(e, DerivedEvent::SessionLifecycle { .. }));
         assert!(has_lifecycle, "string-content first turn must emit SessionLifecycle");
+    }
+
+    // ── B4: PromptTurn tests ────────────────────────────────────────────────
+
+    #[test]
+    fn user_message_emits_prompt_turn_with_derived_flags() {
+        let mut r = Reducer::with_options(ReduceOptions {
+            constraint_keywords: vec!["must".into(), "should".into()],
+            ..Default::default()
+        });
+        let line = r#"{"type":"user","sessionId":"s1","timestamp":"2026-05-19T10:00:00.000Z","message":{"role":"user","content":[{"type":"text","text":"Refactor @src/foo.rs — must be idempotent."}]}}"#;
+        let out = r.reduce(&parse_line(line).unwrap());
+
+        let (text, has_file_ref, has_constraint, length) = out
+            .iter()
+            .find_map(|e| match e {
+                DerivedEvent::PromptTurn {
+                    text,
+                    has_file_ref,
+                    has_constraint,
+                    length,
+                    ..
+                } => Some((text.clone(), *has_file_ref, *has_constraint, *length)),
+                _ => None,
+            })
+            .expect("a PromptTurn event must be emitted");
+
+        assert_eq!(text, "Refactor @src/foo.rs \u{2014} must be idempotent.");
+        assert!(has_file_ref, "has_file_ref should be true — '@src/foo.rs'");
+        assert!(has_constraint, "has_constraint should be true — 'must'");
+        // char count: "Refactor @src/foo.rs — must be idempotent." — em-dash is 1 char
+        assert_eq!(length, text.chars().count() as i64);
+    }
+
+    #[test]
+    fn user_message_norm_hash_differs_for_different_text() {
+        // Placeholder hash (B4): purely text-based blake3, no normalisation.
+        // G1 will introduce normalisation that collapses semantically equivalent prompts.
+        let a = r#"{"type":"user","sessionId":"s1","timestamp":"2026-05-19T10:00:00.000Z","message":{"role":"user","content":[{"type":"text","text":"Package the extension"}]}}"#;
+        let b = r#"{"type":"user","sessionId":"s1","timestamp":"2026-05-19T10:00:01.000Z","message":{"role":"user","content":[{"type":"text","text":"Ship the release"}]}}"#;
+
+        let mut ra_reducer = Reducer::new();
+        let mut rb_reducer = Reducer::new();
+        let ea = ra_reducer.reduce(&parse_line(a).unwrap());
+        let eb = rb_reducer.reduce(&parse_line(b).unwrap());
+
+        let ha = ea
+            .iter()
+            .find_map(|e| match e {
+                DerivedEvent::PromptTurn { norm_hash, .. } => Some(norm_hash.clone()),
+                _ => None,
+            })
+            .unwrap();
+        let hb = eb
+            .iter()
+            .find_map(|e| match e {
+                DerivedEvent::PromptTurn { norm_hash, .. } => Some(norm_hash.clone()),
+                _ => None,
+            })
+            .unwrap();
+
+        assert_ne!(ha, hb, "different text must produce different placeholder hashes");
+    }
+
+    #[test]
+    fn prompt_turn_turn_index_increments_per_session() {
+        let mut r = Reducer::new();
+        let l1 = r#"{"type":"user","sessionId":"s1","timestamp":"2026-05-19T10:00:00.000Z","message":{"role":"user","content":[{"type":"text","text":"first turn"}]}}"#;
+        let l2 = r#"{"type":"user","sessionId":"s1","timestamp":"2026-05-19T10:00:01.000Z","message":{"role":"user","content":[{"type":"text","text":"second turn"}]}}"#;
+
+        let out1 = r.reduce(&parse_line(l1).unwrap());
+        let out2 = r.reduce(&parse_line(l2).unwrap());
+
+        let idx1 = out1
+            .iter()
+            .find_map(|e| match e {
+                DerivedEvent::PromptTurn { turn_index, .. } => Some(*turn_index),
+                _ => None,
+            })
+            .expect("PromptTurn for first turn");
+        let idx2 = out2
+            .iter()
+            .find_map(|e| match e {
+                DerivedEvent::PromptTurn { turn_index, .. } => Some(*turn_index),
+                _ => None,
+            })
+            .expect("PromptTurn for second turn");
+
+        assert_eq!(idx1, 0);
+        assert_eq!(idx2, 1);
+    }
+
+    #[test]
+    fn empty_content_does_not_emit_prompt_turn() {
+        let mut r = Reducer::new();
+        let line = r#"{"type":"user","sessionId":"s1","timestamp":"2026-05-19T10:00:00.000Z","message":{"role":"user","content":[]}}"#;
+        let out = r.reduce(&parse_line(line).unwrap());
+        assert!(
+            !out.iter().any(|e| matches!(e, DerivedEvent::PromptTurn { .. })),
+            "empty content must not emit PromptTurn"
+        );
+    }
+
+    #[test]
+    fn has_code_flag_set_when_triple_backtick_present() {
+        let mut r = Reducer::new();
+        let line = r#"{"type":"user","sessionId":"s1","timestamp":"2026-05-19T10:00:00.000Z","message":{"role":"user","content":[{"type":"text","text":"Fix this:\n```rust\nfn main() {}\n```"}]}}"#;
+        let out = r.reduce(&parse_line(line).unwrap());
+        let has_code = out
+            .iter()
+            .find_map(|e| match e {
+                DerivedEvent::PromptTurn { has_code, .. } => Some(*has_code),
+                _ => None,
+            })
+            .expect("PromptTurn emitted");
+        assert!(has_code, "has_code should be true when ``` is present");
     }
 }

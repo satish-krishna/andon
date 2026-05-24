@@ -410,6 +410,11 @@ impl Ingestor {
                         params![parent_id, child_id, subagent_type, started_at],
                     );
                 }
+                // Task C1 will wire PromptTurn → prompt_turns table.
+                // For now we accept the event (so routing doesn't break) and
+                // discard it — the reducer already emits it and mod.rs routes
+                // it to the correct session bucket.
+                E::PromptTurn { .. } => {}
             }
         }
         tx.commit()?;

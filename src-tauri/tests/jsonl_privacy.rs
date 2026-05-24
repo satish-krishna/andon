@@ -1,18 +1,28 @@
 //! Privacy property test for the JSONL reducer trust boundary.
 //!
 //! For randomly generated JSONL records containing prompt-shaped text in
-//! every text-bearing field, the reducer output must contain no substring
-//! of any input text. Formal guarantee behind the pitch's "never persisted"
-//! claim.
+//! every text-bearing field, the reducer output (excluding `PromptTurn`)
+//! must contain no substring of any input text. Formal guarantee behind the
+//! pitch's "never persisted" claim.
+//!
+//! `PromptTurn` is explicitly excluded from the no-text-leak invariant per
+//! the 2026-05-24 privacy-contract amendment — it intentionally carries the
+//! raw user prompt for Skill Finder and coach detectors. The reducer remains
+//! the single chokepoint for prompts entering the local DB.
 
 use andon_lib::jsonl::record::JsonlRecord;
 use andon_lib::jsonl::reducer::{DerivedEvent, Reducer};
 use proptest::prelude::*;
 use serde_json::json;
 
-fn dump(events: &[DerivedEvent]) -> String {
+/// Serialize events to a debug string, EXCLUDING `PromptTurn` variants.
+///
+/// `PromptTurn` intentionally carries prompt text (privacy-contract
+/// amendment 2026-05-24). All other variants must remain text-free.
+fn dump_no_prompt_turns(events: &[DerivedEvent]) -> String {
     events
         .iter()
+        .filter(|e| !matches!(e, DerivedEvent::PromptTurn { .. }))
         .map(|e| format!("{e:?}"))
         .collect::<Vec<_>>()
         .join("\n")
@@ -32,7 +42,7 @@ proptest! {
         let rec: JsonlRecord = serde_json::from_value(rec_json).unwrap();
         let mut r = Reducer::new();
         let out = r.reduce(&rec);
-        let d = dump(&out);
+        let d = dump_no_prompt_turns(&out);
         prop_assert!(!d.contains(&prompt), "reducer leaked user text: {prompt:?}");
     }
 
@@ -59,7 +69,7 @@ proptest! {
         let rec: JsonlRecord = serde_json::from_value(rec_json).unwrap();
         let mut r = Reducer::new();
         let out = r.reduce(&rec);
-        let d = dump(&out);
+        let d = dump_no_prompt_turns(&out);
         prop_assert!(!d.contains(&text), "reducer leaked assistant text: {text:?}");
     }
 
@@ -76,7 +86,7 @@ proptest! {
         let rec: JsonlRecord = serde_json::from_value(rec_json).unwrap();
         let mut r = Reducer::new();
         let out = r.reduce(&rec);
-        let d = dump(&out);
+        let d = dump_no_prompt_turns(&out);
         prop_assert!(!d.contains(&prompt), "reducer leaked string-content user text: {prompt:?}");
     }
 }
@@ -101,11 +111,11 @@ fn slash_command_extraction_does_not_leak_surrounding_text() {
     let rec: JsonlRecord = serde_json::from_value(rec_json).unwrap();
     let mut r = Reducer::new();
     let out = r.reduce(&rec);
-    let d = dump(&out);
+    let d = dump_no_prompt_turns(&out);
 
     // Sanity: the command was actually detected (otherwise the test proves nothing).
     assert!(d.contains("deploy"), "expected the slash command to be detected");
-    // The surrounding prompt text must not leak.
+    // The surrounding prompt text must not leak from non-PromptTurn variants.
     assert!(!d.contains(LEADING), "reducer leaked leading prompt text");
     assert!(!d.contains(TRAILING), "reducer leaked trailing prompt text");
     // The command-args *text* must not leak — only an arg count escapes.
