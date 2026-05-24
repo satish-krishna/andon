@@ -81,3 +81,18 @@ async fn wow_pct_returns_zero_when_prev_is_zero() {
     let wow = score::trends_wow(&pool, "prompt", now).unwrap();
     assert_eq!(wow, 0);
 }
+
+#[tokio::test]
+async fn scorecard_returns_all_five_practices() {
+    let (pool, _dir) = common::fixture_pool();
+    andon_lib::coach::seed_rules(&pool).unwrap();
+    let now = chrono::Utc::now().timestamp_millis();
+    let win = Window { from_ms: 0, to_ms: now + 1, models: None };
+    let card = score::scorecard(&pool, &win, &andon_lib::settings::CoachSettings::default()).unwrap();
+    assert_eq!(card.practices.len(), 5);
+    let tool = card.practices.iter().find(|p| p.practice == "tool").unwrap();
+    // Empty DB → 0 distinct models → continuous score 20
+    let cont = tool.continuous.iter().find(|c| c.id == "model-diversity");
+    assert!(cont.is_some());
+    assert_eq!(cont.unwrap().score, 20);
+}

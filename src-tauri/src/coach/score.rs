@@ -112,3 +112,68 @@ fn count_findings(pool: &Arc<DbPool>, practice: &str, from_ms: i64, to_ms: i64) 
     ).unwrap_or(0);
     Ok(n)
 }
+
+#[derive(Debug, Serialize)]
+pub struct ContinuousTile {
+    pub id: String,
+    pub score: i64,
+}
+
+#[derive(Debug, Serialize)]
+pub struct PracticeRow {
+    pub practice: String,
+    pub score: Option<i64>,
+    pub status: String,
+    pub wow_pct: i64,
+    pub mom_pct: i64,
+    pub triggered_count: i64,
+    pub continuous: Vec<ContinuousTile>,
+}
+
+#[derive(Debug, Serialize)]
+pub struct WindowDto { pub from: i64, pub to: i64 }
+
+#[derive(Debug, Serialize)]
+pub struct Scorecard {
+    pub practices: Vec<PracticeRow>,
+    pub window: WindowDto,
+    pub sessions_in_window: i64,
+}
+
+pub fn scorecard(
+    pool: &Arc<DbPool>,
+    window: &Window,
+    _coach_settings: &crate::settings::CoachSettings,
+) -> Result<Scorecard> {
+    let now = chrono::Utc::now().timestamp_millis();
+    let mut practices = vec![];
+    for &p in crate::coach::PRACTICES {
+        let s = practice_score(pool, p, window)?;
+        let wow = trends_wow(pool, p, now)?;
+        let mom = trends_mom(pool, p, now)?;
+        let mut continuous = vec![];
+        if p == "tool" {
+            let md = crate::coach::rules::score_model_diversity(pool, window)?;
+            continuous.push(ContinuousTile { id: "model-diversity".into(), score: md });
+        }
+        practices.push(PracticeRow {
+            practice: s.practice,
+            score: s.score,
+            status: s.status,
+            wow_pct: wow,
+            mom_pct: mom,
+            triggered_count: s.triggered_count,
+            continuous,
+        });
+    }
+    let sessions_in_window: i64 = pool.get()?.query_row(
+        "SELECT COUNT(*) FROM sessions WHERE started_at >= ?1 AND started_at < ?2",
+        rusqlite::params![window.from_ms, window.to_ms],
+        |r| r.get(0),
+    ).unwrap_or(0);
+    Ok(Scorecard {
+        practices,
+        window: WindowDto { from: window.from_ms, to: window.to_ms },
+        sessions_in_window,
+    })
+}
