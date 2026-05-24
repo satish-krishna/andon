@@ -276,6 +276,19 @@ pub struct CoachScorecardDto {
 }
 
 #[derive(serde::Serialize)]
+pub struct CoachRuleDto {
+    pub id: String,
+    pub practice: String,
+    pub severity: Option<String>,
+    pub kind: String,
+    pub aiec_origin: Option<String>,
+    pub description: String,
+    pub suggestion: String,
+    pub enabled: bool,
+    pub reserved: bool,
+}
+
+#[derive(serde::Serialize)]
 pub struct CoachFindingRow {
     pub id: i64,
     pub rule_id: String,

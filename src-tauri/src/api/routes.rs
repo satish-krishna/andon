@@ -77,6 +77,7 @@ pub fn router(state: ApiState) -> Router {
         // Coach
         .route("/api/coach/scorecard", get(coach_scorecard))
         .route("/api/coach/findings", get(coach_findings))
+        .route("/api/coach/rules", get(coach_rules))
         .with_state(state)
 }
 
@@ -2854,6 +2855,31 @@ async fn behaviour_subagents(
 // ============================================================================
 // Coach endpoints (I1–I4)
 // ============================================================================
+
+async fn coach_rules(State(state): State<ApiState>) -> Result<Json<Vec<CoachRuleDto>>, ApiError> {
+    let conn = state.pool.get().map_err(ApiError::pool)?;
+    let mut stmt = conn.prepare("SELECT id, enabled FROM coach_rules")?;
+    let enabled_map: std::collections::HashMap<String, bool> = stmt
+        .query_map([], |r| Ok((r.get::<_, String>(0)?, r.get::<_, i64>(1)? != 0)))?
+        .filter_map(|r| r.ok())
+        .collect();
+
+    let out: Vec<CoachRuleDto> = crate::coach::rules::RULES.iter().map(|r| CoachRuleDto {
+        id: r.id.into(),
+        practice: r.practice.into(),
+        severity: r.severity.map(|s| s.as_str().to_string()),
+        kind: match r.kind {
+            crate::coach::rules::RuleKind::Binary => "binary",
+            crate::coach::rules::RuleKind::Continuous => "continuous",
+        }.into(),
+        aiec_origin: r.aiec_origin.map(String::from),
+        description: r.description.into(),
+        suggestion: r.suggestion.into(),
+        enabled: enabled_map.get(r.id).copied().unwrap_or(true),
+        reserved: r.reserved,
+    }).collect();
+    Ok(Json(out))
+}
 
 #[derive(serde::Deserialize)]
 struct CoachFindingsQuery {
