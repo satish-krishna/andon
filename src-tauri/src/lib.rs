@@ -105,6 +105,10 @@ pub fn run() {
         }
     };
 
+    if let Err(e) = coach::seed_rules(&pool) {
+        tracing::warn!(error = ?e, "coach rule seeding failed (non-fatal)");
+    }
+
     let settings_path = paths.data_dir.join("settings.json");
     let settings_store = match settings::SettingsStore::load(settings_path) {
         Ok(s) => Arc::new(s),
