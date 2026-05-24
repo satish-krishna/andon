@@ -275,6 +275,11 @@ pub struct CoachScorecardDto {
     pub sessions_in_window: i64,
 }
 
+#[derive(serde::Deserialize)]
+pub struct UpdateCoachRule {
+    pub enabled: bool,
+}
+
 #[derive(serde::Serialize)]
 pub struct CoachRuleDto {
     pub id: String,

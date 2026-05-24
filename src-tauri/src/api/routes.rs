@@ -78,6 +78,7 @@ pub fn router(state: ApiState) -> Router {
         .route("/api/coach/scorecard", get(coach_scorecard))
         .route("/api/coach/findings", get(coach_findings))
         .route("/api/coach/rules", get(coach_rules))
+        .route("/api/coach/rules/:id", post(coach_rules_update))
         .with_state(state)
 }
 
@@ -2855,6 +2856,36 @@ async fn behaviour_subagents(
 // ============================================================================
 // Coach endpoints (I1–I4)
 // ============================================================================
+
+async fn coach_rules_update(
+    State(state): State<ApiState>,
+    Path(id): Path<String>,
+    body: Result<Json<UpdateCoachRule>, JsonRejection>,
+) -> Result<Json<serde_json::Value>, ApiError> {
+    let Json(payload) = body.map_err(|e| ApiError {
+        status: StatusCode::BAD_REQUEST,
+        message: format!("invalid body: {e}"),
+    })?;
+    match crate::coach::rules::by_id(&id) {
+        Some(r) if r.reserved => {
+            return Err(ApiError {
+                status: StatusCode::BAD_REQUEST,
+                message: format!("rule '{id}' is reserved and cannot be toggled"),
+            });
+        }
+        None => {
+            return Err(ApiError::not_found(&format!("rule '{id}' not found")));
+        }
+        _ => {}
+    }
+    let conn = state.pool.get().map_err(ApiError::pool)?;
+    let now_ms = chrono::Utc::now().timestamp_millis();
+    conn.execute(
+        "UPDATE coach_rules SET enabled = ?1, updated_at = ?2 WHERE id = ?3",
+        rusqlite::params![payload.enabled as i64, now_ms, id],
+    )?;
+    Ok(Json(serde_json::json!({ "ok": true })))
+}
 
 async fn coach_rules(State(state): State<ApiState>) -> Result<Json<Vec<CoachRuleDto>>, ApiError> {
     let conn = state.pool.get().map_err(ApiError::pool)?;
