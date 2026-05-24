@@ -208,7 +208,7 @@ impl Ingestor {
                             let command = text.strip_prefix('/').and_then(|rest| {
                                 rest.split_whitespace().next().map(|s| s.to_string())
                             });
-                            let norm_hash = blake3::hash(text.as_bytes()).to_string();
+                            let norm_hash = crate::coach::skill::norm_hash(&text);
                             let turn_index: i64 = tx.query_row(
                                 "SELECT COALESCE(MAX(turn_index), -1) + 1 FROM prompt_turns WHERE session_id = ?1",
                                 params![sid], |r| r.get(0),

@@ -310,9 +310,7 @@ fn build_prompt_turn(
         .and_then(|rest| rest.split_whitespace().next())
         .map(|s| s.to_string());
 
-    // Placeholder hash: purely byte-based blake3. Task G1 replaces this with
-    // a keyed-hash normaliser that collapses semantically equivalent prompts.
-    let norm_hash = blake3::hash(text.as_bytes()).to_string();
+    let norm_hash = crate::coach::skill::norm_hash(&text);
 
     Some(DerivedEvent::PromptTurn {
         session_id: sid.to_string(),
@@ -589,8 +587,7 @@ mod tests {
 
     #[test]
     fn user_message_norm_hash_differs_for_different_text() {
-        // Placeholder hash (B4): purely text-based blake3, no normalisation.
-        // G1 will introduce normalisation that collapses semantically equivalent prompts.
+        // G1 keyed-normalised hash: collapses semantically equivalent prompts.
         let a = r#"{"type":"user","sessionId":"s1","timestamp":"2026-05-19T10:00:00.000Z","message":{"role":"user","content":[{"type":"text","text":"Package the extension"}]}}"#;
         let b = r#"{"type":"user","sessionId":"s1","timestamp":"2026-05-19T10:00:01.000Z","message":{"role":"user","content":[{"type":"text","text":"Ship the release"}]}}"#;
 
