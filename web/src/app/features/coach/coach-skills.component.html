@@ -29,7 +29,45 @@
   <section class="panel">
     <div class="panel-title">Opportunities ({{ skills()?.opportunities?.length ?? 0 }})</div>
     <div class="panel-body">
-      <!-- L2 renders rows here -->
+      @if (skills(); as sk) {
+        @if (sk.opportunities.length === 0) {
+          <div class="text-xs text-muted">
+            No skill opportunities yet in this window. This page lights up when the same
+            prompt pattern appears in multiple sessions. If Andon was just installed, run
+            <a routerLink="/settings" class="underline">Backfill JSONL</a> to seed history.
+          </div>
+        } @else {
+          <ul class="flex flex-col gap-2">
+            @for (o of sk.opportunities; track o.norm_hash) {
+              <li class="border-b border-border/40 pb-2 last:border-0">
+                <button class="w-full text-left flex items-center gap-2" (click)="toggle(o.norm_hash)">
+                  <lucide-icon name="lightbulb" class="w-4 h-4 text-accent"></lucide-icon>
+                  <span class="flex-1 text-sm font-medium">{{ o.label }}</span>
+                  <span class="text-[11px] text-muted font-mono">{{ o.occurrences }}×</span>
+                  <span class="text-[11px] text-muted">{{ o.session_count }} sessions</span>
+                  <lucide-icon name="chevron-down" class="w-4 h-4 text-muted"
+                               [class.rotate-180]="expanded() === o.norm_hash"></lucide-icon>
+                </button>
+                @if (expanded() === o.norm_hash) {
+                  <div class="mt-2 pl-6 text-xs flex flex-col gap-2">
+                    @for (ex of (examplesCache.get(o.norm_hash) ?? []); track ex.session_id + ex.turn_index) {
+                      <div>
+                        <div class="text-text">"{{ ex.text }}"</div>
+                        <div class="text-muted">session {{ ex.session_id }} · turn {{ ex.turn_index }}</div>
+                      </div>
+                    }
+                    <button class="self-start px-2 py-1 text-[11px] border border-border rounded
+                                   hover:bg-border/40"
+                            (click)="copyAsSlashCommand(o, examplesCache.get(o.norm_hash))">
+                      📋 Copy as starter slash command
+                    </button>
+                  </div>
+                }
+              </li>
+            }
+          </ul>
+        }
+      }
     </div>
   </section>
 </div>
