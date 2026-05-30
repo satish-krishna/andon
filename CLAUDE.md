@@ -14,7 +14,6 @@ Andon is a single-binary Tauri 2 desktop app that ingests Claude Code OpenTeleme
 | What each dashboard page does | [`docs/features.md`](docs/features.md) |
 | Contributing rules (Rust + Angular) | [`CONTRIBUTING.md`](CONTRIBUTING.md) |
 | Cutting a release | [`docs/releasing.md`](docs/releasing.md) |
-| In-flight design + plans (superpowers workflow) | [`docs/superpowers/specs/`](docs/superpowers/specs) and [`docs/superpowers/plans/`](docs/superpowers/plans) |
 
 Don't duplicate what those files say — link to them.
 
@@ -59,7 +58,6 @@ src-tauri/         Rust backend (Tauri shell, OTLP receivers, axum API, SQLite)
 web/               Angular 21 SPA (standalone components, signals)
   src/app/features/{overview,sessions,files,diagnostics,settings}
 docs/              Architecture, building, features, pitch
-docs/superpowers/  Active design specs + implementation plans
 scripts/           OTLP smoke scripts (gRPC via Node, HTTP via stdlib Python)
 ```
 
@@ -97,14 +95,10 @@ Full rationale lives in [`CONTRIBUTING.md`](CONTRIBUTING.md). Short list for in-
 
 If a change touches receivers, the API surface, or `~/.claude/settings.json` patching, re-read [`docs/architecture.md`](docs/architecture.md) §"Privacy & safety rules" before merging.
 
-## Workflow for non-trivial work
+## Workflow
 
-1. **Spec** → write a design doc under `docs/superpowers/specs/YYYY-MM-DD-<slug>-design.md`.
-2. **Plan** → write a step-by-step plan under `docs/superpowers/plans/YYYY-MM-DD-<slug>.md`.
-3. **Implement** on a short-lived feature branch off `main`. Squash-merge via PR.
-4. **Verify** against the Definition of Done in [`CONTRIBUTING.md`](CONTRIBUTING.md).
-
-Bug fixes and one-line changes skip the spec/plan — go straight to a PR.
+1. **Implement** on a short-lived feature branch off `main`. Squash-merge via PR.
+2. **Verify** against the Definition of Done in [`CONTRIBUTING.md`](CONTRIBUTING.md).
 
 ## Out of scope (do not add without asking)
 
