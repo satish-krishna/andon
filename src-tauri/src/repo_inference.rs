@@ -67,10 +67,17 @@ pub async fn infer_repo_for_session(
         let sid = session_id.clone();
         move || -> Result<Vec<PathBuf>> {
             let conn = pool.get()?;
+            // sessions.cwd is the most reliable hint for JSONL-only or
+            // telemetry-light sessions — it's set by the JSONL reducer from
+            // the first user turn. Folding it into the LCA input via UNION
+            // means a single-path session (cwd only) will short-circuit to
+            // cwd itself as the LCA, then walk up for .git as usual.
             let mut stmt = conn.prepare(
                 "SELECT file_path FROM file_changes WHERE session_id = ?1 AND file_path IS NOT NULL
                  UNION
-                 SELECT file_path FROM tool_decisions WHERE session_id = ?1 AND file_path IS NOT NULL"
+                 SELECT file_path FROM tool_decisions WHERE session_id = ?1 AND file_path IS NOT NULL
+                 UNION
+                 SELECT cwd FROM sessions WHERE session_id = ?1 AND cwd IS NOT NULL"
             )?;
             let rows = stmt.query_map(params![sid], |r| r.get::<_, String>(0))?;
             let mut out = Vec::new();

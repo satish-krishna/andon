@@ -274,6 +274,9 @@ impl Ingestor {
                 } => {
                     // Binary routing: a JSONL-only session is 'jsonl'; an
                     // OTLP-covered session keeps 'otlp'. 'mixed' is no longer used.
+                    //
+                    // Step 1 — best-effort insert. INSERT OR IGNORE keeps
+                    // sessions_inserted accurate: 1 only for genuinely new rows.
                     match tx.execute(
                         "INSERT OR IGNORE INTO sessions
                            (session_id, started_at, ended_at, service_version, cwd, repo_branch, data_source)
@@ -284,6 +287,21 @@ impl Ingestor {
                         Err(e) => {
                             tracing::warn!(error = ?e, session_id, "JSONL session insert failed");
                         }
+                    }
+                    // Step 2 — enrich any pre-existing row with cwd /
+                    // repo_branch the JSONL transcript just revealed. COALESCE
+                    // keeps already-populated values untouched, so this is a
+                    // no-op for the freshly-inserted row in step 1. Fixes the
+                    // case where OTLP created the session first and the
+                    // INSERT OR IGNORE dropped JSONL-derived repo hints.
+                    if let Err(e) = tx.execute(
+                        "UPDATE sessions
+                            SET cwd         = COALESCE(cwd,         ?2),
+                                repo_branch = COALESCE(repo_branch, ?3)
+                          WHERE session_id = ?1",
+                        params![session_id, cwd, git_branch],
+                    ) {
+                        tracing::warn!(error = ?e, session_id, "JSONL session enrich failed");
                     }
                 }
                 E::TokenUsage {

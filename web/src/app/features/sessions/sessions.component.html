@@ -46,9 +46,16 @@
 
   @if (missingRepoPct() > 0.2) {
     <div class="rounded border border-amber-700/40 bg-amber-950/30 px-3 py-2 text-xs flex items-center justify-between mb-3">
-      <span>{{ (missingRepoPct() * 100) | number:'1.0-0' }}% of sessions in view are missing repo info.</span>
+      <span class="flex items-center gap-2">
+        <span>{{ (missingRepoPct() * 100) | number:'1.0-0' }}% of sessions in view are missing repo info.</span>
+        @if (backfillBusy()) {
+          <span class="text-muted">scanning…</span>
+        } @else if (backfillResult(); as r) {
+          <span class="text-muted">scanned {{ r.scanned }}, updated {{ r.updated }}.</span>
+        }
+      </span>
       <span class="flex gap-2">
-        <button class="underline" (click)="runBackfill()">Backfill from file paths</button>
+        <button class="underline disabled:opacity-50" (click)="runBackfill()" [disabled]="backfillBusy()">Backfill from file paths</button>
         <a class="underline" routerLink="/settings" fragment="integration">Re-apply hook</a>
       </span>
     </div>

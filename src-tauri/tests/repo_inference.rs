@@ -7,8 +7,9 @@ use std::path::PathBuf;
 
 use andon_lib::{
     git_query::{compute_repo_name, normalize_remote, query_repo},
-    repo_inference::{find_git_ancestor, longest_common_ancestor},
+    repo_inference::{find_git_ancestor, infer_repo_for_session, longest_common_ancestor},
 };
+use rusqlite::params;
 
 // ---------------------------------------------------------------------------
 // 1. find_git_ancestor picks the right worktree root for a path inside the tree
@@ -330,4 +331,42 @@ fn lca_single_path_returns_same_path() {
     let paths = vec![PathBuf::from("/a/b/c")];
     let lca = longest_common_ancestor(&paths).expect("LCA should be Some for single path");
     assert_eq!(lca, PathBuf::from("/a/b/c"));
+}
+
+// ---------------------------------------------------------------------------
+// 7. infer_repo_for_session seeds inference from sessions.cwd
+// ---------------------------------------------------------------------------
+
+/// When a session has no file_changes / tool_decisions (pure JSONL-only
+/// session, or telemetry-light run), the backfill route must still infer the
+/// repo by treating sessions.cwd as a path candidate. Regression test for the
+/// "Backfill from file paths" button silently returning 0 updates.
+#[tokio::test]
+async fn infer_uses_sessions_cwd_when_no_file_paths() {
+    let repo_dir = common::init_temp_repo(&["initial"]);
+    let sub = repo_dir.path().join("nested").join("inside");
+    std::fs::create_dir_all(&sub).unwrap();
+
+    let (pool, _guard) = common::fixture_pool();
+    {
+        let conn = pool.get().expect("checkout conn");
+        conn.execute(
+            "INSERT INTO sessions (session_id, started_at, cwd) VALUES (?1, ?2, ?3)",
+            params!["sid-cwd-only", 0i64, sub.to_string_lossy().to_string()],
+        )
+        .expect("insert session");
+    }
+
+    let info = infer_repo_for_session(pool.clone(), "sid-cwd-only".to_string())
+        .await
+        .expect("infer call ok")
+        .expect("expected Some(RepoInfo) when sessions.cwd is set");
+
+    let got = info
+        .repo_root
+        .expect("repo_root should be Some")
+        .canonicalize()
+        .unwrap();
+    let want = repo_dir.path().canonicalize().unwrap();
+    assert_eq!(got, want, "repo_root should resolve to the temp git repo");
 }
