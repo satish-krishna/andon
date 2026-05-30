@@ -32,6 +32,8 @@ export class SessionsComponent implements OnInit {
   repoOptions = signal<RepoSummary[]>([]);
   coverage = signal<CoverageHint | null>(null);
   totals = signal<SessionTotals | null>(null);
+  backfillBusy = signal(false);
+  backfillResult = signal<{ scanned: number; updated: number } | null>(null);
 
   readonly missingRepoPct = computed(() => {
     const c = this.coverage();
@@ -105,7 +107,18 @@ export class SessionsComponent implements OnInit {
   }
 
   runBackfill() {
-    this.api.backfillRepos().subscribe(() => this.loadSessions());
+    this.backfillBusy.set(true);
+    this.backfillResult.set(null);
+    this.api.backfillRepos().subscribe({
+      next: (r) => {
+        this.backfillResult.set(r);
+        this.backfillBusy.set(false);
+        this.loadSessions();
+      },
+      error: () => {
+        this.backfillBusy.set(false);
+      },
+    });
   }
 
   toggleRepo(key: string) {

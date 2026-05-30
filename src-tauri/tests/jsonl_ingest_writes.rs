@@ -250,3 +250,124 @@ fn dedups_subagent_calls_on_repeat() {
         .unwrap();
     assert_eq!(n, 1, "second call must not duplicate subagent_call");
 }
+
+// ---------------------------------------------------------------------------
+// SessionLifecycle upsert behaviour
+// ---------------------------------------------------------------------------
+//
+// Pre-condition: a session row already exists (created earlier by OTLP with
+// only session_id + started_at — no cwd, no repo_branch). Later, JSONL ingest
+// learns the cwd and gitBranch from the transcript. The lifecycle handler
+// must enrich the existing row (COALESCE-style) rather than dropping the
+// information on the floor as the prior INSERT OR IGNORE did.
+
+#[test]
+fn lifecycle_enriches_existing_session_with_cwd_and_branch() {
+    let (pool, _g) = fixture_pool();
+    let ing = test_ingestor(&pool);
+    {
+        let conn = pool.get().unwrap();
+        // Seed an existing session WITHOUT cwd / repo_branch — simulates the
+        // OTLP-first ordering where SessionStart hook or telemetry created
+        // the row before the JSONL transcript was ingested.
+        conn.execute(
+            "INSERT INTO sessions (session_id, started_at, data_source) VALUES ('s-otlp-first', 100, 'otlp')",
+            [],
+        )
+        .unwrap();
+    }
+
+    let ev = DerivedEvent::SessionLifecycle {
+        session_id: "s-otlp-first".into(),
+        started_at: 100,
+        ended_at: None,
+        cc_version: Some("2.1.0".into()),
+        cwd: Some("/repos/cool".into()),
+        git_branch: Some("main".into()),
+    };
+    let (_t, _c, sessions_added) = ing
+        .ingest_derived(&[ev], Coverage::JsonlOnly)
+        .expect("ingest_derived ok");
+    assert_eq!(
+        sessions_added, 0,
+        "existing session must not count as newly inserted"
+    );
+
+    let conn = pool.get().unwrap();
+    let (cwd, branch): (Option<String>, Option<String>) = conn
+        .query_row(
+            "SELECT cwd, repo_branch FROM sessions WHERE session_id = 's-otlp-first'",
+            [],
+            |r| Ok((r.get(0)?, r.get(1)?)),
+        )
+        .unwrap();
+    assert_eq!(cwd.as_deref(), Some("/repos/cool"), "cwd should be filled in");
+    assert_eq!(branch.as_deref(), Some("main"), "repo_branch should be filled in");
+}
+
+#[test]
+fn lifecycle_does_not_overwrite_existing_cwd_or_branch() {
+    let (pool, _g) = fixture_pool();
+    let ing = test_ingestor(&pool);
+    {
+        let conn = pool.get().unwrap();
+        conn.execute(
+            "INSERT INTO sessions (session_id, started_at, cwd, repo_branch) \
+             VALUES ('s-has-cwd', 100, '/already/set', 'develop')",
+            [],
+        )
+        .unwrap();
+    }
+
+    let ev = DerivedEvent::SessionLifecycle {
+        session_id: "s-has-cwd".into(),
+        started_at: 100,
+        ended_at: None,
+        cc_version: None,
+        cwd: Some("/different/cwd".into()),
+        git_branch: Some("main".into()),
+    };
+    ing.ingest_derived(&[ev], Coverage::JsonlOnly)
+        .expect("ingest_derived ok");
+
+    let conn = pool.get().unwrap();
+    let (cwd, branch): (Option<String>, Option<String>) = conn
+        .query_row(
+            "SELECT cwd, repo_branch FROM sessions WHERE session_id = 's-has-cwd'",
+            [],
+            |r| Ok((r.get(0)?, r.get(1)?)),
+        )
+        .unwrap();
+    assert_eq!(cwd.as_deref(), Some("/already/set"), "existing cwd must be preserved");
+    assert_eq!(branch.as_deref(), Some("develop"), "existing repo_branch must be preserved");
+}
+
+#[test]
+fn lifecycle_still_inserts_new_session() {
+    let (pool, _g) = fixture_pool();
+    let ing = test_ingestor(&pool);
+
+    let ev = DerivedEvent::SessionLifecycle {
+        session_id: "s-new".into(),
+        started_at: 100,
+        ended_at: None,
+        cc_version: None,
+        cwd: Some("/some/path".into()),
+        git_branch: Some("main".into()),
+    };
+    let (_t, _c, sessions_added) = ing
+        .ingest_derived(&[ev], Coverage::JsonlOnly)
+        .expect("ingest_derived ok");
+    assert_eq!(sessions_added, 1, "genuinely new session must count as inserted");
+
+    let conn = pool.get().unwrap();
+    let (cwd, branch): (Option<String>, Option<String>) = conn
+        .query_row(
+            "SELECT cwd, repo_branch FROM sessions WHERE session_id = 's-new'",
+            [],
+            |r| Ok((r.get(0)?, r.get(1)?)),
+        )
+        .unwrap();
+    assert_eq!(cwd.as_deref(), Some("/some/path"));
+    assert_eq!(branch.as_deref(), Some("main"));
+}
