@@ -1,6 +1,6 @@
 # andon
 
-*Andon* (アンドン) — the lean-manufacturing signal board that surfaces what's happening on the factory floor. This is the andon board for Claude Code usage.
+*Andon* — the lean-manufacturing signal board that surfaces what's happening on the factory floor. This is the andon board for Claude Code usage.
 
 A local, single-binary desktop app that ingests Claude Code OpenTelemetry data, stores it in embedded SQLite, and renders a reporting dashboard. Everything runs on `127.0.0.1`. No cloud, no auth, no outbound network.
 
