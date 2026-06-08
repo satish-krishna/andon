@@ -47,6 +47,53 @@ async fn session_end_with_transcript_path_returns_200() {
     assert_eq!(res.status(), StatusCode::OK);
 }
 
+#[tokio::test(flavor = "multi_thread")]
+async fn session_end_persists_and_reports_after_fire_and_forget_response() {
+    // The session-end hook is fire-and-forget: the handler returns immediately
+    // and persists / renders in a detached task so a cancelled hook `curl` can't
+    // drop the work. Verify ended_at lands and the report is written even though
+    // neither happened before the HTTP response.
+    use rusqlite::OptionalExtension;
+
+    let (pool, _g) = common::fixture_pool();
+    let (router, dir) = test_router(&pool);
+    let body = serde_json::json!({ "session_id": "s-end", "reason": "exit" });
+    let res = router
+        .oneshot(
+            axum::http::Request::builder()
+                .method("POST")
+                .uri("/api/hooks/session-end")
+                .header("content-type", "application/json")
+                .body(axum::body::Body::from(body.to_string()))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(res.status(), StatusCode::OK);
+
+    let report_path = dir.path().join("reports").join("s-end.html");
+    let mut ended_at: Option<i64> = None;
+    for _ in 0..100 {
+        ended_at = {
+            let conn = pool.get().unwrap();
+            conn.query_row(
+                "SELECT ended_at FROM sessions WHERE session_id = 's-end'",
+                [],
+                |r| r.get::<_, Option<i64>>(0),
+            )
+            .optional()
+            .unwrap()
+            .flatten()
+        };
+        if ended_at.is_some() && report_path.exists() {
+            break;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+    }
+    assert!(ended_at.is_some(), "ended_at should be persisted by the detached task");
+    assert!(report_path.exists(), "report should be rendered by the detached task");
+}
+
 #[tokio::test]
 async fn errors_endpoint_returns_empty_array_initially() {
     let (pool, _g) = common::fixture_pool();

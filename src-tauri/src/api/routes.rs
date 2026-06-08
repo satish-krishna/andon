@@ -925,47 +925,68 @@ async fn hook_session_end(
         .map(|d| d.as_millis() as i64)
         .unwrap_or(0);
 
-    let pool_for_db = state.pool.clone();
-    let sid_for_db = sid.clone();
-    tokio::task::spawn_blocking(move || {
-        let Ok(conn) = pool_for_db.get() else { return };
-        let exists: i64 = conn
-            .query_row(
-                "SELECT COUNT(*) FROM sessions WHERE session_id = ?1",
-                params![sid_for_db],
-                |r| r.get(0),
-            )
-            .unwrap_or(0);
-        if exists == 0 {
-            let _ = conn.execute(
-                "INSERT INTO sessions (session_id, started_at, ended_at) VALUES (?1, ?2, ?2)",
-                params![sid_for_db, now],
-            );
-        } else {
-            let _ = conn.execute(
-                "UPDATE sessions SET ended_at = ?2 WHERE session_id = ?1 AND ended_at IS NULL",
-                params![sid_for_db, now],
-            );
-        }
-    })
-    .await
-    .ok();
+    // Claude Code tears down SessionEnd hook subprocesses as the session exits,
+    // so the hook's `curl` can be killed the moment the session is gone — often
+    // before the server has replied. If this handler did its work inline, that
+    // client disconnect would drop the request future and cancel every step
+    // still queued behind an `.await`: the report, transcript ingest and repo
+    // inference would silently never run. So this is fire-and-forget — hand all
+    // work to detached tasks (which outlive the request future) and reply
+    // immediately, so the hook always completes cleanly regardless of timing.
 
-    let pool = state.pool.clone();
-    let reports_dir = state.reports_dir.clone();
-    let sid_for_task = sid.clone();
+    // Persist ended_at, then render the report and backfill repo metadata.
+    // Chained inside one detached task so the row exists before the report loads
+    // it and the report reflects the just-recorded end time.
+    let state_bg = state.clone();
+    let sid_bg = sid.clone();
     tokio::spawn(async move {
-        let result = tokio::task::spawn_blocking(move || {
-            crate::reports::generate_report(pool, &reports_dir, &sid_for_task)
+        let pool_upsert = state_bg.pool.clone();
+        let sid_upsert = sid_bg.clone();
+        let upsert = tokio::task::spawn_blocking(move || {
+            let Ok(conn) = pool_upsert.get() else { return };
+            let exists: i64 = conn
+                .query_row(
+                    "SELECT COUNT(*) FROM sessions WHERE session_id = ?1",
+                    params![sid_upsert],
+                    |r| r.get(0),
+                )
+                .unwrap_or(0);
+            if exists == 0 {
+                let _ = conn.execute(
+                    "INSERT INTO sessions (session_id, started_at, ended_at) VALUES (?1, ?2, ?2)",
+                    params![sid_upsert, now],
+                );
+            } else {
+                let _ = conn.execute(
+                    "UPDATE sessions SET ended_at = ?2 WHERE session_id = ?1 AND ended_at IS NULL",
+                    params![sid_upsert, now],
+                );
+            }
         })
         .await;
-        match result {
+        if upsert.is_err() {
+            tracing::error!("hook_session_end: ended_at upsert task panicked");
+        }
+
+        let pool_rep = state_bg.pool.clone();
+        let reports_dir = state_bg.reports_dir.clone();
+        let sid_rep = sid_bg.clone();
+        let report = tokio::task::spawn_blocking(move || {
+            crate::reports::generate_report(pool_rep, &reports_dir, &sid_rep)
+        })
+        .await;
+        match report {
             Ok(Ok(path)) => tracing::info!(path = %path.display(), "report generated"),
             Ok(Err(e))   => tracing::error!(error = ?e, "report render failed"),
             Err(e)       => tracing::error!(error = ?e, "report task panicked"),
         }
+
+        // Best-effort repo inference for sessions the hook didn't cover.
+        backfill_repo_metadata(state_bg.pool.clone(), sid_bg).await;
     });
 
+    // Ingest the transcript JSONL if the hook supplied a valid path. Independent
+    // of the persist above, so it runs in its own detached task.
     if let Some(tp) = p.transcript_path.clone() {
         match validate_transcript_path(&tp) {
             Some(path) => {
@@ -989,47 +1010,45 @@ async fn hook_session_end(
         }
     }
 
-    // Best-effort repo inference for sessions the hook didn't cover.
-    let pool_for_inf = state.pool.clone();
-    let sid_for_inf = sid.clone();
-    tokio::spawn(async move {
-        // Skip if repo_root is already populated.
-        let needs = {
-            let pool = pool_for_inf.clone();
-            let sid = sid_for_inf.clone();
-            tokio::task::spawn_blocking(move || -> bool {
-                let Ok(conn) = pool.get() else { return false };
-                conn.query_row(
-                    "SELECT repo_root IS NULL FROM sessions WHERE session_id = ?1",
-                    params![sid], |r| r.get::<_, i64>(0)
-                ).map(|n| n != 0).unwrap_or(false)
-            }).await.unwrap_or(false)
-        };
-        if !needs { return; }
-
-        let Ok(Some(info)) = crate::repo_inference::infer_repo_for_session(
-            pool_for_inf.clone(), sid_for_inf.clone()
-        ).await else { return };
-
-        let pool = pool_for_inf.clone();
-        let sid  = sid_for_inf.clone();
-        let _ = tokio::task::spawn_blocking(move || {
-            let Ok(conn) = pool.get() else { return };
-            let root = info.repo_root.as_ref().map(|p| p.to_string_lossy().into_owned());
-            let _ = conn.execute(
-                "UPDATE sessions
-                   SET repo_root   = COALESCE(repo_root,   ?2),
-                       repo_remote = COALESCE(repo_remote, ?3),
-                       repo_branch = COALESCE(repo_branch, ?4),
-                       repo_name   = COALESCE(repo_name,   ?5)
-                 WHERE session_id = ?1",
-                params![sid, root, info.repo_remote, info.repo_branch, info.repo_name],
-            );
-        }).await;
-    });
-
     let _ = p.reason; // diagnostic field; intentionally dropped from wire
     Json(HookOutput::ok())
+}
+
+/// Best-effort backfill of repo metadata for a session whose `repo_root` is
+/// still NULL (e.g. sessions that never hit the SessionStart hook). No-op when
+/// the row is missing or already populated. Runs entirely off the request path.
+async fn backfill_repo_metadata(pool: std::sync::Arc<crate::db::DbPool>, sid: String) {
+    // Skip if repo_root is already populated (or the row isn't there yet).
+    let needs = {
+        let pool = pool.clone();
+        let sid = sid.clone();
+        tokio::task::spawn_blocking(move || -> bool {
+            let Ok(conn) = pool.get() else { return false };
+            conn.query_row(
+                "SELECT repo_root IS NULL FROM sessions WHERE session_id = ?1",
+                params![sid], |r| r.get::<_, i64>(0)
+            ).map(|n| n != 0).unwrap_or(false)
+        }).await.unwrap_or(false)
+    };
+    if !needs { return; }
+
+    let Ok(Some(info)) = crate::repo_inference::infer_repo_for_session(
+        pool.clone(), sid.clone()
+    ).await else { return };
+
+    let _ = tokio::task::spawn_blocking(move || {
+        let Ok(conn) = pool.get() else { return };
+        let root = info.repo_root.as_ref().map(|p| p.to_string_lossy().into_owned());
+        let _ = conn.execute(
+            "UPDATE sessions
+               SET repo_root   = COALESCE(repo_root,   ?2),
+                   repo_remote = COALESCE(repo_remote, ?3),
+                   repo_branch = COALESCE(repo_branch, ?4),
+                   repo_name   = COALESCE(repo_name,   ?5)
+             WHERE session_id = ?1",
+            params![sid, root, info.repo_remote, info.repo_branch, info.repo_name],
+        );
+    }).await;
 }
 
 async fn hook_session_context(
