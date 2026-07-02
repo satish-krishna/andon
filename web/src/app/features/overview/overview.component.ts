@@ -17,7 +17,7 @@ import { FilterService } from '../../core/filter.service';
 import { FilterBarComponent } from '../../shared/filter-bar.component';
 import { TopReposTileComponent } from './top-repos-tile.component';
 import { budgetTextClass, budgetBarClass } from './budget-indicator';
-import { selectedTapeDay, tapeDayDate } from './tape-selection';
+import { dateInWindow } from './tape-window';
 
 // Model names come in like "claude-opus-4-7" or "claude-haiku-4-5-20251001".
 // Substring match keeps it forward-compatible with new versions.
@@ -58,26 +58,23 @@ export class OverviewComponent implements OnInit {
   rangeFrom = computed(() => this.filter.window().fromMs);
   rangeTo   = computed(() => this.filter.window().toMs);
 
-  // tape max for scaling
+  // Scale bars to the tallest day in the 30-day window.
   tapeMax = computed(() => {
     const t = this.tape();
-    if (!t) return 1;
-    return Math.max(1, ...t.current, ...t.previous);
+    if (!t || t.days.length === 0) return 1;
+    return Math.max(1, ...t.days.map((d) => d.cost));
   });
 
-  // The previous-month row scales to its own max so last month's daily
-  // pattern stays legible regardless of the current month's spikes.
-  prevMax = computed(() => {
+  // Range label for the panel title, e.g. "Jun 2 – Jul 1".
+  tapeRangeLabel = computed(() => {
     const t = this.tape();
-    if (!t) return 1;
-    return Math.max(1, ...t.previous);
+    if (!t || t.days.length === 0) return '';
+    const fmt = (iso: string) => {
+      const [y, m, d] = iso.split('-').map(Number);
+      return new Date(y, m - 1, d).toLocaleDateString(undefined, { month: 'short', day: 'numeric' });
+    };
+    return `${fmt(t.days[0].date)} – ${fmt(t.days[t.days.length - 1].date)}`;
   });
-
-  // The 0-based tape day-bar the filter currently isolates, or null.
-  // Drives the tape highlight and the click-to-deselect toggle.
-  selectedDayIndex = computed(() =>
-    selectedTapeDay(this.filter.range(), this.filter.window(), this.tape()?.month ?? null),
-  );
 
   modelColor(m: string | null): string {
     if (!m) return '#7b8794';
@@ -99,40 +96,47 @@ export class OverviewComponent implements OnInit {
       .replace(/-(\d+)-(\d+)(?:-\d+)?$/, ' $1.$2');
   }
 
-  /**
-   * Click on tape day-bar `i` (0-based). Future days have no data and are
-   * ignored. Clicking the already-selected day toggles back to "This month";
-   * clicking any other past-or-today day narrows the filter to that day.
-   */
-  onTapeDayClick(i: number) {
-    const t = this.tape();
-    if (!t) return;
-    // Future days are not selectable — mirrors the template's `today_day ?? 31`.
-    if (i + 1 > (t.today_day ?? 31)) return;
-    if (i === this.selectedDayIndex()) {
-      this.filter.setRange('month'); // toggle the selection off
-    } else {
-      this.filter.selectDay(tapeDayDate(t.month, i));
-    }
+  /** True when bar `date` ("YYYY-MM-DD") falls inside the active filter window. */
+  inWindow(date: string): boolean {
+    const w = this.filter.window();
+    return dateInWindow(date, w.fromMs, w.toMs);
+  }
+
+  /** True when the filter is a single-day custom window on exactly this date. */
+  private isSoleSelectedDay(date: string): boolean {
+    if (this.filter.range() !== 'custom') return false;
+    const w = this.filter.window();
+    const from = new Date(w.fromMs);
+    const to = new Date(w.toMs);
+    if (from.toDateString() !== to.toDateString()) return false;
+    const [y, m, d] = date.split('-').map(Number);
+    return from.getFullYear() === y && from.getMonth() + 1 === m && from.getDate() === d;
   }
 
   /**
-   * Tailwind classes for tape day-bar `i`. Selected takes visual priority over
-   * the today marker; a selected today keeps today's top border so the bar and
-   * its `↑` day label stay consistent.
+   * Click tape bar for `date`. Clicking the already-isolated single day toggles
+   * back to "This month"; any other day narrows the filter to that day.
    */
-  tapeBarClass(i: number, t: V2Tape): string {
-    const today = i + 1 === t.today_day;
-    if (i === this.selectedDayIndex()) {
-      return today
-        ? 'bg-accent ring-2 ring-yellow-200 border-t border-yellow-200'
-        : 'bg-accent ring-2 ring-yellow-200';
+  onTapeDayClick(date: string) {
+    if (this.isSoleSelectedDay(date)) {
+      this.filter.setRange('month');
+      return;
     }
-    if (today) return 'bg-accent border-t border-yellow-200';
-    if (i + 1 > (t.today_day ?? 31)) {
-      return 'border-t border-l border-r border-dashed border-border-bright';
+    const [y, m, d] = date.split('-').map(Number);
+    this.filter.selectDay(new Date(y, m - 1, d));
+  }
+
+  /** Tailwind classes for the tape bar on `date`. Today gets a top marker. */
+  tapeBarClass(date: string): string {
+    const isToday = date === this.tape()?.days.at(-1)?.date;
+    if (this.inWindow(date)) {
+      return isToday
+        ? 'bg-accent border-t border-yellow-200'
+        : 'bg-accent group-hover:bg-accent';
     }
-    return 'bg-accent/40 border-t border-accent/70 group-hover:bg-accent';
+    return isToday
+      ? 'bg-accent/30 border-t border-yellow-200 group-hover:bg-accent/60'
+      : 'bg-accent/30 group-hover:bg-accent/60';
   }
 
   constructor() {
@@ -143,7 +147,7 @@ export class OverviewComponent implements OnInit {
       const models = this.filter.modelsCsv();
       const args = { fromMs: w.fromMs, toMs: w.toMs, models };
       this.api.kpis(args).subscribe((v) => this.kpis.set(v));
-      this.api.tape(undefined, models).subscribe((v) => this.tape.set(v));
+      this.api.tape(models).subscribe((v) => this.tape.set(v));
       this.api.costByModel(args).subscribe((v) => this.costByModel.set(v));
       this.api.acceptByLanguageV2(args).subscribe((v) => this.acceptLang.set(v));
       this.api.activeTime(args).subscribe((v) => this.activeTime.set(v));
@@ -178,8 +182,6 @@ export class OverviewComponent implements OnInit {
     return d >= 0 ? 'delta-up' : 'delta-down';
   }
 
-  tapeMax_ = this.tapeMax; // expose to template
-  prevMax_ = this.prevMax; // expose to template
   Math = Math; // template access
   budgetTextClass = budgetTextClass; // template access
   budgetBarClass = budgetBarClass; // template access

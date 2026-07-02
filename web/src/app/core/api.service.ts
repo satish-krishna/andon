@@ -56,12 +56,13 @@ export interface V2Kpis {
   };
 }
 
+export interface V2TapePoint {
+  date: string; // "YYYY-MM-DD", local
+  cost: number;
+}
+
 export interface V2Tape {
-  month: string;
-  days_in_month: number;
-  today_day: number | null;
-  current: number[];
-  previous: number[];
+  days: V2TapePoint[];
 }
 
 export interface V2CostByModel {
@@ -222,9 +223,8 @@ export class ApiService {
   kpis(args?: FilterArgs): Observable<V2Kpis> {
     return this.http.get<V2Kpis>(`${BASE}/api/v2/kpis`, { params: toParams(args) });
   }
-  tape(month?: string, models?: string): Observable<V2Tape> {
+  tape(models?: string): Observable<V2Tape> {
     let p = new HttpParams();
-    if (month) p = p.set('month', month);
     if (models) p = p.set('models', models);
     return this.http.get<V2Tape>(`${BASE}/api/v2/tape`, { params: p });
   }
