@@ -7,9 +7,9 @@ use axum::{
     response::IntoResponse,
     routing::{get, post},
 };
-use chrono::{Datelike, Local, Months, NaiveDate, TimeZone};
+use chrono::{Datelike, Local, Months, TimeZone};
 use rusqlite::params;
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use serde_json::json;
 
 use super::{ApiState, dto::*, efficiency::round4, filter::{FilterQuery, today_bounds}, hook_response::HookOutput};
@@ -1443,81 +1443,49 @@ fn days_in_current_month() -> i64 {
 
 #[derive(Deserialize)]
 struct TapeQuery {
-    month: Option<String>,    // YYYY-MM; defaults to current
+    #[serde(default = "default_days")]
+    days: i64,
     models: Option<String>,
+}
+
+#[derive(Serialize)]
+struct TapePoint {
+    date: String, // "YYYY-MM-DD", local
+    cost: f64,
+}
+
+#[derive(Serialize)]
+struct TapeResponse {
+    days: Vec<TapePoint>, // exactly `days` points, oldest -> today
 }
 
 async fn v2_tape(
     State(state): State<ApiState>,
     Query(q): Query<TapeQuery>,
-) -> Result<Json<serde_json::Value>, ApiError> {
-    let now = Local::now();
-    let (year, month) = match q.month.as_deref() {
-        Some(s) if s.len() == 7 => {
-            let y: i32 = s[..4].parse().unwrap_or(now.year());
-            let m: u32 = s[5..].parse().unwrap_or(now.month());
-            (y, m)
-        }
-        _ => (now.year(), now.month()),
-    };
+) -> Result<Json<TapeResponse>, ApiError> {
+    let days = q.days.clamp(1, 365);
     let conn = state.pool.get().map_err(ApiError::pool)?;
     let models = FilterQuery {
         from: None,
         to: None,
         models: q.models.clone(),
     };
-
-    let current = tape_for_month(&conn, year, month, &models);
-    let (py, pm) = if month == 1 {
-        (year - 1, 12u32)
-    } else {
-        (year, month - 1)
-    };
-    let previous = tape_for_month(&conn, py, pm, &models);
-
-    let today_day = if year == now.year() && month == now.month() {
-        Some(now.day() as i64)
-    } else {
-        None
-    };
-
-    Ok(Json(json!({
-        "month": format!("{year:04}-{month:02}"),
-        "days_in_month": current.len(),
-        "today_day": today_day,
-        "current": current,
-        "previous": previous,
-    })))
+    let points = tape_last_n_days(&conn, days, &models);
+    Ok(Json(TapeResponse { days: points }))
 }
 
-fn tape_for_month(
+fn tape_last_n_days(
     conn: &rusqlite::Connection,
-    year: i32,
-    month: u32,
+    days: i64,
     models: &FilterQuery,
-) -> Vec<f64> {
-    let first = NaiveDate::from_ymd_opt(year, month, 1).unwrap();
-    let next = if month == 12 {
-        NaiveDate::from_ymd_opt(year + 1, 1, 1).unwrap()
-    } else {
-        NaiveDate::from_ymd_opt(year, month + 1, 1).unwrap()
-    };
-    let days = (next - first).num_days() as usize;
-    let mut bins = vec![0f64; days];
-    let from = Local
-        .from_local_datetime(&first.and_hms_opt(0, 0, 0).unwrap())
-        .single()
-        .map(|d| d.timestamp_millis())
-        .unwrap_or(0);
-    let to = Local
-        .from_local_datetime(&next.and_hms_opt(0, 0, 0).unwrap())
-        .single()
-        .map(|d| d.timestamp_millis())
-        .unwrap_or(i64::MAX);
+) -> Vec<TapePoint> {
+    let labels = day_labels(days); // oldest -> today, "YYYY-MM-DD"
+    let (from, to) = last_n_days_bounds(days);
+    let mut bins = vec![0f64; days as usize];
+
     let (m_sql, m_vals) = models.model_clause("model");
     let sql = format!(
-        "SELECT timestamp, cost_usd FROM cost_entries
-         WHERE timestamp >= ? AND timestamp < ?{m_sql}"
+        "SELECT timestamp, cost_usd FROM cost_entries WHERE timestamp >= ? AND timestamp < ?{m_sql}"
     );
     let mut p: Vec<Box<dyn rusqlite::ToSql>> = vec![Box::new(from), Box::new(to)];
     for v in m_vals {
@@ -1529,16 +1497,18 @@ fn tape_for_month(
             Ok((r.get::<_, i64>(0)?, r.get::<_, f64>(1)?))
         }) {
             for (ts_ms, cost) in rows.flatten() {
-                if let Some(dt) = Local.timestamp_millis_opt(ts_ms).single() {
-                    let d = dt.day() as usize;
-                    if d >= 1 && d <= days {
-                        bins[d - 1] += cost;
-                    }
+                if let Some(idx) = day_index_for(ts_ms, days) {
+                    bins[idx] += cost;
                 }
             }
         }
     }
-    bins.iter().map(|v| round4(*v)).collect()
+
+    labels
+        .into_iter()
+        .zip(bins)
+        .map(|(date, cost)| TapePoint { date, cost: round4(cost) })
+        .collect()
 }
 
 async fn v2_cost_by_model(
@@ -2869,5 +2839,65 @@ mod tests {
         // Other: nothing lang_from_path can name.
         assert_eq!(change_kind("Makefile"), ChangeKind::Other);
         assert_eq!(change_kind("data.xyz"), ChangeKind::Other);
+    }
+
+    fn tape_conn() -> rusqlite::Connection {
+        let mut conn = rusqlite::Connection::open_in_memory().expect("open in-memory db");
+        crate::db::migrations::apply(&mut conn).expect("apply migrations");
+        conn
+    }
+
+    // Local noon `days_ago` days back — noon avoids DST/midnight day-boundary flakiness.
+    fn noon_ms_days_ago(days_ago: u64) -> i64 {
+        let d = Local::now()
+            .date_naive()
+            .checked_sub_days(chrono::Days::new(days_ago))
+            .expect("valid date");
+        Local
+            .from_local_datetime(&d.and_hms_opt(12, 0, 0).expect("valid noon"))
+            .single()
+            .expect("unambiguous local datetime")
+            .timestamp_millis()
+    }
+
+    fn insert_cost(conn: &rusqlite::Connection, ts_ms: i64, model: &str, cost: f64) {
+        conn.execute(
+            "INSERT INTO cost_entries (session_id, timestamp, model, cost_usd) \
+             VALUES ('s', ?1, ?2, ?3)",
+            rusqlite::params![ts_ms, model, cost],
+        )
+        .expect("insert cost_entries row");
+    }
+
+    #[test]
+    fn tape_last_n_days_bins_by_local_day_and_excludes_older() {
+        let conn = tape_conn();
+        insert_cost(&conn, noon_ms_days_ago(0), "claude-opus-4-8", 1.0); // today
+        insert_cost(&conn, noon_ms_days_ago(1), "claude-sonnet-5", 2.0); // yesterday
+        insert_cost(&conn, noon_ms_days_ago(29), "claude-haiku-4-5", 4.0); // oldest in-window
+        insert_cost(&conn, noon_ms_days_ago(30), "claude-opus-4-8", 8.0); // out of window
+
+        let models = FilterQuery { from: None, to: None, models: None };
+        let pts = tape_last_n_days(&conn, 30, &models);
+
+        assert_eq!(pts.len(), 30, "always exactly `days` points");
+        assert_eq!(pts[29].cost, 1.0, "today is the last bar");
+        assert_eq!(pts[28].cost, 2.0, "yesterday is second-to-last");
+        assert_eq!(pts[0].cost, 4.0, "29 days ago is the first bar");
+        let total: f64 = pts.iter().map(|p| p.cost).sum();
+        assert_eq!(total, 7.0, "30-days-ago row is excluded from the window");
+        assert!(pts[0].date < pts[29].date, "dates ascend oldest -> today");
+    }
+
+    #[test]
+    fn tape_last_n_days_applies_model_filter() {
+        let conn = tape_conn();
+        insert_cost(&conn, noon_ms_days_ago(0), "claude-opus-4-8", 5.0);
+        insert_cost(&conn, noon_ms_days_ago(0), "claude-haiku-4-5", 9.0);
+
+        let models = FilterQuery { from: None, to: None, models: Some("opus".into()) };
+        let pts = tape_last_n_days(&conn, 30, &models);
+
+        assert_eq!(pts[29].cost, 5.0, "only opus rows counted");
     }
 }

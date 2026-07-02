@@ -1,11 +1,129 @@
 ---
 source: tests/api_reports.rs
+assertion_line: 166
 expression: "&body"
 ---
 {
-  "current": "[current_vals]",
-  "days_in_month": "[days]",
-  "month": "[month]",
-  "previous": "[prev_vals]",
-  "today_day": "[day]"
+  "days": [
+    {
+      "cost": "[cost]",
+      "date": "[date]"
+    },
+    {
+      "cost": "[cost]",
+      "date": "[date]"
+    },
+    {
+      "cost": "[cost]",
+      "date": "[date]"
+    },
+    {
+      "cost": "[cost]",
+      "date": "[date]"
+    },
+    {
+      "cost": "[cost]",
+      "date": "[date]"
+    },
+    {
+      "cost": "[cost]",
+      "date": "[date]"
+    },
+    {
+      "cost": "[cost]",
+      "date": "[date]"
+    },
+    {
+      "cost": "[cost]",
+      "date": "[date]"
+    },
+    {
+      "cost": "[cost]",
+      "date": "[date]"
+    },
+    {
+      "cost": "[cost]",
+      "date": "[date]"
+    },
+    {
+      "cost": "[cost]",
+      "date": "[date]"
+    },
+    {
+      "cost": "[cost]",
+      "date": "[date]"
+    },
+    {
+      "cost": "[cost]",
+      "date": "[date]"
+    },
+    {
+      "cost": "[cost]",
+      "date": "[date]"
+    },
+    {
+      "cost": "[cost]",
+      "date": "[date]"
+    },
+    {
+      "cost": "[cost]",
+      "date": "[date]"
+    },
+    {
+      "cost": "[cost]",
+      "date": "[date]"
+    },
+    {
+      "cost": "[cost]",
+      "date": "[date]"
+    },
+    {
+      "cost": "[cost]",
+      "date": "[date]"
+    },
+    {
+      "cost": "[cost]",
+      "date": "[date]"
+    },
+    {
+      "cost": "[cost]",
+      "date": "[date]"
+    },
+    {
+      "cost": "[cost]",
+      "date": "[date]"
+    },
+    {
+      "cost": "[cost]",
+      "date": "[date]"
+    },
+    {
+      "cost": "[cost]",
+      "date": "[date]"
+    },
+    {
+      "cost": "[cost]",
+      "date": "[date]"
+    },
+    {
+      "cost": "[cost]",
+      "date": "[date]"
+    },
+    {
+      "cost": "[cost]",
+      "date": "[date]"
+    },
+    {
+      "cost": "[cost]",
+      "date": "[date]"
+    },
+    {
+      "cost": "[cost]",
+      "date": "[date]"
+    },
+    {
+      "cost": "[cost]",
+      "date": "[date]"
+    }
+  ]
 }

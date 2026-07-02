@@ -143,34 +143,29 @@ async fn v2_tape_returns_expected_shape() {
 
     assert_eq!(status, StatusCode::OK);
 
-    // Top-level shape
-    assert!(body["month"].is_string(), "month key missing");
-    assert!(body["days_in_month"].is_number(), "days_in_month key missing");
-    assert!(body["current"].is_array(), "current key must be array");
-    assert!(body["previous"].is_array(), "previous key must be array");
+    // Top-level shape: days array
+    assert!(body["days"].is_array(), "days key must be array");
 
-    // current array length matches days_in_month
-    let days_in_month = body["days_in_month"].as_u64().unwrap();
-    let current = body["current"].as_array().unwrap();
-    assert_eq!(
-        current.len() as u64,
-        days_in_month,
-        "current array length must match days_in_month"
-    );
+    // days array has exactly 30 elements (default days)
+    let days = body["days"].as_array().unwrap();
+    assert_eq!(days.len(), 30, "days array must have exactly 30 elements");
 
-    // At least one day has the seeded cost
-    let total_cost: f64 = current.iter().filter_map(|v| v.as_f64()).sum();
+    // Each element has date and cost fields
+    for (i, point) in days.iter().enumerate() {
+        assert!(point["date"].is_string(), "point {i} date must be string");
+        assert!(point["cost"].is_number(), "point {i} cost must be number");
+    }
+
+    // At least one day has the seeded cost (sum check)
+    let total_cost: f64 = days.iter().filter_map(|v| v["cost"].as_f64()).sum();
     assert!(
         total_cost >= 0.75 - 1e-9,
-        "total cost in current tape should be >= 0.75, got {total_cost}"
+        "total cost in tape should be >= 0.75, got {total_cost}"
     );
 
     insta::assert_json_snapshot!("v2_tape_shape", &body, {
-        ".month"         => "[month]",
-        ".days_in_month" => "[days]",
-        ".today_day"     => "[day]",
-        ".current"       => "[current_vals]",
-        ".previous"      => "[prev_vals]",
+        ".days[].date"  => "[date]",
+        ".days[].cost"  => "[cost]",
     });
 }
 
