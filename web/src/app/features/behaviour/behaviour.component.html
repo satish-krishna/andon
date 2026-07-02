@@ -99,7 +99,7 @@
     <div class="panel-title">Sub-agent usage</div>
     <div class="panel-body">
       @if (subs().length === 0) {
-        <div class="text-muted text-xs font-mono py-4">No sub-agent (Task) invocations detected yet.</div>
+        <div class="text-muted text-xs font-mono py-4">No sub-agent (Task/Agent) invocations detected yet.</div>
       } @else {
         @for (a of subs(); track a.subagent_type) {
           <div class="flex justify-between items-center font-mono text-xs py-1 border-b border-border/30">

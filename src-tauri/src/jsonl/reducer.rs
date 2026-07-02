@@ -171,7 +171,11 @@ impl Reducer {
                     file_path,
                     model: Some(model.clone()),
                 });
-                if tool_name == "Task" {
+                // The sub-agent spawning tool was renamed `Task` -> `Agent` in
+                // recent Claude Code; older transcripts still use `Task`. Match
+                // both so the Behaviour page's sub-agent panel is not silently
+                // empty for whichever version wrote the transcript.
+                if tool_name == "Task" || tool_name == "Agent" {
                     let child_id = input
                         .get("session_id")
                         .and_then(|v| v.as_str())
@@ -290,6 +294,24 @@ mod tests {
     fn assistant_task_tool_emits_subagent() {
         let mut r = Reducer::new();
         let line = r#"{"type":"assistant","sessionId":"s1","timestamp":"2026-05-19T10:00:01.000Z","message":{"role":"assistant","model":"claude-opus-4-7","content":[{"type":"tool_use","id":"t1","name":"Task","input":{"subagent_type":"Explore"}}]}}"#;
+        let out = r.reduce(&parse_line(line).unwrap());
+        let st = out
+            .iter()
+            .find_map(|e| match e {
+                DerivedEvent::SubAgentCall { subagent_type, .. } => Some(subagent_type.clone()),
+                _ => None,
+            })
+            .expect("subagent emitted");
+        assert_eq!(st.as_deref(), Some("Explore"));
+    }
+
+    #[test]
+    fn assistant_agent_tool_emits_subagent() {
+        // Recent Claude Code names the sub-agent tool `Agent` (was `Task`); the
+        // input still carries `subagent_type`. Real transcripts also include
+        // `description` and `prompt` keys, which must be ignored.
+        let mut r = Reducer::new();
+        let line = r#"{"type":"assistant","sessionId":"s1","timestamp":"2026-05-19T10:00:01.000Z","message":{"role":"assistant","model":"claude-opus-4-7","content":[{"type":"tool_use","id":"t1","name":"Agent","input":{"description":"probe","subagent_type":"Explore","prompt":"go"}}]}}"#;
         let out = r.reduce(&parse_line(line).unwrap());
         let st = out
             .iter()
