@@ -1480,14 +1480,14 @@ fn tape_last_n_days(
     models: &FilterQuery,
 ) -> Vec<TapePoint> {
     let labels = day_labels(days); // oldest -> today, "YYYY-MM-DD"
-    let (from, _to) = last_n_days_bounds(days);
+    let (from, to) = last_n_days_bounds(days);
     let mut bins = vec![0f64; days as usize];
 
     let (m_sql, m_vals) = models.model_clause("model");
     let sql = format!(
-        "SELECT timestamp, cost_usd FROM cost_entries WHERE timestamp >= ?{m_sql}"
+        "SELECT timestamp, cost_usd FROM cost_entries WHERE timestamp >= ? AND timestamp < ?{m_sql}"
     );
-    let mut p: Vec<Box<dyn rusqlite::ToSql>> = vec![Box::new(from)];
+    let mut p: Vec<Box<dyn rusqlite::ToSql>> = vec![Box::new(from), Box::new(to)];
     for v in m_vals {
         p.push(Box::new(v));
     }

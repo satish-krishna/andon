@@ -46,17 +46,19 @@ Decisions made during brainstorming, in order:
   bar.
 - Each bar is one exact local date.
 - A bar is **lit** when its date falls inside the active filter window
-  (`filter.window()` → `{ fromMs, toMs }`), **dimmed** otherwise. Overlap test:
-  `barDayStartMs < toMs && barDayEndMs > fromMs`.
+  (`filter.window()` → `{ fromMs, toMs }`), **dimmed** otherwise. Overlap test
+  (inclusive, because the window's `toMs` is an end-of-day `23:59:59.999`):
+  `barDayStartMs <= toMs && barDayEndMs >= fromMs`.
 - Hover any bar → tooltip showing the exact date (`2026-07-01`) and `$cost`.
 - Click a bar → selects that single day via the existing `filter.selectDay(date)`
   path, which sets a custom single-day range (and thus lights just that bar).
-- Empty data (no cost in the last 30 days) → all bars zero-height; scaling
-  guarded by `Math.max(1, ...)` as today.
+- Empty data (no cost in the last 30 days) → every bar falls back to an 8%
+  minimum height (`(cost / tapeMax()) * 100 || 8`) so the ribbon stays visible
+  and hoverable; scaling guarded by `Math.max(1, ...)` so division is safe.
 
 ## Backend
 
-File: `src-tauri/src/api/routes.rs` (handler `v2_tape`, query `tape_for_month`).
+File: `src-tauri/src/api/routes.rs` (handler `v2_tape`, query `tape_last_n_days`).
 
 - **Reshape `/api/v2/tape`.** Drop the `month` param (dead — the only caller
   passes it empty). Keep the `models` LIKE filter unchanged. Accept an optional

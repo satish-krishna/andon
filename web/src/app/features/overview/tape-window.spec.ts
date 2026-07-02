@@ -29,8 +29,8 @@ describe('dateInWindow', () => {
     expect(dateInWindow('2026-07-05', w.fromMs, w.toMs)).toBe(true);
   });
 
-  it('lights a boundary day whose midnight equals the window end', () => {
-    // window ends at Jul 1 end-of-day; the Jul 1 bar must be lit
+  it('lights the last day when the window ends within that day (end-of-day toMs)', () => {
+    // window ends at Jul 1 end-of-day (23:59:59.999); the Jul 1 bar must be lit
     const w = { fromMs: new Date(2026, 5, 2).getTime(), toMs: new Date(2026, 6, 1, 23, 59, 59, 999).getTime() };
     expect(dateInWindow('2026-07-01', w.fromMs, w.toMs)).toBe(true);
   });
