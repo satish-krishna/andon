@@ -62,69 +62,12 @@ const MIME = {
 // Tuned to the v0.5.0 release; update per release.
 // ============================================================================
 const CAPTURES = [
-  // rc.2: Overview tape — month-over-month cost bars.
+  // v0.6.0 (#32): Overview tape — rolling 30-day cost ribbon that highlights
+  // the days inside the active date filter, with per-bar date + cost on hover.
   {
     output: '10-overview-tape',
     route: '/overview',
     anchor: { by: 'text', value: 'tape' }, // matches " · The tape"
-    padding: 12,
-  },
-  // rc.4: Budget bar on the Overview cost tile.
-  {
-    output: '11-overview-budget-cost-tile',
-    route: '/overview',
-    anchor: { by: 'text', value: 'Budget', climb: 'section' },
-    padding: 12,
-  },
-  // rc.4: Monthly budget card on Settings.
-  {
-    output: '12-settings-monthly-budget',
-    route: '/settings',
-    anchor: { by: 'text', value: 'Monthly budget', climb: 'section' },
-    padding: 12,
-  },
-  // rc.3 / rc.1: Behaviour page — model mix.
-  {
-    output: '13-behaviour-model-mix',
-    route: '/behaviour',
-    anchor: { by: 'text', value: 'Model mix', climb: 'section' },
-    padding: 12,
-  },
-  // rc.6: Sessions table — the new Totals row and code/docs/other split.
-  // The totals row + segmented bar live at the bottom of the table;
-  // we crop the whole sessions panel to show them in context.
-  {
-    output: '14-sessions-totals-and-split',
-    route: '/sessions',
-    anchor: { by: 'selector', value: 'table' },
-    padding: 12,
-  },
-  // #28: Efficiency page — Experimental banner.
-  {
-    output: '20-efficiency-experimental-banner',
-    route: '/efficiency',
-    anchor: { by: 'text', value: 'Subagent rows are JSONL-derived', climb: 'div.border' },
-    padding: 8,
-  },
-  // #28: Efficiency page — explainer blurb (with dynamic "your numbers" line).
-  {
-    output: '21-efficiency-explainer',
-    route: '/efficiency',
-    anchor: { by: 'text', value: 'How prompt caching saves you money', climb: 'section' },
-    padding: 12,
-  },
-  // #28: Efficiency page — KPI tile strip.
-  {
-    output: '22-efficiency-kpi-strip',
-    route: '/efficiency',
-    anchor: { by: 'text', value: 'Cache hit ratio', climb: 'div.grid' },
-    padding: 12,
-  },
-  // #28: Efficiency page — Model cost-efficiency table.
-  {
-    output: '23-efficiency-model-table',
-    route: '/efficiency',
-    anchor: { by: 'text', value: 'Model cost-efficiency', climb: 'section' },
     padding: 12,
   },
 ];
