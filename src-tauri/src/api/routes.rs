@@ -2300,7 +2300,17 @@ fn record_memory_touch(conn: &rusqlite::Connection, payload: &serde_json::Value,
     let Some(action) = crate::memory::provenance::Action::for_tool(tool) else {
         return;
     };
-    let Some(sid) = payload.get("session_id").and_then(|v| v.as_str()).filter(|s| !s.is_empty())
+    // Reject the `andon-user` sentinel outright: it is reserved for writes Andon's
+    // own UI makes (see `provenance::ANDON_USER`), never for a hook payload. This
+    // hook receiver is unauthenticated, so accepting the literal sentinel from a
+    // POST body would let any local page forge a permanent, uncorrectable "human"
+    // provenance row for a write no human made -- inverting the churn signal this
+    // feature exists to measure. No real Claude Code session id is ever this
+    // literal string, so this rejects nothing legitimate.
+    let Some(sid) = payload
+        .get("session_id")
+        .and_then(|v| v.as_str())
+        .filter(|s| !s.is_empty() && *s != crate::memory::provenance::ANDON_USER)
     else {
         return;
     };
@@ -3095,5 +3105,57 @@ mod tests {
             .query_row("SELECT COUNT(*) FROM memory_provenance", [], |r| r.get(0))
             .expect("count");
         assert_eq!(n, 0);
+    }
+
+    #[test]
+    fn record_memory_touch_rejects_the_andon_user_sentinel() {
+        // `andon-user` is reserved for writes Andon's own UI makes (see
+        // `provenance::ANDON_USER`). `/api/hooks/tool-use` is unauthenticated, so
+        // without this rejection any local page could POST a forged
+        // `session_id: "andon-user"` payload and mint a permanent, uncorrectable
+        // "human" provenance row for a write no human made -- inverting the churn
+        // signal this feature exists to measure. No real Claude Code session id is
+        // ever this literal string, so this rejects nothing legitimate.
+        //
+        // `classify_memory_write` resolves against the REAL `~/.claude/projects`
+        // (it has no injectable root, unlike `classify_memory_write_under` in
+        // `memory::paths`'s own tests). Proving the sentinel filter -- not some
+        // unrelated "outside the projects root" rejection -- is what stops this
+        // payload requires a real file that would otherwise classify successfully,
+        // so one is built and torn down here, under a uniquely-named test slug that
+        // cannot collide with a real project's memory files.
+        //
+        // Honesty note: like the other `record_memory_touch` tests in this file, a
+        // bare `assert_eq!(n, 0)` is indistinguishable from an empty function body
+        // in isolation. What makes this one discriminating against a *specific*
+        // regression (removing just the sentinel check) is that the fixture file is
+        // real and otherwise valid: every other gate in the function (tool name,
+        // action mapping, non-empty session id, markdown pre-filter, real
+        // `classify_memory_write` success) passes, so only the sentinel filter
+        // itself can be the thing keeping the row count at zero.
+        let mut conn = rusqlite::Connection::open_in_memory().expect("open in-memory db");
+        crate::db::migrations::apply(&mut conn).expect("migrations apply");
+
+        let home = dirs::home_dir().expect("resolve home directory for test fixture");
+        let slug = format!("andon-sentinel-test-{}", std::process::id());
+        let mem_dir = home.join(".claude").join("projects").join(&slug).join("memory");
+        std::fs::create_dir_all(&mem_dir).expect("create test memory dir");
+        let file = mem_dir.join("note.md");
+        std::fs::write(&file, "test fixture").expect("write test fixture file");
+
+        let payload = serde_json::json!({
+            "session_id": crate::memory::provenance::ANDON_USER,
+            "tool_name": "Write",
+            "tool_input": { "file_path": file.to_string_lossy() }
+        });
+        record_memory_touch(&conn, &payload, 42);
+
+        let n: i64 = conn
+            .query_row("SELECT COUNT(*) FROM memory_provenance", [], |r| r.get(0))
+            .expect("count");
+
+        let _ = std::fs::remove_dir_all(home.join(".claude").join("projects").join(&slug));
+
+        assert_eq!(n, 0, "a forged andon-user session id must not reach the ledger");
     }
 }

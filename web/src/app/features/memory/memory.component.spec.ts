@@ -843,5 +843,89 @@ describe('MemoryComponent', () => {
     expect(ng0955).toBe(false);
   });
 
+  it('clears the cached history for a file after a successful delete', () => {
+    // Repro: open history on a file, delete it. A later reappearance (the model
+    // reinstating the memory) must not render the pre-delete history from a stale
+    // cache — the delete + re-create IS the churn signal this feature exists to
+    // surface, and a stale cache would hide it.
+    vi.spyOn(window, 'confirm').mockReturnValue(true);
+    flushProjects();
+    http.expectOne('http://127.0.0.1:8765/api/memory/D--Repos-andon').flush({
+      slug: 'D--Repos-andon',
+      index: null,
+      entries: [
+        {
+          doc: { file: 'user_role.md', name: null, description: null, kind: null, body: 'b', raw: 'b', parse_ok: true },
+          origin: { session_id: 'sess-x', action: 'create', ts: 1 },
+        },
+      ],
+    });
+    fixture.detectChanges();
+
+    fixture.componentInstance.toggleHistory('user_role.md');
+    http
+      .expectOne(
+        (r) =>
+          r.url === 'http://127.0.0.1:8765/api/memory/D--Repos-andon/provenance' &&
+          r.params.get('file') === 'user_role.md',
+      )
+      .flush([{ session_id: 'sess-x', action: 'create', ts: 1 }]);
+    fixture.detectChanges();
+    expect(fixture.componentInstance.history()['user_role.md']).toBeDefined();
+    expect(fixture.componentInstance.openHistory()).toBe('user_role.md');
+
+    fixture.componentInstance.remove('user_role.md');
+    http.expectOne('http://127.0.0.1:8765/api/memory/D--Repos-andon/delete').flush(null);
+    http
+      .expectOne('http://127.0.0.1:8765/api/memory/D--Repos-andon')
+      .flush({ slug: 'D--Repos-andon', index: null, entries: [] });
+    fixture.detectChanges();
+
+    expect(fixture.componentInstance.history()['user_role.md']).toBeUndefined();
+    expect(fixture.componentInstance.openHistory()).toBeNull();
+  });
+
+  it('closes the open history disclosure and drops its stale cache after a successful save', () => {
+    // Milder same-page version: Save must not leave the still-open history list
+    // showing rows that predate the edit just made.
+    flushProjects();
+    http.expectOne('http://127.0.0.1:8765/api/memory/D--Repos-andon').flush({
+      slug: 'D--Repos-andon',
+      index: null,
+      entries: [
+        {
+          doc: { file: 'user_role.md', name: null, description: null, kind: null, body: 'b', raw: 'b', parse_ok: true },
+          origin: null,
+        },
+      ],
+    });
+    fixture.detectChanges();
+
+    fixture.componentInstance.toggleHistory('user_role.md');
+    http
+      .expectOne(
+        (r) =>
+          r.url === 'http://127.0.0.1:8765/api/memory/D--Repos-andon/provenance' &&
+          r.params.get('file') === 'user_role.md',
+      )
+      .flush([{ session_id: 'sess-old', action: 'create', ts: 1 }]);
+    fixture.detectChanges();
+    expect(fixture.componentInstance.openHistory()).toBe('user_role.md');
+
+    const entry = fixture.componentInstance.entries()[0];
+    fixture.componentInstance.startEdit(entry);
+    fixture.componentInstance.draft.set('edited content');
+    fixture.componentInstance.saveEdit('user_role.md');
+
+    http.expectOne('http://127.0.0.1:8765/api/memory/D--Repos-andon/file').flush(null);
+    http
+      .expectOne('http://127.0.0.1:8765/api/memory/D--Repos-andon')
+      .flush({ slug: 'D--Repos-andon', index: null, entries: [] });
+    fixture.detectChanges();
+
+    expect(fixture.componentInstance.history()['user_role.md']).toBeUndefined();
+    expect(fixture.componentInstance.openHistory()).toBeNull();
+  });
+
   afterEach(() => http.verify());
 });

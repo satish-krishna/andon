@@ -73,11 +73,6 @@ pub fn guard_under(base: &Path, rel: &str) -> Option<PathBuf> {
     (path.starts_with(&base) && is_md && path.is_file()).then_some(path)
 }
 
-/// Guarded resolution of a client-supplied memory file within a project.
-pub fn resolve_memory_path(slug: &str, rel: &str) -> Option<PathBuf> {
-    guard_under(&memory_dir(slug)?, rel)
-}
-
 /// Core classification logic, testable against an arbitrary projects root.
 /// `root` must already be canonicalized by the caller.
 fn classify_memory_write_under(root: &Path, abs: &str) -> Option<(String, String)> {

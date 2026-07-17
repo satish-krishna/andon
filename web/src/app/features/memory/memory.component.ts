@@ -149,6 +149,42 @@ export class MemoryComponent implements OnInit {
     });
   }
 
+  /**
+   * Drops `file`'s cached history and closes its disclosure if it is open. Called
+   * from the SUCCESS paths of `remove()` and `saveEdit()` — the two places THIS APP
+   * mutates the provenance ledger (an `andon-user` `delete`/`edit` row). Without
+   * this, a stale `history()[file]` cache entry survives the mutation; if the file
+   * later reappears (the model reinstating it), the disclosure — if still open —
+   * would render the pre-mutation rows, hiding the exact delete-then-recreate churn
+   * this feature exists to surface.
+   *
+   * Scoped to the single touched file, not the whole cache: `remove()`/`saveEdit()`
+   * only ever mutate one file, and (per Task 10) `history` is keyed by filename
+   * across the whole session, so clearing every other cached file's history here
+   * would be needless churn unrelated to this write.
+   *
+   * Deliberately does NOT refetch inline. If the disclosure for `file` is open,
+   * this closes it rather than re-querying: `toggleHistory()` already owns "fetch on
+   * open", and closing here means there is exactly one code path that knows how to
+   * fetch history, plus the closed state is itself the honest signal that the data
+   * underneath just changed — reopening gets a genuinely fresh read.
+   *
+   * Must NOT be called from `refresh()`: that would defeat the always-visible manual
+   * Refresh button's job of leaving history state alone when nothing in this app
+   * changed it (see `refresh()`'s own doc comment).
+   */
+  private invalidateHistory(file: string): void {
+    this.history.update((h) => {
+      if (!(file in h)) return h;
+      const next = { ...h };
+      delete next[file];
+      return next;
+    });
+    if (this.openHistory() === file) {
+      this.openHistory.set(null);
+    }
+  }
+
   private isCurrentDraftDirty(): boolean {
     const file = this.editing();
     if (!file) return false;
@@ -191,6 +227,7 @@ export class MemoryComponent implements OnInit {
     this.actionError.set(null);
     this.api.memorySave(slug, file, this.draft()).subscribe({
       next: () => {
+        this.invalidateHistory(file);
         this.cancelEdit();
         this.refresh();
       },
@@ -207,7 +244,10 @@ export class MemoryComponent implements OnInit {
     if (!window.confirm(`Delete ${file}? This cannot be undone.`)) return;
     this.actionError.set(null);
     this.api.memoryDelete(slug, file).subscribe({
-      next: () => this.refresh(),
+      next: () => {
+        this.invalidateHistory(file);
+        this.refresh();
+      },
       error: () => {
         this.actionError.set(`Couldn't delete ${file}. It has not been removed.`);
       },
