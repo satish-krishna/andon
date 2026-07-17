@@ -119,6 +119,7 @@ The provenance link resolves to a session ID Andon already renders in full. The 
 - **`memory_provenance`** (new table, `MIGRATION_V7`: a `const` plus an entry in the `MIGRATIONS` array in `src-tauri/src/db/migrations.rs`): `session_id`, `memory_file` (path relative to the project memory folder), `project_slug`, `action` (`create` | `update` | `edit` | `delete`), `ts`. One memory file has many rows.
 - **Human edits are recorded.** Edits and deletes made in Andon's UI have no session, so they are written with the sentinel `session_id = 'andon-user'` and action `edit` or `delete`. Without this, a memory you rewrote yesterday would still name the model's session as its last touch, which is a lie in the most prominent spot on the page.
 - **Memory content is never copied into SQLite.** It is read live from disk. Only provenance metadata (IDs, paths, timestamps) is persisted.
+- **Provenance rows are append-only and outlive their files.** Deleting a memory never deletes its history; it appends a `delete` row. This is what makes churn observable: an `andon-user` delete followed by a later `create` for the same `memory_file` is the model reinstating a fact you removed. Cleaning up rows alongside the file would erase precisely the evidence this feature exists to collect (see "Measuring churn").
 
 ## Privacy
 
@@ -158,6 +159,20 @@ TDD throughout: failing test first, then implementation.
 - **Deletion is permanent.** There is no undo and no trash. This is deliberate: memories are a few lines each and self-regenerating, so if the fact still matters the model writes it again next session. A confirm step is the whole safety net.
 - **Provenance assumes memory writes go through the `Write`/`Edit` tool.** Tested and confirmed for tool-driven writes. If an undocumented internal auto-persist path exists that bypasses the tool layer, those writes would not be captured. Low risk, not proven impossible.
 - **Nothing stops the model rewriting a memory you fixed.** Without pinning, curation is a correction, not a lock. The provenance history is what tells you it happened.
+
+## Measuring churn
+
+Pinning was cut on a prediction: that blocking a write reroutes the model into writing a near-duplicate file rather than stopping it. That prediction is untested, and this feature is the instrument that tests it. Shipping without pinning is therefore a deliberate experiment, not merely a scope cut.
+
+The question to answer from real use: **how often does the model rewrite or reinstate a memory a human corrected or deleted?** The append-only provenance ledger answers it directly — an `andon-user` `edit` or `delete` row followed by a model-session `create` or `update` row for the same `memory_file` is one churn event.
+
+No churn dashboard, metric, or report is in v1. The ledger holds the data; a SQL query against `memory_provenance` answers the question when there is enough history to be worth asking. Build a surface for it only if the answer turns out to matter.
+
+What the answer changes:
+
+- **Churn is rare.** Pinning was never needed. The viewer is the whole feature; close the question.
+- **Churn is common and the rewrites are wrong.** Pinning earns a real design — but one that does not tax every write machine-wide, and that reckons with rerouting. That is a new spec, informed by evidence rather than argument.
+- **Churn is common and the rewrites are right.** The model had better information than the human did, and pinning would have frozen a worse memory in place. Cutting it was correct on the merits, not just on cost.
 
 ## Follow-up work
 
