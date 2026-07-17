@@ -31,7 +31,12 @@ export class MemoryComponent implements OnInit {
   /** Set when a save or delete fails. Must never be confused with a silent success. */
   readonly actionError = signal<string | null>(null);
   readonly openHistory = signal<string | null>(null);
-  readonly history = signal<Record<string, MemoryTouch[]>>({});
+  /**
+   * `| undefined` is load-bearing: an unfetched file's key is genuinely absent at
+   * runtime (web/tsconfig.json does not set noUncheckedIndexedAccess), so the `??`
+   * fallback in the template on this lookup is real, not dead code.
+   */
+  readonly history = signal<Record<string, MemoryTouch[] | undefined>>({});
 
   ngOnInit(): void {
     this.api.memoryProjects().subscribe({
@@ -72,7 +77,13 @@ export class MemoryComponent implements OnInit {
     this.refresh();
   }
 
-  /** Matches the sentinel written for UI edits and deletes (memory::provenance). */
+  /**
+   * Matches the sentinel written for UI edits and deletes. Source of truth is
+   * `provenance::ANDON_USER` in `src-tauri/src/memory/provenance.rs` — this string
+   * literal is not plumbed through the API, so if that constant ever changes, this
+   * must be updated by hand or memories edited in Andon will dead-link to
+   * `/sessions/andon-user`.
+   */
   isAndonUser(t: MemoryTouch): boolean {
     return t.session_id === 'andon-user';
   }

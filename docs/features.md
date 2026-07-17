@@ -85,6 +85,21 @@ With one repo chip selected, paths render relative to the repo root:
 - **REPO chip filter** *(new in v0.4.0)* — the same chip group as the Sessions page; selection is shared. When exactly one repo is selected, file paths render relative to that repo's root (e.g. `src-tauri/src/lib.rs` instead of the full `E:\Repos\andon\src-tauri\src\lib.rs`). With zero or multiple repos selected, paths stay absolute.
 - **Heatmap** at the bottom: every file sized by edit count and coloured by accept rate (red = low accept, green = high). Lets you spot files Claude Code keeps suggesting changes to that you keep rejecting.
 
+## Memory
+
+Browses what Claude Code remembers about a project — the `MEMORY.md` index plus the individual memory files it writes under `~/.claude/projects/<slug>/memory/`.
+
+- **Project switcher** — one project at a time; the dropdown lists every project on the machine that has a memory folder, with a memory count per project.
+- Reads from disk on navigation, plus a manual **Refresh** button. No file watching, no polling — memory changes at most once a session.
+- **MEMORY.md** — the index Claude Code loads into context every session, shown collapsed behind a disclosure. Read-only in v1.
+- Each memory shows its parsed frontmatter (name, kind, description) and body. An **unparsed** badge appears if the frontmatter failed to parse; the raw file still round-trips through edit/save untouched.
+- **Edit** — round-trips the whole file, frontmatter included, back to disk.
+- **Delete** — permanent. No undo, no trash. Memories are small and self-regenerating, so andon does not soften this with a recovery path.
+- **Origin** — each memory deep-links to the Session Detail page for the session that last wrote it. A **History** disclosure lists the full touch ledger (create / update / edit / delete) for that file. Edits and deletes made in andon itself show as "You, in Andon" rather than a session link — there's no session behind a human edit.
+- **Provenance is forward-only.** The ledger only starts recording from when this feature shipped, so every memory that predates it shows "Origin unknown" until the model touches it again. That's the honest state of any pre-existing memory, not a bug.
+
+No new Claude Code hooks — provenance rides the `PostToolUse` hook andon already installs. Memory *content* is never persisted to andon's database; it's read live from disk on each visit. Only the provenance ledger (session id, file path, action, timestamp) is stored in SQLite.
+
 ## Diagnostics
 
 A live OTLP debugger built into the app. Indispensable when you're not sure whether telemetry is flowing.

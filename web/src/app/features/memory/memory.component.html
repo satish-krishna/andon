@@ -159,7 +159,17 @@
 
         @if (openHistory() === e.doc.file) {
           <ul class="space-y-0.5 border-l border-border pl-2">
-            @for (t of history()[e.doc.file] ?? []; track t.ts) {
+            <!--
+              Track by $index, not t.ts: Touch (provenance.rs) exposes no row id, and two
+              touches to the same file can legitimately share a ts (see
+              touches_breaks_ts_ties_by_most_recent_insert_first in provenance.rs — the
+              ORDER BY ts DESC, id DESC tiebreak exists specifically for that case). A
+              duplicate track key is undefined behavior that Angular flags as NG0955
+              (a dev-mode warning in this Angular version, a hard error in others). This
+              list is re-fetched fresh on every disclosure open and is never reordered
+              in place, so index tracking loses nothing.
+            -->
+            @for (t of history()[e.doc.file] ?? []; track $index) {
               <li>
                 <span class="text-muted">{{ t.action }}</span>
                 —

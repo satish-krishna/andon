@@ -782,5 +782,66 @@ describe('MemoryComponent', () => {
     expect(el.querySelector('a[href="/sessions/sess-1"]')).toBeTruthy();
   });
 
+  it('renders two touches sharing the same ts without an NG0955 duplicate-key warning', () => {
+    // Touch has no row id and two touches to the same file can legitimately share a
+    // ts (see provenance.rs's ts-tie tests). `track t.ts` gives Angular's @for a
+    // duplicate key; Angular's live-collection reconciler flags that with an
+    // NG0955 dev-mode console.warn precisely because it is undefined behavior.
+    // Angular's duplicate-key check only runs while reconciling an ALREADY-mounted
+    // @for against a live collection (not on first creation from empty), so this
+    // opens the disclosure with one touch first, then updates the history cache
+    // in place — mirroring `toggleHistory`'s deliberate re-fetch-while-open
+    // behavior — to a two-touch list that ties on ts, without unmounting the
+    // @if block in between.
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    flushProjects();
+    http.expectOne('http://127.0.0.1:8765/api/memory/D--Repos-andon').flush({
+      slug: 'D--Repos-andon',
+      index: null,
+      entries: [
+        {
+          doc: {
+            file: 'user_role.md',
+            name: 'user-role',
+            description: null,
+            kind: 'user',
+            body: 'b',
+            raw: 'b',
+            parse_ok: true,
+          },
+          origin: null,
+        },
+      ],
+    });
+    fixture.detectChanges();
+
+    fixture.componentInstance.toggleHistory('user_role.md');
+    const req = http.expectOne(
+      (r) =>
+        r.url === 'http://127.0.0.1:8765/api/memory/D--Repos-andon/provenance' &&
+        r.params.get('file') === 'user_role.md',
+    );
+    req.flush([{ session_id: 'sess-old', action: 'create', ts: 50 }]);
+    fixture.detectChanges();
+
+    // Simulate the ledger gaining a tied-ts row while the disclosure stays open,
+    // by updating the underlying cache signal directly (same mechanism
+    // `toggleHistory` itself uses on a re-fetch).
+    fixture.componentInstance.history.set({
+      'user_role.md': [
+        { session_id: 'sess-a', action: 'create', ts: 100 },
+        { session_id: 'sess-b', action: 'update', ts: 100 },
+      ],
+    });
+
+    expect(() => fixture.detectChanges()).not.toThrow();
+
+    const el = fixture.nativeElement as HTMLElement;
+    expect(el.querySelector('a[href="/sessions/sess-a"]')).toBeTruthy();
+    expect(el.querySelector('a[href="/sessions/sess-b"]')).toBeTruthy();
+    const ng0955 = warnSpy.mock.calls.some((c) => String(c[0]).includes('NG0955'));
+    expect(ng0955).toBe(false);
+  });
+
   afterEach(() => http.verify());
 });
