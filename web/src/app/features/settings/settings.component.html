@@ -288,3 +288,9 @@
 
   </div>
 </div>
+
+<app-confirm-dialog
+  [request]="confirmRequest()"
+  (confirm)="onConfirm()"
+  (cancel)="onCancel()"
+></app-confirm-dialog>

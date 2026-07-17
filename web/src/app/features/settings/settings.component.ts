@@ -1,5 +1,5 @@
 import { CommonModule, DecimalPipe } from '@angular/common';
-import { Component, OnInit, inject, signal } from '@angular/core';
+import { Component, OnInit, computed, inject, signal } from '@angular/core';
 import { LucideAngularModule } from 'lucide-angular';
 
 import { RouterLink } from '@angular/router';
@@ -8,11 +8,12 @@ import { DbStats, JsonlIngestRun } from '../../core/models';
 import { ForwarderCardComponent } from './forwarder-card.component';
 import { BudgetCardComponent } from './budget-card.component';
 import { AndonMarkComponent } from '../../shared/andon-mark.component';
+import { ConfirmDialogComponent, ConfirmRequest } from '../../shared/confirm-dialog.component';
 
 @Component({
   selector: 'app-settings',
   standalone: true,
-  imports: [CommonModule, DecimalPipe, RouterLink, LucideAngularModule, ForwarderCardComponent, BudgetCardComponent, AndonMarkComponent],
+  imports: [CommonModule, DecimalPipe, RouterLink, LucideAngularModule, ForwarderCardComponent, BudgetCardComponent, AndonMarkComponent, ConfirmDialogComponent],
   templateUrl: './settings.component.html',
 })
 export class SettingsComponent implements OnInit {
@@ -29,6 +30,16 @@ export class SettingsComponent implements OnInit {
   jsonlBusy = signal(false);
   jsonlToast = signal<{ msg: string; kind: 'ok' | 'err' } | null>(null);
   jsonlLatestRun = signal<JsonlIngestRun | null>(null);
+
+  readonly pendingConfirm = signal<{ kind: 'unpatch' | 'restore' } | null>(null);
+  readonly confirmRequest = computed<ConfirmRequest | null>(() => {
+    const p = this.pendingConfirm();
+    if (!p) return null;
+    if (p.kind === 'unpatch') {
+      return { title: 'Unpatch settings.json?', message: 'Remove andon env vars from settings.json? Claude Code will stop sending telemetry to andon until you re-apply.', confirmLabel: 'Unpatch', danger: true };
+    }
+    return { title: 'Restore settings.json?', message: 'Restore the original settings.json from the andon-backup file? Current contents will be overwritten.', confirmLabel: 'Restore', danger: true };
+  });
 
   settingsSnippet = `{
   "env": {
@@ -97,20 +108,25 @@ export class SettingsComponent implements OnInit {
     });
   }
 
-  unpatch() {
-    if (!confirm('Remove andon env vars from settings.json? Claude Code will stop sending telemetry to andon until you re-apply.')) return;
-    this.api.unpatchIntegration().subscribe((r) => {
-      this.flash(r.ok ? (r.message || 'unpatched') : `error: ${r.error}`);
-      this.refresh();
-    });
-  }
+  unpatch() { this.pendingConfirm.set({ kind: 'unpatch' }); }
+  restoreBackup() { this.pendingConfirm.set({ kind: 'restore' }); }
+  onCancel() { this.pendingConfirm.set(null); }
 
-  restoreBackup() {
-    if (!confirm('Restore the original settings.json from the andon-backup file? Current contents will be overwritten.')) return;
-    this.api.restoreIntegrationBackup().subscribe((r) => {
-      this.flash(r.ok ? (r.message || 'restored') : `error: ${r.error}`);
-      this.refresh();
-    });
+  onConfirm() {
+    const p = this.pendingConfirm();
+    if (!p) return;
+    this.pendingConfirm.set(null);
+    if (p.kind === 'unpatch') {
+      this.api.unpatchIntegration().subscribe((r) => {
+        this.flash(r.ok ? (r.message || 'unpatched') : `error: ${r.error}`);
+        this.refresh();
+      });
+    } else {
+      this.api.restoreIntegrationBackup().subscribe((r) => {
+        this.flash(r.ok ? (r.message || 'restored') : `error: ${r.error}`);
+        this.refresh();
+      });
+    }
   }
 
   openFolder() {
