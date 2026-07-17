@@ -1042,7 +1042,7 @@ git commit -m "feat(memory): record provenance from the existing tool-use hook"
   - `pub struct DeleteBody { pub file: String }`
   - `pub struct ProvenanceQuery { pub file: String }`
 
-`ApiError`'s fields are private and its constructors are private to `routes.rs`; add `pub(crate)` to `ApiError::not_found` and add a `pub(crate) fn bad_request(msg: &str) -> Self` alongside it so `memory_routes` can build errors. Do not make the struct fields public.
+`ApiError`'s fields are private and its constructors are private to `routes.rs`. `memory_routes` calls exactly two of them, so widen exactly two: `pool` becomes `pub(crate)`, and a new `pub(crate) fn bad_request` is added. Leave `not_found` private — nothing in this feature calls it. Do not make the struct fields public.
 
 Delete uses `POST /api/memory/:slug/delete` rather than HTTP `DELETE` because `DELETE` with a request body is awkward in axum and the file name must not ride in the URL path (it would need double-encoding and would defeat the guard's clarity).
 
@@ -1321,9 +1321,10 @@ In `src-tauri/src/api/routes.rs`, make the error constructors reachable and add 
 
 ```rust
 impl ApiError {
-    fn pool(e: r2d2::Error) -> Self { /* unchanged */ }
+    // Visibility widened from private: memory_routes builds these.
+    pub(crate) fn pool(e: r2d2::Error) -> Self { /* body unchanged */ }
 
-    pub(crate) fn not_found(msg: &str) -> Self { /* body unchanged; visibility widened */ }
+    fn not_found(msg: &str) -> Self { /* unchanged, stays private */ }
 
     pub(crate) fn bad_request(msg: &str) -> Self {
         Self {
@@ -1333,8 +1334,6 @@ impl ApiError {
     }
 }
 ```
-
-Widen `fn pool` to `pub(crate) fn pool` as well, since the handlers above call it.
 
 Then merge the router in `router()`, immediately before `.with_state(state)` (line 77):
 
@@ -2036,9 +2035,13 @@ Add to `memory.component.spec.ts`:
     fixture.detectChanges();
 
     fixture.componentInstance.toggleHistory('user_role.md');
+    // expectOne(string) matches req.url, which excludes query params — match on a
+    // predicate so the `file` param is actually asserted.
     http
       .expectOne(
-        'http://127.0.0.1:8765/api/memory/D--Repos-andon/provenance?file=user_role.md',
+        (r) =>
+          r.url === 'http://127.0.0.1:8765/api/memory/D--Repos-andon/provenance' &&
+          r.params.get('file') === 'user_role.md',
       )
       .flush([
         { session_id: 'andon-user', action: 'edit', ts: 2 },
