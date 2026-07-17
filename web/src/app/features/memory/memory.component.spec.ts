@@ -1085,5 +1085,37 @@ describe('MemoryComponent', () => {
     expect(el.querySelector('.md-render')?.textContent).not.toContain('# Big Heading');
   });
 
+  it('renders an unparsed memory as raw text, not markdown', async () => {
+    flushProjects();
+    http.expectOne('http://127.0.0.1:8765/api/memory/D--Repos-andon').flush({
+      slug: 'D--Repos-andon',
+      index: null,
+      entries: [
+        {
+          doc: {
+            file: 'broken.md',
+            name: null,
+            description: null,
+            kind: null,
+            body: '---\nname: broken\n---\n# Not really a heading',
+            raw: '---\nname: broken\n---\n# Not really a heading',
+            parse_ok: false,
+          },
+          origin: null,
+        },
+      ],
+    });
+    fixture.detectChanges();
+    await fixture.whenStable();
+
+    const el = fixture.nativeElement as HTMLElement;
+    // Unparsed files must NOT be markdown-rendered.
+    expect(el.querySelector('.md-render')).toBeNull();
+    // The raw text is shown verbatim in a <pre>, hashes and dashes intact.
+    const pre = el.querySelector('pre');
+    expect(pre?.textContent).toContain('# Not really a heading');
+    expect(pre?.textContent).toContain('---');
+  });
+
   afterEach(() => http.verify());
 });
