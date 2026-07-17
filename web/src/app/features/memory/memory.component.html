@@ -1,0 +1,82 @@
+<div class="p-6 space-y-4">
+  <header class="flex items-center gap-3">
+    <h1 class="text-xl font-semibold">Memory</h1>
+    @if (projects().length > 0) {
+      <select
+        class="rounded border border-neutral-700 bg-neutral-900 px-2 py-1 text-sm"
+        [value]="slug()"
+        (change)="onProjectChange($event)"
+      >
+        @for (p of projects(); track p.slug) {
+          <option [value]="p.slug">{{ p.label }} ({{ p.count }})</option>
+        }
+      </select>
+    }
+    <button
+      class="rounded border border-neutral-700 px-2 py-1 text-sm hover:bg-neutral-800"
+      (click)="refresh()"
+      [disabled]="loading()"
+    >
+      Refresh
+    </button>
+  </header>
+
+  <p class="text-sm text-neutral-400">
+    What Claude Code remembers about this project. Read live from disk on open — press Refresh
+    after a session writes.
+  </p>
+
+  @if (index(); as idx) {
+    <section class="rounded border border-neutral-800 p-4">
+      <button class="flex items-center gap-2 text-sm font-medium" (click)="toggleIndex()">
+        <span>MEMORY.md</span>
+        <span class="text-xs text-neutral-500">
+          {{ showIndex() ? 'hide' : 'show' }} — the index loaded into context each session
+        </span>
+      </button>
+      @if (showIndex()) {
+        <pre class="mt-2 whitespace-pre-wrap text-sm text-neutral-300">{{ idx }}</pre>
+      }
+    </section>
+  }
+
+  @if (entries().length === 0 && !loading()) {
+    <div class="rounded border border-neutral-800 p-6 text-sm text-neutral-400">
+      No memories for this project yet. Claude Code writes these itself as it learns things worth
+      carrying between sessions.
+    </div>
+  }
+
+  @for (e of entries(); track e.doc.file) {
+    <article class="rounded border border-neutral-800 p-4 space-y-2">
+      <div class="flex items-center gap-2">
+        <h2 class="font-medium">{{ e.doc.name ?? e.doc.file }}</h2>
+        @if (e.doc.kind) {
+          <span class="rounded bg-neutral-800 px-1.5 py-0.5 text-xs text-neutral-300">
+            {{ e.doc.kind }}
+          </span>
+        }
+        @if (!e.doc.parse_ok) {
+          <span class="rounded bg-amber-900 px-1.5 py-0.5 text-xs text-amber-200">unparsed</span>
+        }
+      </div>
+
+      @if (e.doc.description) {
+        <p class="text-sm text-neutral-400">{{ e.doc.description }}</p>
+      }
+
+      <pre class="whitespace-pre-wrap text-sm text-neutral-200">{{ e.doc.body }}</pre>
+
+      <div class="text-xs text-neutral-500">
+        @if (e.origin) {
+          Last written by
+          <a class="underline" [routerLink]="['/sessions', e.origin.session_id]">
+            {{ e.origin.session_id }}
+          </a>
+        } @else {
+          Origin unknown — this memory predates provenance tracking.
+        }
+      </div>
+    </article>
+  }
+</div>

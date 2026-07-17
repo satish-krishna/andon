@@ -35,6 +35,11 @@ export const routes: Routes = [
       import('./features/behaviour/behaviour.component').then((m) => m.BehaviourComponent),
   },
   {
+    path: 'memory',
+    loadComponent: () =>
+      import('./features/memory/memory.component').then((m) => m.MemoryComponent),
+  },
+  {
     path: 'settings',
     loadComponent: () =>
       import('./features/settings/settings.component').then((m) => m.SettingsComponent),
