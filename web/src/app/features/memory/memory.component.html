@@ -37,6 +37,15 @@
     </div>
   }
 
+  @if (actionError(); as err) {
+    <div class="border border-err/40 bg-err/5 rounded-md px-4 py-2.5 flex items-center gap-2.5">
+      <lucide-icon name="x-circle" class="w-4 h-4 text-err shrink-0"></lucide-icon>
+      <div class="text-xs">
+        <span class="text-err font-medium">{{ err }}</span>
+      </div>
+    </div>
+  }
+
   @if (!loadError() && projects().length === 0 && !loading()) {
     <div class="panel panel-body text-sm text-muted">
       No project on this machine has any memories yet.

@@ -26,6 +26,10 @@ export class MemoryComponent implements OnInit {
   readonly loadError = signal(false);
   readonly editing = signal<string | null>(null);
   readonly draft = signal('');
+  /** Project slug the current edit was started under. Guards against cross-project saves. */
+  readonly editingSlug = signal<string | null>(null);
+  /** Set when a save or delete fails. Must never be confused with a silent success. */
+  readonly actionError = signal<string | null>(null);
 
   ngOnInit(): void {
     this.api.memoryProjects().subscribe({
@@ -65,6 +69,13 @@ export class MemoryComponent implements OnInit {
     if (!slug) return;
     this.loading.set(true);
     this.loadError.set(false);
+    // Any refresh invalidates in-flight edit state: entries just changed underneath it,
+    // and this is also how a project switch (select() always calls refresh()) discards
+    // a stale draft rather than letting it render against the newly selected project.
+    this.editing.set(null);
+    this.editingSlug.set(null);
+    this.draft.set('');
+    this.actionError.set(null);
     this.api.memoryList(slug).subscribe({
       next: (r) => {
         this.entries.set(r.entries);
@@ -80,13 +91,27 @@ export class MemoryComponent implements OnInit {
     });
   }
 
+  private isCurrentDraftDirty(): boolean {
+    const file = this.editing();
+    if (!file) return false;
+    const current = this.entries().find((en) => en.doc.file === file);
+    if (!current) return false;
+    return this.draft() !== current.doc.raw;
+  }
+
   startEdit(e: MemoryEntry): void {
+    if (this.editing() && this.editing() !== e.doc.file && this.isCurrentDraftDirty()) {
+      if (!window.confirm(`Discard unsaved changes to ${this.editing()}?`)) return;
+    }
     this.editing.set(e.doc.file);
+    this.editingSlug.set(this.slug());
     this.draft.set(e.doc.raw);
+    this.actionError.set(null);
   }
 
   cancelEdit(): void {
     this.editing.set(null);
+    this.editingSlug.set(null);
     this.draft.set('');
   }
 
@@ -97,10 +122,22 @@ export class MemoryComponent implements OnInit {
   saveEdit(file: string): void {
     const slug = this.slug();
     if (!slug) return;
+    // Structural guard: the edit must have started under the project we're about to write
+    // to. If a future refactor reintroduces a path where stale edit state survives a
+    // project switch, this still refuses to let one project's draft land on another's file.
+    if (this.editingSlug() !== slug) {
+      this.actionError.set(`Save canceled: the project changed since you started editing ${file}.`);
+      this.cancelEdit();
+      return;
+    }
+    this.actionError.set(null);
     this.api.memorySave(slug, file, this.draft()).subscribe({
       next: () => {
         this.cancelEdit();
         this.refresh();
+      },
+      error: () => {
+        this.actionError.set(`Couldn't save ${file}. Your change was not persisted.`);
       },
     });
   }
@@ -110,6 +147,12 @@ export class MemoryComponent implements OnInit {
     const slug = this.slug();
     if (!slug) return;
     if (!window.confirm(`Delete ${file}? This cannot be undone.`)) return;
-    this.api.memoryDelete(slug, file).subscribe({ next: () => this.refresh() });
+    this.actionError.set(null);
+    this.api.memoryDelete(slug, file).subscribe({
+      next: () => this.refresh(),
+      error: () => {
+        this.actionError.set(`Couldn't delete ${file}. It has not been removed.`);
+      },
+    });
   }
 }
