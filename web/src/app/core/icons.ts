@@ -2,6 +2,7 @@
 import {
   Activity,
   AlertTriangle,
+  BookOpen,
   Box,
   Brain,
   Calendar,
@@ -44,6 +45,7 @@ import {
 export const APP_ICONS = {
   Activity,
   AlertTriangle,
+  BookOpen,
   Box,
   Brain,
   Calendar,

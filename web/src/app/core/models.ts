@@ -131,3 +131,39 @@ export interface JsonlBackfillResponse {
 export interface CoverageGap {
   session_id: string; jsonl_calls: number; otlp_calls: number;
 }
+
+export interface MemoryTouch {
+  session_id: string;
+  action: string;
+  ts: number;
+}
+
+export interface MemoryDoc {
+  file: string;
+  name: string | null;
+  description: string | null;
+  /** `metadata.type` from the memory's frontmatter. */
+  kind: string | null;
+  body: string;
+  /** Complete file text including frontmatter. The editor round-trips this. */
+  raw: string;
+  parse_ok: boolean;
+}
+
+export interface MemoryEntry {
+  doc: MemoryDoc;
+  /** Last session to write this file; null means it predates the ledger. */
+  origin: MemoryTouch | null;
+}
+
+export interface MemoryListResponse {
+  slug: string;
+  index: string | null;
+  entries: MemoryEntry[];
+}
+
+export interface MemoryProject {
+  slug: string;
+  label: string;
+  count: number;
+}

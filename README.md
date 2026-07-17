@@ -15,7 +15,7 @@ Claude Code already emits a rich stream of OpenTelemetry metrics and logs — co
 - A bundled OTLP receiver (gRPC `:4317` + HTTP/protobuf `:4318`) accepts the telemetry directly from the Claude Code CLI.
 - An embedded SQLite database persists every metric and log event, denormalised by session.
 - **Retroactive backfill:** Andon also reads `~/.claude/projects/**/*.jsonl`, so a fresh install populates months of historical sessions in one pass. Per-API-call dedup via `requestId` keeps costs honest.
-- An Angular dashboard, served by a localhost API on `:8765`, renders the data across **Overview**, **Efficiency**, **Sessions**, **Files**, **Behaviour**, **Diagnostics**, and **Settings** pages.
+- An Angular dashboard, served by a localhost API on `:8765`, renders the data across **Overview**, **Efficiency**, **Sessions**, **Files**, **Behaviour**, **Memory**, **Diagnostics**, and **Settings** pages.
 - An **Efficiency** page surfaces prompt-cache savings (gross / premium / net) and per-model-family cost-efficiency, split into *main* vs *subagent* rows so a Haiku subagent's spend stops being folded into its Opus parent.
 - A **Behaviour** page (JSONL-derived) shows model mix, slash-command frequency, and sub-agent usage — things OTel can't see.
 - **Budget alerts:** set a monthly cap and Andon repaints its tray icon (neutral → amber → red) and fires a one-shot desktop notification as your projected end-of-month spend crosses 80% / 100%.

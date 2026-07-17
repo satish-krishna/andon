@@ -1,0 +1,190 @@
+<div class="crumb">
+  <span class="flex items-center gap-1.5">
+    <lucide-icon name="book-open" class="w-3.5 h-3.5"></lucide-icon>Memory
+  </span>
+  <span class="ml-auto flex items-center gap-3">
+    @if (projects().length > 0) {
+      <select
+        class="rounded border border-border bg-bg px-2 py-1 text-sm text-text"
+        [value]="slug()"
+        (change)="onProjectChange($event)"
+      >
+        @for (p of projects(); track p.slug) {
+          <option [value]="p.slug">{{ p.label }} ({{ p.count }})</option>
+        }
+      </select>
+    }
+    <button class="filter-chip flex items-center gap-1.5" (click)="refresh()" [disabled]="loading()">
+      <lucide-icon name="refresh-cw" class="w-3 h-3"></lucide-icon>Refresh
+    </button>
+  </span>
+</div>
+
+<div class="px-6 py-5 flex flex-col gap-4">
+
+  <p class="text-sm text-muted">
+    What Claude Code remembers about this project. Read live from disk on open — press Refresh
+    after a session writes.
+  </p>
+
+  @if (loadError()) {
+    <div class="border border-err/40 bg-err/5 rounded-md px-4 py-2.5 flex items-center gap-2.5">
+      <lucide-icon name="x-circle" class="w-4 h-4 text-err shrink-0"></lucide-icon>
+      <div class="text-xs">
+        <span class="text-err font-medium">Couldn't load memories.</span>
+        <span class="text-muted">Is Andon's API running?</span>
+      </div>
+    </div>
+  }
+
+  @if (actionError(); as err) {
+    <div class="border border-err/40 bg-err/5 rounded-md px-4 py-2.5 flex items-center gap-2.5">
+      <lucide-icon name="x-circle" class="w-4 h-4 text-err shrink-0"></lucide-icon>
+      <div class="text-xs">
+        <span class="text-err font-medium">{{ err }}</span>
+      </div>
+    </div>
+  }
+
+  @if (!loadError() && projects().length === 0 && !loading()) {
+    <div class="panel panel-body text-sm text-muted">
+      No project on this machine has any memories yet.
+    </div>
+  }
+
+  @if (index(); as idx) {
+    <section class="panel">
+      <button class="panel-title w-full" (click)="toggleIndex()">
+        <span class="flex items-center gap-2">
+          <lucide-icon name="book-open" class="w-3 h-3"></lucide-icon>
+          <span>MEMORY.md</span>
+        </span>
+        <span class="text-[10px]">
+          {{ showIndex() ? 'hide' : 'show' }} — the index loaded into context each session
+        </span>
+      </button>
+      @if (showIndex()) {
+        <div class="panel-body">
+          <pre class="whitespace-pre-wrap text-sm text-text">{{ idx }}</pre>
+        </div>
+      }
+    </section>
+  }
+
+  @if (!loadError() && slug() && entries().length === 0 && !loading()) {
+    <div class="panel panel-body text-sm text-muted">
+      No memories for this project yet. Claude Code writes these itself as it learns things worth
+      carrying between sessions.
+    </div>
+  }
+
+  @for (e of entries(); track e.doc.file) {
+    <article class="panel panel-body space-y-2">
+      <div class="flex items-center gap-2">
+        <h2 class="font-medium">{{ e.doc.name ?? e.doc.file }}</h2>
+        @if (e.doc.kind) {
+          <span class="rounded border border-border bg-panel-2 px-1.5 py-0.5 text-xs text-muted">
+            {{ e.doc.kind }}
+          </span>
+        }
+        @if (!e.doc.parse_ok) {
+          <span class="rounded border border-warn/40 bg-warn/10 px-1.5 py-0.5 text-xs text-warn">
+            unparsed
+          </span>
+        }
+      </div>
+
+      @if (e.doc.description) {
+        <p class="text-sm text-muted">{{ e.doc.description }}</p>
+      }
+
+      @if (editing() === e.doc.file) {
+        <textarea
+          class="h-64 w-full rounded border border-border bg-panel p-2 font-mono text-sm text-text"
+          [value]="draft()"
+          (input)="onDraftInput($event)"
+        ></textarea>
+        <div class="flex gap-2">
+          <button
+            class="rounded bg-text px-2 py-1 text-sm text-panel hover:bg-text/80"
+            (click)="saveEdit(e.doc.file)"
+          >
+            Save
+          </button>
+          <button
+            class="rounded border border-border px-2 py-1 text-sm text-text hover:bg-panel-2"
+            (click)="cancelEdit()"
+          >
+            Cancel
+          </button>
+        </div>
+      } @else {
+        <pre class="whitespace-pre-wrap text-sm text-text">{{ e.doc.body }}</pre>
+        <div class="flex gap-2">
+          <button
+            class="rounded border border-border px-2 py-1 text-sm text-text hover:bg-panel-2"
+            (click)="startEdit(e)"
+          >
+            Edit
+          </button>
+          <button
+            class="rounded border border-err/40 px-2 py-1 text-sm text-err hover:bg-err/10"
+            (click)="remove(e.doc.file)"
+          >
+            Delete
+          </button>
+        </div>
+      }
+
+      <div class="space-y-1 text-xs text-muted">
+        <div class="flex items-center gap-2">
+          @if (e.origin) {
+            <span>
+              Last written by
+              @if (isAndonUser(e.origin)) {
+                <span class="text-text">You, in Andon</span>
+              } @else {
+                <a class="text-accent underline" [routerLink]="['/sessions', e.origin.session_id]">
+                  {{ e.origin.session_id }}
+                </a>
+              }
+            </span>
+          } @else {
+            <span>Origin unknown — this memory predates provenance tracking.</span>
+          }
+          <button class="underline" (click)="toggleHistory(e.doc.file)">
+            {{ openHistory() === e.doc.file ? 'Hide history' : 'History' }}
+          </button>
+        </div>
+
+        @if (openHistory() === e.doc.file) {
+          <ul class="space-y-0.5 border-l border-border pl-2">
+            <!--
+              Track by $index, not t.ts: Touch (provenance.rs) exposes no row id, and two
+              touches to the same file can legitimately share a ts (see
+              touches_breaks_ts_ties_by_most_recent_insert_first in provenance.rs — the
+              ORDER BY ts DESC, id DESC tiebreak exists specifically for that case). A
+              duplicate track key is undefined behavior that Angular flags as NG0955
+              (a dev-mode warning in this Angular version, a hard error in others). This
+              list is re-fetched fresh on every disclosure open and is never reordered
+              in place, so index tracking loses nothing.
+            -->
+            @for (t of history()[e.doc.file] ?? []; track $index) {
+              <li>
+                <span class="text-muted">{{ t.action }}</span>
+                —
+                @if (isAndonUser(t)) {
+                  <span class="text-text">You, in Andon</span>
+                } @else {
+                  <a class="text-accent underline" [routerLink]="['/sessions', t.session_id]">
+                    {{ t.session_id }}
+                  </a>
+                }
+              </li>
+            }
+          </ul>
+        }
+      </div>
+    </article>
+  }
+</div>

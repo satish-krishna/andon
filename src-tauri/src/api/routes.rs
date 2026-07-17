@@ -74,6 +74,7 @@ pub fn router(state: ApiState) -> Router {
         .route("/api/behaviour/model-mix", get(behaviour_model_mix))
         .route("/api/behaviour/slash-commands", get(behaviour_slash_commands))
         .route("/api/behaviour/subagents", get(behaviour_subagents))
+        .merge(crate::api::memory_routes::router())
         .with_state(state)
 }
 
@@ -848,7 +849,7 @@ pub struct ApiError {
 }
 
 impl ApiError {
-    fn pool(e: r2d2::Error) -> Self {
+    pub(crate) fn pool(e: r2d2::Error) -> Self {
         Self {
             status: StatusCode::SERVICE_UNAVAILABLE,
             message: format!("db pool: {e}"),
@@ -857,6 +858,20 @@ impl ApiError {
     fn not_found(msg: &str) -> Self {
         Self {
             status: StatusCode::NOT_FOUND,
+            message: msg.to_string(),
+        }
+    }
+    pub(crate) fn bad_request(msg: &str) -> Self {
+        Self {
+            status: StatusCode::BAD_REQUEST,
+            message: msg.to_string(),
+        }
+    }
+    /// For server-side faults (e.g. a panicked/cancelled blocking task) that
+    /// are not the client's doing and must not be reported as a 400.
+    pub(crate) fn internal(msg: &str) -> Self {
+        Self {
+            status: StatusCode::INTERNAL_SERVER_ERROR,
             message: msg.to_string(),
         }
     }
@@ -2248,6 +2263,101 @@ async fn autostart_disable(State(_state): State<ApiState>) -> Json<serde_json::V
 
 // ---------- claude code hook receiver ----------
 
+/// Cheap raw-string pre-filter run before the expensive, authoritative
+/// `classify_memory_write_under` (two `canonicalize()` syscalls). This hook rides
+/// the machine-wide PostToolUse Write|Edit|MultiEdit matcher Andon already
+/// installs, so it runs on *every* file save on the machine, not just memory
+/// writes -- without a cheap gate, every ordinary source-file save (`.rs`,
+/// `.ts`, `.json`, ...) machine-wide would pay for two syscalls just to be
+/// rejected.
+///
+/// `classify_memory_write_under` -- which canonicalizes the path before checking
+/// `Path::extension()` -- is the sole authority on what counts as a memory
+/// file. This predicate runs on the *un-canonicalized* input and must stay
+/// strictly LOOSER than that authority, never stricter: it may only reject
+/// inputs that are *definitely* not Markdown. On Windows, `canonicalize()`
+/// can turn `NOTE.MD`, `note.md `, or `note.md.` into the real on-disk
+/// `note.md` (NTFS is case-insensitive/case-preserving; trailing spaces and
+/// dots are stripped when resolving), so a case-sensitive, untrimmed
+/// `ends_with(".md")` would reject inputs the real check accepts. Because
+/// hook handlers always return `Ok` and log nothing on this path, a
+/// too-strict pre-filter fails silently: no error, no trace, just a missing
+/// provenance row. When in doubt, let it through -- a false pass costs two
+/// syscalls, a false reject costs a lost provenance row.
+fn might_be_markdown(raw: &str) -> bool {
+    let trimmed = raw.trim_end_matches([' ', '.']);
+    trimmed.len() != raw.len() || trimmed.to_ascii_lowercase().ends_with(".md")
+}
+
+/// Records a memory-file write into the provenance ledger. Called from
+/// `hook_tool_use`: the PostToolUse hook Andon already installs fires on every
+/// Write/Edit/MultiEdit, so no new hook is needed. Failures log and are
+/// swallowed — a hook handler always returns Ok.
+///
+/// Thin wrapper around `record_memory_touch_under`: resolves the real,
+/// canonicalized `~/.claude/projects` root and delegates. If the root can't
+/// be resolved (no home directory, or it doesn't exist yet), this returns
+/// without recording -- it never panics, matching every other hook handler.
+fn record_memory_touch(conn: &rusqlite::Connection, payload: &serde_json::Value, ts: i64) {
+    let Some(root) = crate::memory::paths::projects_root().and_then(|r| r.canonicalize().ok())
+    else {
+        return;
+    };
+    record_memory_touch_under(conn, &root, payload, ts);
+}
+
+/// Core logic behind `record_memory_touch`, testable against an arbitrary,
+/// already-canonicalized projects root instead of the real `~/.claude/projects`.
+/// Mirrors the `classify_memory_write_under` / `classify_memory_write_under` split in
+/// `memory::paths`.
+fn record_memory_touch_under(
+    conn: &rusqlite::Connection,
+    root: &std::path::Path,
+    payload: &serde_json::Value,
+    ts: i64,
+) {
+    let Some(tool) = payload.get("tool_name").and_then(|v| v.as_str()) else {
+        return;
+    };
+    let Some(action) = crate::memory::provenance::Action::for_tool(tool) else {
+        return;
+    };
+    // Reject the `andon-user` sentinel outright: it is reserved for writes Andon's
+    // own UI makes (see `provenance::ANDON_USER`), never for a hook payload. This
+    // hook receiver is unauthenticated, so accepting the literal sentinel from a
+    // POST body would let any local page forge a permanent, uncorrectable "human"
+    // provenance row for a write no human made -- inverting the churn signal this
+    // feature exists to measure. No real Claude Code session id is ever this
+    // literal string, so this rejects nothing legitimate.
+    let Some(sid) = payload
+        .get("session_id")
+        .and_then(|v| v.as_str())
+        .filter(|s| !s.is_empty() && *s != crate::memory::provenance::ANDON_USER)
+    else {
+        return;
+    };
+    let Some(raw_path) = payload
+        .get("tool_input")
+        .and_then(|v| v.get("file_path"))
+        .and_then(|v| v.as_str())
+    else {
+        return;
+    };
+    // See `might_be_markdown`'s doc comment: this gate is deliberately
+    // looser than `classify_memory_write_under` and must stay that way.
+    if !might_be_markdown(raw_path) {
+        return;
+    }
+    let Some((slug, file)) = crate::memory::paths::classify_memory_write_under(root, raw_path)
+    else {
+        return;
+    };
+
+    if let Err(e) = crate::memory::provenance::record(conn, sid, &slug, &file, action, ts) {
+        tracing::warn!(error = %e, slug = %slug, file = %file, "record_memory_touch: ledger insert failed");
+    }
+}
+
 async fn hook_tool_use(
     State(state): State<ApiState>,
     body: Result<Json<serde_json::Value>, JsonRejection>,
@@ -2338,6 +2448,8 @@ async fn hook_tool_use(
             return Json(HookOutput::ok());
         }
     };
+
+    record_memory_touch(&conn, &payload, now);
 
     if let Some(sid_str) = &sid {
         if file_path.is_some() && (added > 0 || removed > 0) {
@@ -2899,5 +3011,194 @@ mod tests {
         let pts = tape_last_n_days(&conn, 30, &models);
 
         assert_eq!(pts[29].cost, 5.0, "only opus rows counted");
+    }
+
+    #[test]
+    fn record_memory_touch_ignores_a_markdown_file_outside_the_projects_root() {
+        let mut conn = rusqlite::Connection::open_in_memory().expect("open in-memory db");
+        crate::db::migrations::apply(&mut conn).expect("migrations apply");
+
+        // A real, existing Markdown file that is definitely outside
+        // `~/.claude/projects`, reached via CARGO_MANIFEST_DIR rather than a
+        // hardcoded path so the test is not tied to one machine's checkout
+        // location. This reaches `classify_memory_write_under` (it passes the
+        // `might_be_markdown` pre-check and canonicalizes fine) and is
+        // rejected somewhere inside it, but this test alone cannot isolate
+        // *which* internal check does the rejecting -- e.g. removing the
+        // `strip_prefix` containment check would still fail this exact path
+        // on the unrelated "second component != memory" check, since
+        // `CLAUDE.md`'s parent is the repo root, not a `<slug>/memory`
+        // layout. `classify_memory_write_under`'s dedicated containment
+        // tests in `memory::paths` are what actually isolate and prove the
+        // `strip_prefix` property.
+        let repo_claude_md = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("..")
+            .join("CLAUDE.md");
+        assert!(repo_claude_md.is_file(), "fixture file must exist: {repo_claude_md:?}");
+
+        let payload = serde_json::json!({
+            "session_id": "sess-1",
+            "tool_name": "Write",
+            "tool_input": { "file_path": repo_claude_md.to_string_lossy() }
+        });
+        record_memory_touch(&conn, &payload, 42);
+
+        let n: i64 = conn
+            .query_row("SELECT COUNT(*) FROM memory_provenance", [], |r| r.get(0))
+            .expect("count");
+        assert_eq!(n, 0, "markdown files outside the projects root must not reach the ledger");
+    }
+
+    #[test]
+    fn record_memory_touch_ignores_a_non_markdown_path() {
+        let mut conn = rusqlite::Connection::open_in_memory().expect("open in-memory db");
+        crate::db::migrations::apply(&mut conn).expect("migrations apply");
+
+        // A raw path ending in `.rs`, not `.md`. This is rejected by the
+        // cheap `might_be_markdown` pre-check before `classify_memory_write_under`
+        // ever runs `canonicalize()` -- i.e. it never has to touch the
+        // filesystem. Note this fixture path (`main.rs`) exists on disk in
+        // this repo, so this test cannot by itself distinguish "rejected
+        // before any syscall" from "rejected because canonicalize failed";
+        // `might_be_markdown`'s own truth-table test below is what actually
+        // proves the pre-check's behavior directly.
+        let payload = serde_json::json!({
+            "session_id": "sess-1",
+            "tool_name": "Write",
+            "tool_input": { "file_path": "D:\\Repos\\andon\\src-tauri\\src\\main.rs" }
+        });
+        record_memory_touch(&conn, &payload, 42);
+
+        let n: i64 = conn
+            .query_row("SELECT COUNT(*) FROM memory_provenance", [], |r| r.get(0))
+            .expect("count");
+        assert_eq!(n, 0, "non-markdown paths must not reach the ledger");
+    }
+
+    #[test]
+    fn might_be_markdown_truth_table() {
+        // `record_memory_touch`'s tests can only ever observe "no ledger
+        // row", which is indistinguishable from an empty function body (see
+        // the honesty note in the task report). This test exercises the
+        // pre-check predicate directly, proving both the deliberate
+        // looseness (case-insensitivity, trailing space/dot tolerance) and
+        // that it still rejects the obvious non-Markdown cases.
+        assert!(might_be_markdown("a.md"));
+        assert!(might_be_markdown("a.MD"), "must be case-insensitive");
+        assert!(might_be_markdown("a.Md"), "must be case-insensitive");
+        assert!(might_be_markdown("a.md "), "trailing space is stripped by Windows");
+        assert!(might_be_markdown("a.md."), "trailing dot is stripped by Windows");
+        assert!(might_be_markdown(".md"));
+        assert!(!might_be_markdown("a.rs"));
+        assert!(!might_be_markdown("a.mdx"));
+        assert!(!might_be_markdown("a.json"));
+        assert!(!might_be_markdown(""));
+    }
+
+    #[test]
+    fn record_memory_touch_ignores_a_tool_that_is_not_a_write() {
+        let mut conn = rusqlite::Connection::open_in_memory().expect("open in-memory db");
+        crate::db::migrations::apply(&mut conn).expect("migrations apply");
+
+        let payload = serde_json::json!({
+            "session_id": "sess-1",
+            "tool_name": "Bash",
+            "tool_input": { "file_path": "whatever.md" }
+        });
+        record_memory_touch(&conn, &payload, 42);
+
+        let n: i64 = conn
+            .query_row("SELECT COUNT(*) FROM memory_provenance", [], |r| r.get(0))
+            .expect("count");
+        assert_eq!(n, 0);
+    }
+
+    #[test]
+    fn record_memory_touch_ignores_a_payload_with_no_session_id() {
+        let mut conn = rusqlite::Connection::open_in_memory().expect("open in-memory db");
+        crate::db::migrations::apply(&mut conn).expect("migrations apply");
+
+        let payload = serde_json::json!({
+            "tool_name": "Write",
+            "tool_input": { "file_path": "x.md" }
+        });
+        record_memory_touch(&conn, &payload, 42);
+
+        let n: i64 = conn
+            .query_row("SELECT COUNT(*) FROM memory_provenance", [], |r| r.get(0))
+            .expect("count");
+        assert_eq!(n, 0);
+    }
+
+    /// Monotonic counter so parallel test threads (which share a process id)
+    /// never race on the same directory name. Mirrors
+    /// `memory::paths::tests::unique_temp_name`, kept as a local copy since
+    /// that helper is private to `paths`'s own test module.
+    fn unique_temp_name(prefix: &str) -> String {
+        static COUNTER: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
+        let n = COUNTER.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        format!("{prefix}-{}-{n}", std::process::id())
+    }
+
+    /// A fresh temp directory standing in for `~/.claude/projects`, so
+    /// `record_memory_touch_under` can be exercised without ever touching the
+    /// real home directory.
+    fn temp_projects_root() -> std::path::PathBuf {
+        let base = std::env::temp_dir().join(unique_temp_name("andon-hooktest-root"));
+        let _ = std::fs::remove_dir_all(&base);
+        std::fs::create_dir_all(&base).expect("create temp projects root");
+        std::fs::canonicalize(&base).expect("canonicalize temp projects root")
+    }
+
+    #[test]
+    fn record_memory_touch_rejects_the_andon_user_sentinel() {
+        // `andon-user` is reserved for writes Andon's own UI makes (see
+        // `provenance::ANDON_USER`). `/api/hooks/tool-use` is unauthenticated, so
+        // without this rejection any local page could POST a forged
+        // `session_id: "andon-user"` payload and mint a permanent, uncorrectable
+        // "human" provenance row for a write no human made -- inverting the churn
+        // signal this feature exists to measure. No real Claude Code session id is
+        // ever this literal string, so this rejects nothing legitimate.
+        //
+        // This calls `record_memory_touch_under` directly against a temp directory
+        // standing in for `~/.claude/projects`, exactly like
+        // `classify_memory_write_under`'s own tests in `memory::paths` -- never the
+        // real home directory. Proving the sentinel filter -- not some unrelated
+        // "outside the projects root" rejection -- is what stops this payload
+        // requires a real file that would otherwise classify successfully, so one
+        // is built under the temp root's `<slug>/memory/` layout.
+        //
+        // Honesty note: like the other `record_memory_touch` tests in this file, a
+        // bare `assert_eq!(n, 0)` is indistinguishable from an empty function body
+        // in isolation. What makes this one discriminating against a *specific*
+        // regression (removing just the sentinel check) is that the fixture file is
+        // real and otherwise valid: every other gate in the function (tool name,
+        // action mapping, non-empty session id, markdown pre-filter, real
+        // `classify_memory_write_under` success) passes, so only the sentinel
+        // filter itself can be the thing keeping the row count at zero. The
+        // mandatory mutation check for this test removes only the sentinel
+        // rejection and confirms the row count flips from 0 to 1.
+        let mut conn = rusqlite::Connection::open_in_memory().expect("open in-memory db");
+        crate::db::migrations::apply(&mut conn).expect("migrations apply");
+
+        let root = temp_projects_root();
+        let slug = "andon-sentinel-test";
+        let mem_dir = root.join(slug).join("memory");
+        std::fs::create_dir_all(&mem_dir).expect("create test memory dir");
+        let file = mem_dir.join("note.md");
+        std::fs::write(&file, "test fixture").expect("write test fixture file");
+
+        let payload = serde_json::json!({
+            "session_id": crate::memory::provenance::ANDON_USER,
+            "tool_name": "Write",
+            "tool_input": { "file_path": file.to_string_lossy() }
+        });
+        record_memory_touch_under(&conn, &root, &payload, 42);
+
+        let n: i64 = conn
+            .query_row("SELECT COUNT(*) FROM memory_provenance", [], |r| r.get(0))
+            .expect("count");
+
+        assert_eq!(n, 0, "a forged andon-user session id must not reach the ledger");
     }
 }

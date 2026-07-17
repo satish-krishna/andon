@@ -2,6 +2,7 @@ pub mod dto;
 pub mod efficiency;
 pub mod filter;
 pub mod hook_response;
+pub mod memory_routes;
 pub mod routes;
 
 use std::net::SocketAddr;

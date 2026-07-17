@@ -186,6 +186,25 @@ ALTER TABLE cost_entries ADD COLUMN is_subagent INTEGER NOT NULL DEFAULT 0;
 ALTER TABLE token_usage  ADD COLUMN is_subagent INTEGER NOT NULL DEFAULT 0;
 "#;
 
+const MIGRATION_V7: &str = r#"
+-- Append-only ledger mapping a memory file to the session that wrote it.
+-- Rows outlive their files: deleting a memory appends a 'delete' row rather
+-- than removing history, which is what makes churn (a human delete followed
+-- by a model re-create) observable.
+-- No FK to sessions on purpose: UI edits use the 'andon-user' sentinel, which
+-- is not a session id, and foreign_keys is ON.
+CREATE TABLE IF NOT EXISTS memory_provenance (
+    id           INTEGER PRIMARY KEY AUTOINCREMENT,
+    session_id   TEXT    NOT NULL,
+    project_slug TEXT    NOT NULL,
+    memory_file  TEXT    NOT NULL,
+    action       TEXT    NOT NULL,
+    ts           INTEGER NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_memory_prov_file
+    ON memory_provenance(project_slug, memory_file, ts DESC);
+"#;
+
 const MIGRATIONS: &[(i32, &str)] = &[
     (1, MIGRATION_V1),
     (2, MIGRATION_V2),
@@ -193,6 +212,7 @@ const MIGRATIONS: &[(i32, &str)] = &[
     (4, MIGRATION_V4),
     (5, MIGRATION_V5),
     (6, MIGRATION_V6),
+    (7, MIGRATION_V7),
 ];
 
 pub fn apply(conn: &mut Connection) -> Result<()> {
@@ -229,6 +249,32 @@ pub fn apply(conn: &mut Connection) -> Result<()> {
         tx.commit()?;
     }
 
+    ensure_required_objects(conn)?;
+
+    Ok(())
+}
+
+/// Re-assert schema objects this build cannot function without, independent of
+/// the recorded `schema_version`.
+///
+/// The loop above gates migrations by number: it runs only versions greater
+/// than `MAX(schema_version.version)`. That is correct for a linear history,
+/// but Andon is a single-binary app the maintainer runs from several feature
+/// branches against ONE `~/.andon/data.db`. A divergent branch that claimed a
+/// *higher* version number leaves this database recording e.g. version 9 while
+/// this build's newest migration is 7 — so the loop skips migration 7 by
+/// number and `memory_provenance` is never created. Provenance inserts then
+/// fail and are swallowed by the hook/endpoint error handling, silently
+/// disabling the whole churn ledger with no user-visible signal.
+///
+/// Every statement re-asserted here MUST be idempotent (`CREATE ... IF NOT
+/// EXISTS`), so this is a no-op on a normally-migrated database and a heal on a
+/// divergent one. `MIGRATION_V7` is reused verbatim so there is a single source
+/// of the DDL — no second copy to drift. Migrations that are NOT idempotent
+/// (e.g. `ALTER TABLE ADD COLUMN` in V4/V6, which errors on a duplicate column)
+/// must never be added here.
+fn ensure_required_objects(conn: &Connection) -> Result<()> {
+    conn.execute_batch(MIGRATION_V7)?;
     Ok(())
 }
 
@@ -236,6 +282,62 @@ pub fn apply(conn: &mut Connection) -> Result<()> {
 mod tests {
     use super::*;
     use rusqlite::Connection;
+
+    #[test]
+    fn self_heals_memory_provenance_when_schema_version_skipped_past_v7() {
+        // The real-world state that no fresh-DB migration test exercises: a
+        // divergent build advanced schema_version to 9 (its own v7 was some
+        // other table) WITHOUT ever creating memory_provenance. The version
+        // loop will skip migration 7 by number; ensure_required_objects must
+        // still create the table.
+        let mut conn = Connection::open_in_memory().expect("open in-memory db");
+        conn.execute_batch(
+            "CREATE TABLE schema_version (version INTEGER PRIMARY KEY, applied_at INTEGER NOT NULL);
+             INSERT INTO schema_version (version, applied_at)
+                 VALUES (1,0),(2,0),(3,0),(4,0),(5,0),(6,0),(7,0),(8,0),(9,0);",
+        )
+        .expect("seed a divergent v9 schema_version with no memory_provenance");
+
+        let before: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='memory_provenance'",
+                [],
+                |r| r.get(0),
+            )
+            .expect("count before");
+        assert_eq!(before, 0, "precondition: memory_provenance must be absent");
+
+        apply(&mut conn).expect("apply must not error on a divergent-version db");
+
+        let after: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='memory_provenance'",
+                [],
+                |r| r.get(0),
+            )
+            .expect("count after");
+        assert_eq!(
+            after, 1,
+            "apply() must self-heal memory_provenance even though schema_version already lists 7"
+        );
+
+        // And it must be usable, not just present.
+        conn.execute(
+            "INSERT INTO memory_provenance (session_id, project_slug, memory_file, action, ts)
+             VALUES ('andon-user', 'P', 'm.md', 'edit', 1)",
+            [],
+        )
+        .expect("healed table must accept inserts");
+    }
+
+    #[test]
+    fn ensure_required_objects_is_idempotent_on_a_normal_db() {
+        // Running apply() twice (the every-startup case) must not error, since
+        // ensure_required_objects re-asserts MIGRATION_V7 each time.
+        let mut conn = Connection::open_in_memory().expect("open in-memory db");
+        apply(&mut conn).expect("first apply");
+        apply(&mut conn).expect("second apply must be a no-op, not an error");
+    }
 
     #[test]
     fn v3_adds_repo_columns_and_indexes() {
@@ -260,7 +362,7 @@ mod tests {
         let v: i32 = conn.query_row(
             "SELECT MAX(version) FROM schema_version", [], |r| r.get(0)
         ).unwrap();
-        assert_eq!(v, 6);
+        assert_eq!(v, 7);
     }
 
     #[test]
@@ -271,7 +373,7 @@ mod tests {
         let v: i32 = conn.query_row(
             "SELECT MAX(version) FROM schema_version", [], |r| r.get(0)
         ).unwrap();
-        assert_eq!(v, 6);
+        assert_eq!(v, 7);
     }
 
     #[test]
@@ -302,7 +404,7 @@ mod tests {
         let v: i32 = conn.query_row(
             "SELECT MAX(version) FROM schema_version", [], |r| r.get(0),
         ).unwrap();
-        assert_eq!(v, 6);
+        assert_eq!(v, 7);
     }
 
     #[test]
@@ -335,7 +437,7 @@ mod tests {
         let v: i32 = conn.query_row(
             "SELECT MAX(version) FROM schema_version", [], |r| r.get(0),
         ).unwrap();
-        assert_eq!(v, 6);
+        assert_eq!(v, 7);
     }
 
     #[test]
@@ -354,6 +456,47 @@ mod tests {
         let v: i32 = conn.query_row(
             "SELECT MAX(version) FROM schema_version", [], |r| r.get(0),
         ).unwrap();
-        assert_eq!(v, 6);
+        assert_eq!(v, 7);
+    }
+
+    #[test]
+    fn v7_creates_memory_provenance() {
+        let mut conn = Connection::open_in_memory().expect("open in-memory db");
+        apply(&mut conn).expect("migrations apply");
+
+        let cols: Vec<String> = conn
+            .prepare("PRAGMA table_info(memory_provenance)")
+            .and_then(|mut s| {
+                s.query_map([], |r| r.get::<_, String>(1))
+                    .and_then(|rows| rows.collect())
+            })
+            .expect("table_info");
+        for expected in ["session_id", "project_slug", "memory_file", "action", "ts"] {
+            assert!(cols.contains(&expected.to_string()), "missing column {expected}");
+        }
+
+        let idxs: Vec<String> = conn
+            .prepare("SELECT name FROM sqlite_master WHERE type='index' AND tbl_name='memory_provenance'")
+            .and_then(|mut s| {
+                s.query_map([], |r| r.get::<_, String>(0))
+                    .and_then(|rows| rows.collect())
+            })
+            .expect("index list");
+        assert!(idxs.contains(&"idx_memory_prov_file".to_string()));
+    }
+
+    #[test]
+    fn memory_provenance_accepts_the_andon_user_sentinel() {
+        // No FK to sessions: a UI edit has no session row, and foreign_keys is ON in db::init.
+        let mut conn = Connection::open_in_memory().expect("open in-memory db");
+        conn.execute_batch("PRAGMA foreign_keys = ON;").expect("enable fks");
+        apply(&mut conn).expect("migrations apply");
+
+        conn.execute(
+            "INSERT INTO memory_provenance (session_id, project_slug, memory_file, action, ts)
+             VALUES ('andon-user', 'D--Repos-andon', 'user_role.md', 'edit', 1)",
+            [],
+        )
+        .expect("sentinel insert must not be rejected by a foreign key");
     }
 }
