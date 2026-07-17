@@ -78,7 +78,8 @@ pub fn guard_under(base: &Path, rel: &str) -> Option<PathBuf> {
 ///
 /// `pub(crate)` (rather than private) so `api::routes::record_memory_touch_under`
 /// can classify against an injected root in its own hermetic tests, mirroring
-/// how `classify_memory_write` uses this internally for the real hook path.
+/// how `api::routes::record_memory_touch` resolves the real projects root
+/// before delegating here on the live hook path.
 pub(crate) fn classify_memory_write_under(root: &Path, abs: &str) -> Option<(String, String)> {
     let path = PathBuf::from(abs).canonicalize().ok()?;
     if path.extension().and_then(|e| e.to_str()) != Some("md") {
@@ -102,13 +103,6 @@ pub(crate) fn classify_memory_write_under(root: &Path, abs: &str) -> Option<(Str
         return None;
     }
     Some((slug, rel))
-}
-
-/// Given an absolute path a hook reported, decide whether it names a memory
-/// file and, if so, which project and relative file it belongs to.
-pub fn classify_memory_write(abs: &str) -> Option<(String, String)> {
-    let root = projects_root()?.canonicalize().ok()?;
-    classify_memory_write_under(&root, abs)
 }
 
 #[cfg(test)]

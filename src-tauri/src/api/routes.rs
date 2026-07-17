@@ -2264,14 +2264,14 @@ async fn autostart_disable(State(_state): State<ApiState>) -> Json<serde_json::V
 // ---------- claude code hook receiver ----------
 
 /// Cheap raw-string pre-filter run before the expensive, authoritative
-/// `classify_memory_write` (two `canonicalize()` syscalls). This hook rides
+/// `classify_memory_write_under` (two `canonicalize()` syscalls). This hook rides
 /// the machine-wide PostToolUse Write|Edit|MultiEdit matcher Andon already
 /// installs, so it runs on *every* file save on the machine, not just memory
 /// writes -- without a cheap gate, every ordinary source-file save (`.rs`,
 /// `.ts`, `.json`, ...) machine-wide would pay for two syscalls just to be
 /// rejected.
 ///
-/// `classify_memory_write` -- which canonicalizes the path before checking
+/// `classify_memory_write_under` -- which canonicalizes the path before checking
 /// `Path::extension()` -- is the sole authority on what counts as a memory
 /// file. This predicate runs on the *un-canonicalized* input and must stay
 /// strictly LOOSER than that authority, never stricter: it may only reject
@@ -2308,7 +2308,7 @@ fn record_memory_touch(conn: &rusqlite::Connection, payload: &serde_json::Value,
 
 /// Core logic behind `record_memory_touch`, testable against an arbitrary,
 /// already-canonicalized projects root instead of the real `~/.claude/projects`.
-/// Mirrors the `classify_memory_write` / `classify_memory_write_under` split in
+/// Mirrors the `classify_memory_write_under` / `classify_memory_write_under` split in
 /// `memory::paths`.
 fn record_memory_touch_under(
     conn: &rusqlite::Connection,
@@ -2344,7 +2344,7 @@ fn record_memory_touch_under(
         return;
     };
     // See `might_be_markdown`'s doc comment: this gate is deliberately
-    // looser than `classify_memory_write` and must stay that way.
+    // looser than `classify_memory_write_under` and must stay that way.
     if !might_be_markdown(raw_path) {
         return;
     }
@@ -3021,7 +3021,7 @@ mod tests {
         // A real, existing Markdown file that is definitely outside
         // `~/.claude/projects`, reached via CARGO_MANIFEST_DIR rather than a
         // hardcoded path so the test is not tied to one machine's checkout
-        // location. This reaches `classify_memory_write` (it passes the
+        // location. This reaches `classify_memory_write_under` (it passes the
         // `might_be_markdown` pre-check and canonicalizes fine) and is
         // rejected somewhere inside it, but this test alone cannot isolate
         // *which* internal check does the rejecting -- e.g. removing the
@@ -3055,7 +3055,7 @@ mod tests {
         crate::db::migrations::apply(&mut conn).expect("migrations apply");
 
         // A raw path ending in `.rs`, not `.md`. This is rejected by the
-        // cheap `might_be_markdown` pre-check before `classify_memory_write`
+        // cheap `might_be_markdown` pre-check before `classify_memory_write_under`
         // ever runs `canonicalize()` -- i.e. it never has to touch the
         // filesystem. Note this fixture path (`main.rs`) exists on disk in
         // this repo, so this test cannot by itself distinguish "rejected
