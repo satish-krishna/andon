@@ -2293,7 +2293,29 @@ fn might_be_markdown(raw: &str) -> bool {
 /// `hook_tool_use`: the PostToolUse hook Andon already installs fires on every
 /// Write/Edit/MultiEdit, so no new hook is needed. Failures log and are
 /// swallowed — a hook handler always returns Ok.
+///
+/// Thin wrapper around `record_memory_touch_under`: resolves the real,
+/// canonicalized `~/.claude/projects` root and delegates. If the root can't
+/// be resolved (no home directory, or it doesn't exist yet), this returns
+/// without recording -- it never panics, matching every other hook handler.
 fn record_memory_touch(conn: &rusqlite::Connection, payload: &serde_json::Value, ts: i64) {
+    let Some(root) = crate::memory::paths::projects_root().and_then(|r| r.canonicalize().ok())
+    else {
+        return;
+    };
+    record_memory_touch_under(conn, &root, payload, ts);
+}
+
+/// Core logic behind `record_memory_touch`, testable against an arbitrary,
+/// already-canonicalized projects root instead of the real `~/.claude/projects`.
+/// Mirrors the `classify_memory_write` / `classify_memory_write_under` split in
+/// `memory::paths`.
+fn record_memory_touch_under(
+    conn: &rusqlite::Connection,
+    root: &std::path::Path,
+    payload: &serde_json::Value,
+    ts: i64,
+) {
     let Some(tool) = payload.get("tool_name").and_then(|v| v.as_str()) else {
         return;
     };
@@ -2326,7 +2348,8 @@ fn record_memory_touch(conn: &rusqlite::Connection, payload: &serde_json::Value,
     if !might_be_markdown(raw_path) {
         return;
     }
-    let Some((slug, file)) = crate::memory::paths::classify_memory_write(raw_path) else {
+    let Some((slug, file)) = crate::memory::paths::classify_memory_write_under(root, raw_path)
+    else {
         return;
     };
 
@@ -3107,6 +3130,26 @@ mod tests {
         assert_eq!(n, 0);
     }
 
+    /// Monotonic counter so parallel test threads (which share a process id)
+    /// never race on the same directory name. Mirrors
+    /// `memory::paths::tests::unique_temp_name`, kept as a local copy since
+    /// that helper is private to `paths`'s own test module.
+    fn unique_temp_name(prefix: &str) -> String {
+        static COUNTER: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
+        let n = COUNTER.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        format!("{prefix}-{}-{n}", std::process::id())
+    }
+
+    /// A fresh temp directory standing in for `~/.claude/projects`, so
+    /// `record_memory_touch_under` can be exercised without ever touching the
+    /// real home directory.
+    fn temp_projects_root() -> std::path::PathBuf {
+        let base = std::env::temp_dir().join(unique_temp_name("andon-hooktest-root"));
+        let _ = std::fs::remove_dir_all(&base);
+        std::fs::create_dir_all(&base).expect("create temp projects root");
+        std::fs::canonicalize(&base).expect("canonicalize temp projects root")
+    }
+
     #[test]
     fn record_memory_touch_rejects_the_andon_user_sentinel() {
         // `andon-user` is reserved for writes Andon's own UI makes (see
@@ -3117,13 +3160,13 @@ mod tests {
         // signal this feature exists to measure. No real Claude Code session id is
         // ever this literal string, so this rejects nothing legitimate.
         //
-        // `classify_memory_write` resolves against the REAL `~/.claude/projects`
-        // (it has no injectable root, unlike `classify_memory_write_under` in
-        // `memory::paths`'s own tests). Proving the sentinel filter -- not some
-        // unrelated "outside the projects root" rejection -- is what stops this
-        // payload requires a real file that would otherwise classify successfully,
-        // so one is built and torn down here, under a uniquely-named test slug that
-        // cannot collide with a real project's memory files.
+        // This calls `record_memory_touch_under` directly against a temp directory
+        // standing in for `~/.claude/projects`, exactly like
+        // `classify_memory_write_under`'s own tests in `memory::paths` -- never the
+        // real home directory. Proving the sentinel filter -- not some unrelated
+        // "outside the projects root" rejection -- is what stops this payload
+        // requires a real file that would otherwise classify successfully, so one
+        // is built under the temp root's `<slug>/memory/` layout.
         //
         // Honesty note: like the other `record_memory_touch` tests in this file, a
         // bare `assert_eq!(n, 0)` is indistinguishable from an empty function body
@@ -3131,14 +3174,16 @@ mod tests {
         // regression (removing just the sentinel check) is that the fixture file is
         // real and otherwise valid: every other gate in the function (tool name,
         // action mapping, non-empty session id, markdown pre-filter, real
-        // `classify_memory_write` success) passes, so only the sentinel filter
-        // itself can be the thing keeping the row count at zero.
+        // `classify_memory_write_under` success) passes, so only the sentinel
+        // filter itself can be the thing keeping the row count at zero. The
+        // mandatory mutation check for this test removes only the sentinel
+        // rejection and confirms the row count flips from 0 to 1.
         let mut conn = rusqlite::Connection::open_in_memory().expect("open in-memory db");
         crate::db::migrations::apply(&mut conn).expect("migrations apply");
 
-        let home = dirs::home_dir().expect("resolve home directory for test fixture");
-        let slug = format!("andon-sentinel-test-{}", std::process::id());
-        let mem_dir = home.join(".claude").join("projects").join(&slug).join("memory");
+        let root = temp_projects_root();
+        let slug = "andon-sentinel-test";
+        let mem_dir = root.join(slug).join("memory");
         std::fs::create_dir_all(&mem_dir).expect("create test memory dir");
         let file = mem_dir.join("note.md");
         std::fs::write(&file, "test fixture").expect("write test fixture file");
@@ -3148,13 +3193,11 @@ mod tests {
             "tool_name": "Write",
             "tool_input": { "file_path": file.to_string_lossy() }
         });
-        record_memory_touch(&conn, &payload, 42);
+        record_memory_touch_under(&conn, &root, &payload, 42);
 
         let n: i64 = conn
             .query_row("SELECT COUNT(*) FROM memory_provenance", [], |r| r.get(0))
             .expect("count");
-
-        let _ = std::fs::remove_dir_all(home.join(".claude").join("projects").join(&slug));
 
         assert_eq!(n, 0, "a forged andon-user session id must not reach the ledger");
     }
