@@ -2248,6 +2248,37 @@ async fn autostart_disable(State(_state): State<ApiState>) -> Json<serde_json::V
 
 // ---------- claude code hook receiver ----------
 
+/// Records a memory-file write into the provenance ledger. Called from
+/// `hook_tool_use`: the PostToolUse hook Andon already installs fires on every
+/// Write/Edit/MultiEdit, so no new hook is needed. Failures log and are
+/// swallowed — a hook handler always returns Ok.
+fn record_memory_touch(conn: &rusqlite::Connection, payload: &serde_json::Value, ts: i64) {
+    let Some(tool) = payload.get("tool_name").and_then(|v| v.as_str()) else {
+        return;
+    };
+    let Some(action) = crate::memory::provenance::Action::for_tool(tool) else {
+        return;
+    };
+    let Some(sid) = payload.get("session_id").and_then(|v| v.as_str()).filter(|s| !s.is_empty())
+    else {
+        return;
+    };
+    let Some(raw_path) = payload
+        .get("tool_input")
+        .and_then(|v| v.get("file_path"))
+        .and_then(|v| v.as_str())
+    else {
+        return;
+    };
+    let Some((slug, file)) = crate::memory::paths::classify_memory_write(raw_path) else {
+        return;
+    };
+
+    if let Err(e) = crate::memory::provenance::record(conn, sid, &slug, &file, action, ts) {
+        tracing::warn!(error = %e, slug = %slug, file = %file, "record_memory_touch: ledger insert failed");
+    }
+}
+
 async fn hook_tool_use(
     State(state): State<ApiState>,
     body: Result<Json<serde_json::Value>, JsonRejection>,
@@ -2338,6 +2369,8 @@ async fn hook_tool_use(
             return Json(HookOutput::ok());
         }
     };
+
+    record_memory_touch(&conn, &payload, now);
 
     if let Some(sid_str) = &sid {
         if file_path.is_some() && (added > 0 || removed > 0) {
@@ -2899,5 +2932,58 @@ mod tests {
         let pts = tape_last_n_days(&conn, 30, &models);
 
         assert_eq!(pts[29].cost, 5.0, "only opus rows counted");
+    }
+
+    #[test]
+    fn record_memory_touch_ignores_an_ordinary_project_file() {
+        let mut conn = rusqlite::Connection::open_in_memory().expect("open in-memory db");
+        crate::db::migrations::apply(&mut conn).expect("migrations apply");
+
+        let payload = serde_json::json!({
+            "session_id": "sess-1",
+            "tool_name": "Write",
+            "tool_input": { "file_path": "D:\\Repos\\andon\\src\\main.rs" }
+        });
+        record_memory_touch(&conn, &payload, 42);
+
+        let n: i64 = conn
+            .query_row("SELECT COUNT(*) FROM memory_provenance", [], |r| r.get(0))
+            .expect("count");
+        assert_eq!(n, 0, "non-memory writes must not reach the ledger");
+    }
+
+    #[test]
+    fn record_memory_touch_ignores_a_tool_that_is_not_a_write() {
+        let mut conn = rusqlite::Connection::open_in_memory().expect("open in-memory db");
+        crate::db::migrations::apply(&mut conn).expect("migrations apply");
+
+        let payload = serde_json::json!({
+            "session_id": "sess-1",
+            "tool_name": "Bash",
+            "tool_input": { "file_path": "whatever.md" }
+        });
+        record_memory_touch(&conn, &payload, 42);
+
+        let n: i64 = conn
+            .query_row("SELECT COUNT(*) FROM memory_provenance", [], |r| r.get(0))
+            .expect("count");
+        assert_eq!(n, 0);
+    }
+
+    #[test]
+    fn record_memory_touch_ignores_a_payload_with_no_session_id() {
+        let mut conn = rusqlite::Connection::open_in_memory().expect("open in-memory db");
+        crate::db::migrations::apply(&mut conn).expect("migrations apply");
+
+        let payload = serde_json::json!({
+            "tool_name": "Write",
+            "tool_input": { "file_path": "x.md" }
+        });
+        record_memory_touch(&conn, &payload, 42);
+
+        let n: i64 = conn
+            .query_row("SELECT COUNT(*) FROM memory_provenance", [], |r| r.get(0))
+            .expect("count");
+        assert_eq!(n, 0);
     }
 }
