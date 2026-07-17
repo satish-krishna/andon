@@ -3,6 +3,12 @@ mod autostart;
 mod config;
 pub mod db;
 pub mod jsonl;
+
+#[cfg(feature = "test-support")]
+pub mod memory;
+#[cfg(not(feature = "test-support"))]
+mod memory;
+
 mod budget;
 
 #[cfg(feature = "test-support")]
