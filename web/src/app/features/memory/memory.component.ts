@@ -247,9 +247,37 @@ export class MemoryComponent implements OnInit {
       next: () => {
         this.invalidateHistory(file);
         this.refresh();
+        this.refreshProjects();
       },
       error: () => {
         this.actionError.set(`Couldn't delete ${file}. It has not been removed.`);
+      },
+    });
+  }
+
+  /**
+   * Re-reads the project list — and therefore each project's memory count — so the
+   * switcher reflects a delete without a full page reload. Called only from the
+   * delete success path: a delete is the sole in-app action that changes a count
+   * (a save does not), and `memory_projects` does a directory listing PER project,
+   * so keeping it off `refresh()` (the always-visible manual button) and off save
+   * keeps that I/O out of the hot path.
+   *
+   * Deliberately touches ONLY the global `projects` signal, never
+   * `slug`/`entries`/`editing`/`draft`: the list is machine-wide and independent of
+   * which project is selected, so applying a late response cannot land one project's
+   * state on another. That independence is exactly why this needs none of the
+   * request-slug guarding `refresh()` carries.
+   *
+   * On failure it leaves the existing `projects` list in place — a stale count is a
+   * far smaller lie than a blanked switcher — and does NOT raise `loadError`: the
+   * delete itself succeeded, so the page is not in an error state.
+   */
+  private refreshProjects(): void {
+    this.api.memoryProjects().subscribe({
+      next: (ps) => this.projects.set(ps),
+      error: () => {
+        /* keep the last-known project list; the delete succeeded regardless */
       },
     });
   }

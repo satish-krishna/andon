@@ -214,6 +214,10 @@ describe('MemoryComponent', () => {
       index: null,
       entries: [],
     });
+    // Delete also re-fetches the project list to refresh the switcher count.
+    http
+      .expectOne('http://127.0.0.1:8765/api/memory/projects')
+      .flush([{ slug: 'D--Repos-andon', label: 'D:\\Repos\\andon', count: 0 }]);
   });
 
   it('seeds the draft from doc.raw, not doc.body, so frontmatter survives an edit', () => {
@@ -879,6 +883,9 @@ describe('MemoryComponent', () => {
     http
       .expectOne('http://127.0.0.1:8765/api/memory/D--Repos-andon')
       .flush({ slug: 'D--Repos-andon', index: null, entries: [] });
+    http
+      .expectOne('http://127.0.0.1:8765/api/memory/projects')
+      .flush([{ slug: 'D--Repos-andon', label: 'D:\\Repos\\andon', count: 0 }]);
     fixture.detectChanges();
 
     expect(fixture.componentInstance.history()['user_role.md']).toBeUndefined();
@@ -925,6 +932,122 @@ describe('MemoryComponent', () => {
 
     expect(fixture.componentInstance.history()['user_role.md']).toBeUndefined();
     expect(fixture.componentInstance.openHistory()).toBeNull();
+  });
+
+  it('re-fetches the project list after a successful delete so the switcher count is not stale', () => {
+    vi.spyOn(window, 'confirm').mockReturnValue(true);
+    flushProjects(2);
+    http.expectOne('http://127.0.0.1:8765/api/memory/D--Repos-andon').flush({
+      slug: 'D--Repos-andon',
+      index: null,
+      entries: [
+        {
+          doc: { file: 'a.md', name: null, description: null, kind: null, body: 'a', raw: 'a', parse_ok: true },
+          origin: null,
+        },
+        {
+          doc: { file: 'b.md', name: null, description: null, kind: null, body: 'b', raw: 'b', parse_ok: true },
+          origin: null,
+        },
+      ],
+    });
+    fixture.detectChanges();
+    expect(fixture.componentInstance.projects()[0].count).toBe(2);
+
+    fixture.componentInstance.remove('a.md');
+    http.expectOne('http://127.0.0.1:8765/api/memory/D--Repos-andon/delete').flush(null);
+    // refresh() re-reads the current project's entries...
+    http.expectOne('http://127.0.0.1:8765/api/memory/D--Repos-andon').flush({
+      slug: 'D--Repos-andon',
+      index: null,
+      entries: [
+        {
+          doc: { file: 'b.md', name: null, description: null, kind: null, body: 'b', raw: 'b', parse_ok: true },
+          origin: null,
+        },
+      ],
+    });
+    // ...and the switcher's project list is re-fetched so its count reflects the delete.
+    http
+      .expectOne('http://127.0.0.1:8765/api/memory/projects')
+      .flush([{ slug: 'D--Repos-andon', label: 'D:\\Repos\\andon', count: 1 }]);
+    fixture.detectChanges();
+
+    expect(fixture.componentInstance.projects()[0].count).toBe(1);
+  });
+
+  it('preserves the selected project and its entries when the post-delete projects re-fetch lands', () => {
+    vi.spyOn(window, 'confirm').mockReturnValue(true);
+    flushProjects(2);
+    http.expectOne('http://127.0.0.1:8765/api/memory/D--Repos-andon').flush({
+      slug: 'D--Repos-andon',
+      index: null,
+      entries: [
+        {
+          doc: { file: 'a.md', name: null, description: null, kind: null, body: 'a', raw: 'a', parse_ok: true },
+          origin: null,
+        },
+        {
+          doc: { file: 'b.md', name: null, description: null, kind: null, body: 'b', raw: 'b', parse_ok: true },
+          origin: null,
+        },
+      ],
+    });
+    fixture.detectChanges();
+
+    fixture.componentInstance.remove('a.md');
+    http.expectOne('http://127.0.0.1:8765/api/memory/D--Repos-andon/delete').flush(null);
+    http.expectOne('http://127.0.0.1:8765/api/memory/D--Repos-andon').flush({
+      slug: 'D--Repos-andon',
+      index: null,
+      entries: [
+        {
+          doc: { file: 'b.md', name: null, description: null, kind: null, body: 'b', raw: 'b', parse_ok: true },
+          origin: null,
+        },
+      ],
+    });
+    // The re-fetched list sorts a DIFFERENT project first — proving slug is not
+    // re-derived from projects[0] when the global list updates.
+    http.expectOne('http://127.0.0.1:8765/api/memory/projects').flush([
+      { slug: 'A--other', label: 'Other', count: 3 },
+      { slug: 'D--Repos-andon', label: 'D:\\Repos\\andon', count: 1 },
+    ]);
+    fixture.detectChanges();
+
+    expect(fixture.componentInstance.slug()).toBe('D--Repos-andon');
+    expect(fixture.componentInstance.entries().map((e) => e.doc.file)).toEqual(['b.md']);
+  });
+
+  it('leaves the switcher intact and raises no load error when the post-delete projects re-fetch fails', () => {
+    vi.spyOn(window, 'confirm').mockReturnValue(true);
+    flushProjects(2);
+    http.expectOne('http://127.0.0.1:8765/api/memory/D--Repos-andon').flush({
+      slug: 'D--Repos-andon',
+      index: null,
+      entries: [
+        {
+          doc: { file: 'a.md', name: null, description: null, kind: null, body: 'a', raw: 'a', parse_ok: true },
+          origin: null,
+        },
+      ],
+    });
+    fixture.detectChanges();
+
+    fixture.componentInstance.remove('a.md');
+    http.expectOne('http://127.0.0.1:8765/api/memory/D--Repos-andon/delete').flush(null);
+    http
+      .expectOne('http://127.0.0.1:8765/api/memory/D--Repos-andon')
+      .flush({ slug: 'D--Repos-andon', index: null, entries: [] });
+    http
+      .expectOne('http://127.0.0.1:8765/api/memory/projects')
+      .flush('', { status: 500, statusText: 'Server Error' });
+    fixture.detectChanges();
+
+    // The delete itself succeeded — a failed count refresh must not blank the
+    // switcher or masquerade as a page-level load error.
+    expect(fixture.componentInstance.projects().length).toBe(1);
+    expect(fixture.componentInstance.loadError()).toBe(false);
   });
 
   afterEach(() => http.verify());
