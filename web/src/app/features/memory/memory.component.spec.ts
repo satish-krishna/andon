@@ -199,6 +199,25 @@ describe('MemoryComponent', () => {
     http.expectNone('http://127.0.0.1:8765/api/memory/proj-a/delete');
   });
 
+  it('refuses the delete via the slug re-verify when the project changed with the dialog open (guard 2, isolated)', () => {
+    flushProjects();
+    http.expectOne('http://127.0.0.1:8765/api/memory/D--Repos-andon').flush({ slug: 'D--Repos-andon', index: null, entries: [] });
+    fixture.detectChanges();
+
+    // Set a pending delete captured under one project, then change the selected project
+    // WITHOUT calling select() — so Guard 1 (select clears pendingConfirm) does NOT run and
+    // pendingConfirm stays set. onConfirm() must independently refuse via the slug re-verify.
+    fixture.componentInstance.pendingConfirm.set({ kind: 'delete', slug: 'captured-proj', file: 'a.md' });
+    fixture.componentInstance.slug.set('different-proj');
+
+    fixture.componentInstance.onConfirm();
+
+    // Guard 2 must have refused: no delete against either the captured or the current project.
+    http.expectNone('http://127.0.0.1:8765/api/memory/captured-proj/delete');
+    http.expectNone('http://127.0.0.1:8765/api/memory/different-proj/delete');
+    expect(fixture.componentInstance.pendingConfirm()).toBeNull();
+  });
+
   it('deletes through the dialog against the captured project on confirm', () => {
     flushProjects();
     http.expectOne('http://127.0.0.1:8765/api/memory/D--Repos-andon').flush({
