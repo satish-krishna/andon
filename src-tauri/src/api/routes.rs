@@ -867,6 +867,14 @@ impl ApiError {
             message: msg.to_string(),
         }
     }
+    /// For server-side faults (e.g. a panicked/cancelled blocking task) that
+    /// are not the client's doing and must not be reported as a 400.
+    pub(crate) fn internal(msg: &str) -> Self {
+        Self {
+            status: StatusCode::INTERNAL_SERVER_ERROR,
+            message: msg.to_string(),
+        }
+    }
 }
 
 impl From<rusqlite::Error> for ApiError {

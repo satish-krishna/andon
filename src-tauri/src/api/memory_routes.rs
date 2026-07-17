@@ -82,7 +82,8 @@ async fn memory_projects(State(state): State<ApiState>) -> Result<Json<Vec<Memor
         let conn = pool.get().map_err(ApiError::pool)?;
         let mut stmt = conn.prepare(
             "SELECT DISTINCT repo_root FROM sessions
-              WHERE repo_root IS NOT NULL AND repo_root != ''",
+              WHERE repo_root IS NOT NULL AND repo_root != ''
+              ORDER BY repo_root",
         )?;
         let roots: Vec<String> = stmt
             .query_map([], |r| r.get::<_, String>(0))?
@@ -94,15 +95,17 @@ async fn memory_projects(State(state): State<ApiState>) -> Result<Json<Vec<Memor
         Ok(paths::projects_with_memory()
             .into_iter()
             .map(|slug| {
-                let count = store::list(&slug).len();
+                let count = store::count(&slug);
                 let label = label_for(&slug, &roots);
                 MemoryProject { slug, label, count }
             })
             .collect())
     })
     .await
-    .map_err(|e| ApiError::bad_request(&format!("join: {e}")))?
-    ?;
+    .map_err(|e| {
+        tracing::warn!(error = %e, "memory_projects: blocking task failed");
+        ApiError::internal("request failed")
+    })??;
     Ok(Json(out))
 }
 
@@ -129,9 +132,36 @@ async fn memory_list(
         Ok(MemoryListResponse { slug, index, entries })
     })
     .await
-    .map_err(|e| ApiError::bad_request(&format!("join: {e}")))?
-    ?;
+    .map_err(|e| {
+        tracing::warn!(error = %e, "memory_list: blocking task failed");
+        ApiError::internal("request failed")
+    })??;
     Ok(Json(out))
+}
+
+/// Saves the file, then best-effort records the ledger row. The fs write goes
+/// first: an `edit` row must never be recorded for a save that did not
+/// actually happen. `store::save` resolves through the containment guard and
+/// fails closed, so a guard rejection here writes no row at all.
+///
+/// The underlying error may carry an absolute filesystem path (including the
+/// OS username); it is logged server-side but never returned to the client.
+fn save_and_record(
+    conn: &rusqlite::Connection,
+    slug: &str,
+    file: &str,
+    content: &str,
+    ts: i64,
+) -> Result<(), ApiError> {
+    store::save(slug, file, content).map_err(|e| {
+        tracing::warn!(error = %e, "memory_save: store::save failed");
+        ApiError::bad_request("save rejected")
+    })?;
+
+    if let Err(e) = provenance::record(conn, provenance::ANDON_USER, slug, file, provenance::Action::Edit, ts) {
+        tracing::warn!(error = %e, "memory_save: ledger insert failed");
+    }
+    Ok(())
 }
 
 #[tracing::instrument(skip(state, body))]
@@ -142,27 +172,37 @@ async fn memory_save(
 ) -> Result<StatusCode, ApiError> {
     let pool = state.pool.clone();
     tokio::task::spawn_blocking(move || -> Result<(), ApiError> {
-        // store::save resolves through the containment guard and fails closed.
-        store::save(&slug, &body.file, &body.content)
-            .map_err(|e| ApiError::bad_request(&format!("save rejected: {e}")))?;
-
         let conn = pool.get().map_err(ApiError::pool)?;
-        if let Err(e) = provenance::record(
-            &conn,
-            provenance::ANDON_USER,
-            &slug,
-            &body.file,
-            provenance::Action::Edit,
-            now_ms(),
-        ) {
-            tracing::warn!(error = %e, "memory_save: ledger insert failed");
-        }
-        Ok(())
+        save_and_record(&conn, &slug, &body.file, &body.content, now_ms())
     })
     .await
-    .map_err(|e| ApiError::bad_request(&format!("join: {e}")))?
-    ?;
+    .map_err(|e| {
+        tracing::warn!(error = %e, "memory_save: blocking task failed");
+        ApiError::internal("request failed")
+    })??;
     Ok(StatusCode::NO_CONTENT)
+}
+
+/// Deletes the file, then best-effort records the ledger row. The fs delete
+/// goes first, deliberately: the ledger is append-only with no function to
+/// remove a row (see `memory::provenance`), so recording a `delete` before
+/// the delete is confirmed would risk a permanent, false audit entry if
+/// `store::delete` failed afterward (guard rejection, locked file,
+/// permission denied). A missing row on a rare best-effort ledger-write
+/// failure is a lesser harm than a row that lies about what happened.
+///
+/// The underlying error may carry an absolute filesystem path (including the
+/// OS username); it is logged server-side but never returned to the client.
+fn delete_and_record(conn: &rusqlite::Connection, slug: &str, file: &str, ts: i64) -> Result<(), ApiError> {
+    store::delete(slug, file).map_err(|e| {
+        tracing::warn!(error = %e, "memory_delete: store::delete failed");
+        ApiError::bad_request("delete rejected")
+    })?;
+
+    if let Err(e) = provenance::record(conn, provenance::ANDON_USER, slug, file, provenance::Action::Delete, ts) {
+        tracing::warn!(error = %e, "memory_delete: ledger insert failed");
+    }
+    Ok(())
 }
 
 #[tracing::instrument(skip(state, body))]
@@ -173,27 +213,14 @@ async fn memory_delete(
 ) -> Result<StatusCode, ApiError> {
     let pool = state.pool.clone();
     tokio::task::spawn_blocking(move || -> Result<(), ApiError> {
-        // Record before removing: the delete row is the churn signal, and it
-        // must survive even if the ledger write is the thing that fails.
         let conn = pool.get().map_err(ApiError::pool)?;
-        if let Err(e) = provenance::record(
-            &conn,
-            provenance::ANDON_USER,
-            &slug,
-            &body.file,
-            provenance::Action::Delete,
-            now_ms(),
-        ) {
-            tracing::warn!(error = %e, "memory_delete: ledger insert failed");
-        }
-        drop(conn);
-
-        store::delete(&slug, &body.file)
-            .map_err(|e| ApiError::bad_request(&format!("delete rejected: {e}")))
+        delete_and_record(&conn, &slug, &body.file, now_ms())
     })
     .await
-    .map_err(|e| ApiError::bad_request(&format!("join: {e}")))?
-    ?;
+    .map_err(|e| {
+        tracing::warn!(error = %e, "memory_delete: blocking task failed");
+        ApiError::internal("request failed")
+    })??;
     Ok(StatusCode::NO_CONTENT)
 }
 
@@ -209,8 +236,10 @@ async fn memory_touches(
         Ok(provenance::touches(&conn, &slug, &q.file)?)
     })
     .await
-    .map_err(|e| ApiError::bad_request(&format!("join: {e}")))?
-    ?;
+    .map_err(|e| {
+        tracing::warn!(error = %e, "memory_touches: blocking task failed");
+        ApiError::internal("request failed")
+    })??;
     Ok(Json(out))
 }
 
@@ -243,5 +272,54 @@ mod tests {
         let b: DeleteBody =
             serde_json::from_str(r#"{"file":"a.md"}"#).expect("deserialize DeleteBody");
         assert_eq!(b.file, "a.md");
+    }
+
+    fn migrated_conn() -> rusqlite::Connection {
+        let mut c = rusqlite::Connection::open_in_memory().expect("open in-memory db");
+        crate::db::migrations::apply(&mut c).expect("apply migrations");
+        c
+    }
+
+    fn provenance_row_count(conn: &rusqlite::Connection) -> i64 {
+        conn.query_row("SELECT COUNT(*) FROM memory_provenance", [], |r| r.get(0))
+            .expect("count memory_provenance rows")
+    }
+
+    /// Regression test for the critical ordering bug: a delete the containment
+    /// guard rejects (slug ".." can never resolve to a real memory_dir) must
+    /// return an error AND must not leave a `delete` row in the append-only
+    /// ledger, because the ledger has no function to remove a false row.
+    ///
+    /// This test fails if `delete_and_record` is reverted to record-then-delete:
+    /// verified by temporarily swapping the order and confirming the assertion
+    /// on row count fails (see task report for the mutation-test transcript).
+    #[test]
+    fn delete_and_record_writes_no_ledger_row_when_the_guard_rejects_the_delete() {
+        let conn = migrated_conn();
+
+        let result = delete_and_record(&conn, "..", "escape.md", 100);
+
+        assert!(result.is_err(), "a guard-rejected delete must return Err");
+        assert_eq!(
+            provenance_row_count(&conn),
+            0,
+            "a failed delete must not leave a ledger row behind -- the ledger cannot be corrected"
+        );
+    }
+
+    /// Same shape for save: a save the guard rejects must not record an
+    /// `edit` row either, though save was already fs-first before this fix.
+    #[test]
+    fn save_and_record_writes_no_ledger_row_when_the_guard_rejects_the_save() {
+        let conn = migrated_conn();
+
+        let result = save_and_record(&conn, "..", "escape.md", "content", 100);
+
+        assert!(result.is_err(), "a guard-rejected save must return Err");
+        assert_eq!(
+            provenance_row_count(&conn),
+            0,
+            "a failed save must not leave a ledger row behind"
+        );
     }
 }

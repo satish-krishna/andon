@@ -127,6 +127,38 @@ pub fn list(slug: &str) -> Vec<MemoryDoc> {
     list_in(&dir)
 }
 
+/// Counts the memory files in `dir` without reading their contents. Mirrors
+/// `list_in`'s filtering rules exactly (`.md` extension, `MEMORY.md`
+/// excluded) so callers that only need a count are not paying for a full
+/// `read_dir` + `read_to_string` + frontmatter parse of every file.
+fn count_in(dir: &Path) -> usize {
+    let Ok(entries) = std::fs::read_dir(dir) else {
+        return 0;
+    };
+    entries
+        .flatten()
+        .filter(|e| {
+            let path = e.path();
+            if path.extension().and_then(|x| x.to_str()) != Some("md") {
+                return false;
+            }
+            match path.file_name().and_then(|f| f.to_str()) {
+                Some(file) => file != INDEX_FILE,
+                None => false,
+            }
+        })
+        .count()
+}
+
+/// The number of memory files in the project, excluding the MEMORY.md index.
+/// Cheaper than `list(slug).len()`: it never reads file contents.
+pub fn count(slug: &str) -> usize {
+    let Some(dir) = memory_dir(slug) else {
+        return 0;
+    };
+    count_in(&dir)
+}
+
 fn read_in(dir: &Path, rel: &str) -> Option<String> {
     std::fs::read_to_string(guard_under(dir, rel)?).ok()
 }
@@ -412,5 +444,26 @@ mod tests {
 
         let names: Vec<&str> = docs.iter().map(|d| d.file.as_str()).collect();
         assert_eq!(names, vec!["alpha.md", "zeta.md"], "MEMORY.md must be excluded and the rest sorted by file name");
+    }
+
+    #[test]
+    fn count_in_excludes_the_index_and_agrees_with_list_in() {
+        let base = unique_temp_dir("andon-storetest-count");
+        fs::write(base.join("zeta.md"), "just a note").expect("write zeta.md");
+        fs::write(base.join("alpha.md"), "just a note").expect("write alpha.md");
+        fs::write(base.join("notes.txt"), "not markdown").expect("write notes.txt");
+        fs::write(base.join(INDEX_FILE), "- [Zeta](zeta.md)\n- [Alpha](alpha.md)\n").expect("write MEMORY.md");
+        let base = canon(&base);
+
+        let count = count_in(&base);
+
+        assert_eq!(count, 2, "MEMORY.md and the non-markdown file must be excluded from the count");
+        assert_eq!(count, list_in(&base).len(), "count_in must agree with list_in's count for the same directory");
+    }
+
+    #[test]
+    fn count_in_is_zero_for_a_missing_directory() {
+        let missing = std::env::temp_dir().join("andon-storetest-count-missing-does-not-exist");
+        assert_eq!(count_in(&missing), 0);
     }
 }
