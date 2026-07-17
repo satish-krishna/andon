@@ -13,6 +13,11 @@ import {
   JsonlBackfillResponse,
   JsonlErrorEntry,
   JsonlIngestRun,
+  MemoryDoc,
+  MemoryEntry,
+  MemoryListResponse,
+  MemoryProject,
+  MemoryTouch,
   ModelMixResponse,
   OverviewToday,
   RepoSummary,
@@ -396,6 +401,33 @@ export class ApiService {
   }
   ingestJsonl(): Observable<JsonlBackfillResponse> {
     return this.http.post<JsonlBackfillResponse>(`${BASE}/api/jsonl/backfill`, {});
+  }
+
+  // ----- memory browser -----
+  memoryProjects(): Observable<MemoryProject[]> {
+    return this.http.get<MemoryProject[]>(`${BASE}/api/memory/projects`);
+  }
+
+  memoryList(slug: string): Observable<MemoryListResponse> {
+    return this.http.get<MemoryListResponse>(`${BASE}/api/memory/${encodeURIComponent(slug)}`);
+  }
+
+  memorySave(slug: string, file: string, content: string): Observable<void> {
+    return this.http.put<void>(`${BASE}/api/memory/${encodeURIComponent(slug)}/file`, {
+      file,
+      content,
+    });
+  }
+
+  memoryDelete(slug: string, file: string): Observable<void> {
+    return this.http.post<void>(`${BASE}/api/memory/${encodeURIComponent(slug)}/delete`, { file });
+  }
+
+  memoryTouches(slug: string, file: string): Observable<MemoryTouch[]> {
+    return this.http.get<MemoryTouch[]>(
+      `${BASE}/api/memory/${encodeURIComponent(slug)}/provenance`,
+      { params: new HttpParams().set('file', file) },
+    );
   }
 }
 
