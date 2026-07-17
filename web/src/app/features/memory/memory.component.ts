@@ -1,12 +1,13 @@
 import { ChangeDetectionStrategy, Component, OnInit, inject, signal } from '@angular/core';
 import { RouterLink } from '@angular/router';
+import { LucideAngularModule } from 'lucide-angular';
 import { ApiService } from '../../core/api.service';
 import { MemoryEntry, MemoryProject } from '../../core/models';
 
 @Component({
   selector: 'app-memory',
   standalone: true,
-  imports: [RouterLink],
+  imports: [RouterLink, LucideAngularModule],
   templateUrl: './memory.component.html',
   changeDetection: ChangeDetectionStrategy.OnPush,
 })
@@ -19,14 +20,27 @@ export class MemoryComponent implements OnInit {
   /** Raw MEMORY.md text — the index Claude Code loads into context each session. */
   readonly index = signal<string | null>(null);
   readonly showIndex = signal(false);
-  readonly loading = signal(false);
+  /** Seeded true: the page has not verified "no memories" until the first load resolves. */
+  readonly loading = signal(true);
+  /** True when the last fetch failed. Must never be confused with a genuinely empty result. */
+  readonly loadError = signal(false);
 
   ngOnInit(): void {
-    this.api.memoryProjects().subscribe((ps) => {
-      this.projects.set(ps);
-      if (ps.length > 0) {
-        this.select(ps[0].slug);
-      }
+    this.api.memoryProjects().subscribe({
+      next: (ps) => {
+        this.loadError.set(false);
+        this.projects.set(ps);
+        if (ps.length > 0) {
+          this.select(ps[0].slug);
+        } else {
+          this.loading.set(false);
+        }
+      },
+      error: () => {
+        this.projects.set([]);
+        this.loadError.set(true);
+        this.loading.set(false);
+      },
     });
   }
 
@@ -48,6 +62,7 @@ export class MemoryComponent implements OnInit {
     const slug = this.slug();
     if (!slug) return;
     this.loading.set(true);
+    this.loadError.set(false);
     this.api.memoryList(slug).subscribe({
       next: (r) => {
         this.entries.set(r.entries);
@@ -57,6 +72,7 @@ export class MemoryComponent implements OnInit {
       error: () => {
         this.entries.set([]);
         this.index.set(null);
+        this.loadError.set(true);
         this.loading.set(false);
       },
     });
