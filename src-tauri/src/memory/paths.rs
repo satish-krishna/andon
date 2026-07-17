@@ -231,13 +231,22 @@ mod tests {
 
     #[test]
     fn memory_dir_rejects_a_drive_relative_slug() {
-        // Path::join treats a bare or drive-relative prefix as replacing the
-        // base entirely: `projects_root().join("C:").join("memory")` becomes
-        // the literal drive-relative path `C:memory`, discarding the
-        // projects root. None of these slugs contain '/', '\\', or "..", so
-        // they must be caught by the single-normal-component check.
-        assert!(memory_dir("C:").is_none());
-        assert!(memory_dir("D:").is_none());
-        assert!(memory_dir("C:foo").is_none());
+        // Drive-relative prefixes like "C:" or "C:foo" are rejected because
+        // they contain ':', which is caught by the string check before the
+        // component validation is reached. This test isolates the
+        // single-normal-component check with ".", which contains no ':',
+        // '/', '\\', or "..", so it passes the string layer but fails because
+        // Path::new(".").components() yields Component::CurDir, not the
+        // required Component::Normal.
+        assert!(memory_dir("C:").is_none(), "C: contains colon and should be rejected");
+        assert!(memory_dir("D:").is_none(), "D: contains colon and should be rejected");
+        assert!(
+            memory_dir("C:foo").is_none(),
+            "C:foo contains colon and should be rejected"
+        );
+        assert!(
+            memory_dir(".").is_none(),
+            ". is CurDir not Normal, testing single-component check"
+        );
     }
 }
