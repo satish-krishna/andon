@@ -249,6 +249,32 @@ pub fn apply(conn: &mut Connection) -> Result<()> {
         tx.commit()?;
     }
 
+    ensure_required_objects(conn)?;
+
+    Ok(())
+}
+
+/// Re-assert schema objects this build cannot function without, independent of
+/// the recorded `schema_version`.
+///
+/// The loop above gates migrations by number: it runs only versions greater
+/// than `MAX(schema_version.version)`. That is correct for a linear history,
+/// but Andon is a single-binary app the maintainer runs from several feature
+/// branches against ONE `~/.andon/data.db`. A divergent branch that claimed a
+/// *higher* version number leaves this database recording e.g. version 9 while
+/// this build's newest migration is 7 — so the loop skips migration 7 by
+/// number and `memory_provenance` is never created. Provenance inserts then
+/// fail and are swallowed by the hook/endpoint error handling, silently
+/// disabling the whole churn ledger with no user-visible signal.
+///
+/// Every statement re-asserted here MUST be idempotent (`CREATE ... IF NOT
+/// EXISTS`), so this is a no-op on a normally-migrated database and a heal on a
+/// divergent one. `MIGRATION_V7` is reused verbatim so there is a single source
+/// of the DDL — no second copy to drift. Migrations that are NOT idempotent
+/// (e.g. `ALTER TABLE ADD COLUMN` in V4/V6, which errors on a duplicate column)
+/// must never be added here.
+fn ensure_required_objects(conn: &Connection) -> Result<()> {
+    conn.execute_batch(MIGRATION_V7)?;
     Ok(())
 }
 
@@ -256,6 +282,62 @@ pub fn apply(conn: &mut Connection) -> Result<()> {
 mod tests {
     use super::*;
     use rusqlite::Connection;
+
+    #[test]
+    fn self_heals_memory_provenance_when_schema_version_skipped_past_v7() {
+        // The real-world state that no fresh-DB migration test exercises: a
+        // divergent build advanced schema_version to 9 (its own v7 was some
+        // other table) WITHOUT ever creating memory_provenance. The version
+        // loop will skip migration 7 by number; ensure_required_objects must
+        // still create the table.
+        let mut conn = Connection::open_in_memory().expect("open in-memory db");
+        conn.execute_batch(
+            "CREATE TABLE schema_version (version INTEGER PRIMARY KEY, applied_at INTEGER NOT NULL);
+             INSERT INTO schema_version (version, applied_at)
+                 VALUES (1,0),(2,0),(3,0),(4,0),(5,0),(6,0),(7,0),(8,0),(9,0);",
+        )
+        .expect("seed a divergent v9 schema_version with no memory_provenance");
+
+        let before: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='memory_provenance'",
+                [],
+                |r| r.get(0),
+            )
+            .expect("count before");
+        assert_eq!(before, 0, "precondition: memory_provenance must be absent");
+
+        apply(&mut conn).expect("apply must not error on a divergent-version db");
+
+        let after: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='memory_provenance'",
+                [],
+                |r| r.get(0),
+            )
+            .expect("count after");
+        assert_eq!(
+            after, 1,
+            "apply() must self-heal memory_provenance even though schema_version already lists 7"
+        );
+
+        // And it must be usable, not just present.
+        conn.execute(
+            "INSERT INTO memory_provenance (session_id, project_slug, memory_file, action, ts)
+             VALUES ('andon-user', 'P', 'm.md', 'edit', 1)",
+            [],
+        )
+        .expect("healed table must accept inserts");
+    }
+
+    #[test]
+    fn ensure_required_objects_is_idempotent_on_a_normal_db() {
+        // Running apply() twice (the every-startup case) must not error, since
+        // ensure_required_objects re-asserts MIGRATION_V7 each time.
+        let mut conn = Connection::open_in_memory().expect("open in-memory db");
+        apply(&mut conn).expect("first apply");
+        apply(&mut conn).expect("second apply must be a no-op, not an error");
+    }
 
     #[test]
     fn v3_adds_repo_columns_and_indexes() {
