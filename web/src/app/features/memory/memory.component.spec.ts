@@ -542,5 +542,130 @@ describe('MemoryComponent', () => {
     expect(fixture.componentInstance.editing()).toBe('b.md');
   });
 
+  it('refresh mid-edit preserves the draft and editing (does not vaporize unsaved keystrokes)', () => {
+    flushProjects();
+    http.expectOne('http://127.0.0.1:8765/api/memory/D--Repos-andon').flush({
+      slug: 'D--Repos-andon',
+      index: null,
+      entries: [
+        {
+          doc: { file: 'user_role.md', name: null, description: null, kind: null, body: 'b', raw: 'b', parse_ok: true },
+          origin: null,
+        },
+      ],
+    });
+    fixture.detectChanges();
+
+    const entry = fixture.componentInstance.entries()[0];
+    fixture.componentInstance.startEdit(entry);
+    fixture.componentInstance.draft.set('unsaved keystrokes');
+
+    // The always-visible manual Refresh button, mid-edit — must not clear the draft.
+    fixture.componentInstance.refresh();
+    http.expectOne('http://127.0.0.1:8765/api/memory/D--Repos-andon').flush({
+      slug: 'D--Repos-andon',
+      index: null,
+      entries: [
+        {
+          doc: { file: 'user_role.md', name: null, description: null, kind: null, body: 'b', raw: 'b', parse_ok: true },
+          origin: null,
+        },
+      ],
+    });
+    fixture.detectChanges();
+
+    expect(fixture.componentInstance.editing()).toBe('user_role.md');
+    expect(fixture.componentInstance.draft()).toBe('unsaved keystrokes');
+  });
+
+  it('drops a late memoryList response for a project the user has already left', () => {
+    fixture.detectChanges();
+    http.expectOne('http://127.0.0.1:8765/api/memory/projects').flush([
+      { slug: 'proj-a', label: 'Project A', count: 1 },
+      { slug: 'proj-b', label: 'Project B', count: 1 },
+    ]);
+    fixture.detectChanges();
+
+    // proj-a is auto-selected by ngOnInit; its GET is now in flight.
+    const reqA = http.expectOne('http://127.0.0.1:8765/api/memory/proj-a');
+
+    // Switch to proj-b before A resolves.
+    fixture.componentInstance.select('proj-b');
+    fixture.detectChanges();
+    const reqB = http.expectOne('http://127.0.0.1:8765/api/memory/proj-b');
+
+    reqB.flush({
+      slug: 'proj-b',
+      index: null,
+      entries: [
+        {
+          doc: {
+            file: 'user_role.md',
+            name: null,
+            description: null,
+            kind: null,
+            body: 'B body',
+            raw: 'B raw',
+            parse_ok: true,
+          },
+          origin: null,
+        },
+      ],
+    });
+    fixture.detectChanges();
+
+    // A finally resolves, after B — same-named file, different project. Must be dropped.
+    reqA.flush({
+      slug: 'proj-a',
+      index: null,
+      entries: [
+        {
+          doc: {
+            file: 'user_role.md',
+            name: null,
+            description: null,
+            kind: null,
+            body: 'A body',
+            raw: 'A raw',
+            parse_ok: true,
+          },
+          origin: null,
+        },
+      ],
+    });
+    fixture.detectChanges();
+
+    expect(fixture.componentInstance.slug()).toBe('proj-b');
+    expect(fixture.componentInstance.entries()[0].doc.body).toBe('B body');
+    expect(fixture.componentInstance.loading()).toBe(false);
+  });
+
+  it('does not let a dropped stale response clear loading owned by a newer in-flight request', () => {
+    fixture.detectChanges();
+    http.expectOne('http://127.0.0.1:8765/api/memory/projects').flush([
+      { slug: 'proj-a', label: 'Project A', count: 1 },
+      { slug: 'proj-b', label: 'Project B', count: 1 },
+    ]);
+    fixture.detectChanges();
+
+    const reqA = http.expectOne('http://127.0.0.1:8765/api/memory/proj-a');
+
+    fixture.componentInstance.select('proj-b');
+    fixture.detectChanges();
+    const reqB = http.expectOne('http://127.0.0.1:8765/api/memory/proj-b');
+
+    // B's request is still in flight when A's stale response resolves.
+    expect(fixture.componentInstance.loading()).toBe(true);
+    reqA.flush({ slug: 'proj-a', index: null, entries: [] });
+    fixture.detectChanges();
+
+    // A's dropped response must not have cleared loading — B's request still owns it.
+    expect(fixture.componentInstance.loading()).toBe(true);
+
+    reqB.flush({ slug: 'proj-b', index: null, entries: [] });
+    fixture.detectChanges();
+    expect(fixture.componentInstance.loading()).toBe(false);
+  });
+
   afterEach(() => http.verify());
 });

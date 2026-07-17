@@ -50,7 +50,20 @@ export class MemoryComponent implements OnInit {
     });
   }
 
+  /**
+   * Owns per-project invalidation. Edit state is scoped to the project it was
+   * started under, so it is only stale — and only cleared — when the project
+   * actually changes. Re-selecting the SAME project (e.g. the dropdown firing
+   * a redundant change event) is not a switch: nothing invalidated, so an
+   * in-progress edit survives it, same as a manual refresh now does.
+   */
   select(slug: string): void {
+    if (this.slug() !== slug) {
+      this.editing.set(null);
+      this.editingSlug.set(null);
+      this.draft.set('');
+      this.actionError.set(null);
+    }
     this.slug.set(slug);
     this.refresh();
   }
@@ -63,26 +76,36 @@ export class MemoryComponent implements OnInit {
     this.select((event.target as HTMLSelectElement).value);
   }
 
-  /** Reads from disk on demand. No watcher: memory changes at most once a session. */
+  /**
+   * Reads from disk on demand. No watcher: memory changes at most once a session.
+   *
+   * Deliberately does NOT touch `editing`/`editingSlug`/`draft`: this is called both
+   * by `select()` (project switch) and by the always-visible manual Refresh button, and
+   * a same-project refresh must not vaporize an in-progress edit. Per-project invalidation
+   * lives in `select()`, which is the only place the project actually changes.
+   *
+   * The request's slug is captured locally and checked in BOTH handlers before touching
+   * `entries`/`index`/`loadError`/`loading`, so a response that resolves after the user has
+   * already switched projects is dropped rather than clobbering the now-current project's
+   * state. A dropped response never touches `loading`: the request that "owns" the current
+   * project already set `loading` true and will clear it itself when its own response lands.
+   */
   refresh(): void {
     const slug = this.slug();
     if (!slug) return;
     this.loading.set(true);
     this.loadError.set(false);
-    // Any refresh invalidates in-flight edit state: entries just changed underneath it,
-    // and this is also how a project switch (select() always calls refresh()) discards
-    // a stale draft rather than letting it render against the newly selected project.
-    this.editing.set(null);
-    this.editingSlug.set(null);
-    this.draft.set('');
     this.actionError.set(null);
-    this.api.memoryList(slug).subscribe({
+    const requestSlug = slug;
+    this.api.memoryList(requestSlug).subscribe({
       next: (r) => {
+        if (this.slug() !== requestSlug) return;
         this.entries.set(r.entries);
         this.index.set(r.index);
         this.loading.set(false);
       },
       error: () => {
+        if (this.slug() !== requestSlug) return;
         this.entries.set([]);
         this.index.set(null);
         this.loadError.set(true);
