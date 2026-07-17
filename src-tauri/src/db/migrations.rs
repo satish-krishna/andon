@@ -186,6 +186,25 @@ ALTER TABLE cost_entries ADD COLUMN is_subagent INTEGER NOT NULL DEFAULT 0;
 ALTER TABLE token_usage  ADD COLUMN is_subagent INTEGER NOT NULL DEFAULT 0;
 "#;
 
+const MIGRATION_V7: &str = r#"
+-- Append-only ledger mapping a memory file to the session that wrote it.
+-- Rows outlive their files: deleting a memory appends a 'delete' row rather
+-- than removing history, which is what makes churn (a human delete followed
+-- by a model re-create) observable.
+-- No FK to sessions on purpose: UI edits use the 'andon-user' sentinel, which
+-- is not a session id, and foreign_keys is ON.
+CREATE TABLE IF NOT EXISTS memory_provenance (
+    id           INTEGER PRIMARY KEY AUTOINCREMENT,
+    session_id   TEXT    NOT NULL,
+    project_slug TEXT    NOT NULL,
+    memory_file  TEXT    NOT NULL,
+    action       TEXT    NOT NULL,
+    ts           INTEGER NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_memory_prov_file
+    ON memory_provenance(project_slug, memory_file, ts DESC);
+"#;
+
 const MIGRATIONS: &[(i32, &str)] = &[
     (1, MIGRATION_V1),
     (2, MIGRATION_V2),
@@ -193,6 +212,7 @@ const MIGRATIONS: &[(i32, &str)] = &[
     (4, MIGRATION_V4),
     (5, MIGRATION_V5),
     (6, MIGRATION_V6),
+    (7, MIGRATION_V7),
 ];
 
 pub fn apply(conn: &mut Connection) -> Result<()> {
@@ -260,7 +280,7 @@ mod tests {
         let v: i32 = conn.query_row(
             "SELECT MAX(version) FROM schema_version", [], |r| r.get(0)
         ).unwrap();
-        assert_eq!(v, 6);
+        assert_eq!(v, 7);
     }
 
     #[test]
@@ -271,7 +291,7 @@ mod tests {
         let v: i32 = conn.query_row(
             "SELECT MAX(version) FROM schema_version", [], |r| r.get(0)
         ).unwrap();
-        assert_eq!(v, 6);
+        assert_eq!(v, 7);
     }
 
     #[test]
@@ -302,7 +322,7 @@ mod tests {
         let v: i32 = conn.query_row(
             "SELECT MAX(version) FROM schema_version", [], |r| r.get(0),
         ).unwrap();
-        assert_eq!(v, 6);
+        assert_eq!(v, 7);
     }
 
     #[test]
@@ -335,7 +355,7 @@ mod tests {
         let v: i32 = conn.query_row(
             "SELECT MAX(version) FROM schema_version", [], |r| r.get(0),
         ).unwrap();
-        assert_eq!(v, 6);
+        assert_eq!(v, 7);
     }
 
     #[test]
@@ -354,6 +374,47 @@ mod tests {
         let v: i32 = conn.query_row(
             "SELECT MAX(version) FROM schema_version", [], |r| r.get(0),
         ).unwrap();
-        assert_eq!(v, 6);
+        assert_eq!(v, 7);
+    }
+
+    #[test]
+    fn v7_creates_memory_provenance() {
+        let mut conn = Connection::open_in_memory().expect("open in-memory db");
+        apply(&mut conn).expect("migrations apply");
+
+        let cols: Vec<String> = conn
+            .prepare("PRAGMA table_info(memory_provenance)")
+            .and_then(|mut s| {
+                s.query_map([], |r| r.get::<_, String>(1))
+                    .and_then(|rows| rows.collect())
+            })
+            .expect("table_info");
+        for expected in ["session_id", "project_slug", "memory_file", "action", "ts"] {
+            assert!(cols.contains(&expected.to_string()), "missing column {expected}");
+        }
+
+        let idxs: Vec<String> = conn
+            .prepare("SELECT name FROM sqlite_master WHERE type='index' AND tbl_name='memory_provenance'")
+            .and_then(|mut s| {
+                s.query_map([], |r| r.get::<_, String>(0))
+                    .and_then(|rows| rows.collect())
+            })
+            .expect("index list");
+        assert!(idxs.contains(&"idx_memory_prov_file".to_string()));
+    }
+
+    #[test]
+    fn memory_provenance_accepts_the_andon_user_sentinel() {
+        // No FK to sessions: a UI edit has no session row, and foreign_keys is ON in db::init.
+        let mut conn = Connection::open_in_memory().expect("open in-memory db");
+        conn.execute_batch("PRAGMA foreign_keys = ON;").expect("enable fks");
+        apply(&mut conn).expect("migrations apply");
+
+        conn.execute(
+            "INSERT INTO memory_provenance (session_id, project_slug, memory_file, action, ts)
+             VALUES ('andon-user', 'D--Repos-andon', 'user_role.md', 'edit', 1)",
+            [],
+        )
+        .expect("sentinel insert must not be rejected by a foreign key");
     }
 }
