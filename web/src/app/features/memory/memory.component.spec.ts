@@ -667,5 +667,120 @@ describe('MemoryComponent', () => {
     expect(fixture.componentInstance.loading()).toBe(false);
   });
 
+  it('clears the history cache when the project changes', () => {
+    fixture.detectChanges();
+    http.expectOne('http://127.0.0.1:8765/api/memory/projects').flush([
+      { slug: 'proj-a', label: 'Project A', count: 1 },
+      { slug: 'proj-b', label: 'Project B', count: 1 },
+    ]);
+    fixture.detectChanges();
+
+    // proj-a is auto-selected by ngOnInit.
+    http.expectOne('http://127.0.0.1:8765/api/memory/proj-a').flush({
+      slug: 'proj-a',
+      index: null,
+      entries: [
+        {
+          doc: {
+            file: 'user_role.md',
+            name: null,
+            description: null,
+            kind: null,
+            body: 'A body',
+            raw: 'A raw',
+            parse_ok: true,
+          },
+          origin: null,
+        },
+      ],
+    });
+    fixture.detectChanges();
+
+    // Fetch history for a file in proj-a.
+    fixture.componentInstance.toggleHistory('user_role.md');
+    http
+      .expectOne(
+        (r) =>
+          r.url === 'http://127.0.0.1:8765/api/memory/proj-a/provenance' &&
+          r.params.get('file') === 'user_role.md',
+      )
+      .flush([{ session_id: 'sess-a', action: 'create', ts: 1 }]);
+    fixture.detectChanges();
+
+    // Cache should be populated with proj-a's history.
+    expect(fixture.componentInstance.history()['user_role.md']).toBeDefined();
+    expect(fixture.componentInstance.history()['user_role.md'][0].session_id).toBe('sess-a');
+
+    // Switch to proj-b, which also has user_role.md.
+    fixture.componentInstance.select('proj-b');
+    fixture.detectChanges();
+    http.expectOne('http://127.0.0.1:8765/api/memory/proj-b').flush({
+      slug: 'proj-b',
+      index: null,
+      entries: [
+        {
+          doc: {
+            file: 'user_role.md',
+            name: null,
+            description: null,
+            kind: null,
+            body: 'B body',
+            raw: 'B raw',
+            parse_ok: true,
+          },
+          origin: null,
+        },
+      ],
+    });
+    fixture.detectChanges();
+
+    // Cache and openHistory should be cleared on project switch.
+    expect(fixture.componentInstance.history()).toEqual({});
+    expect(fixture.componentInstance.openHistory()).toBeNull();
+  });
+
+  it('shows human edits as andon-user rather than a session link', () => {
+    flushProjects();
+    http.expectOne('http://127.0.0.1:8765/api/memory/D--Repos-andon').flush({
+      slug: 'D--Repos-andon',
+      index: null,
+      entries: [
+        {
+          doc: {
+            file: 'user_role.md',
+            name: 'user-role',
+            description: null,
+            kind: 'user',
+            body: 'b',
+            raw: 'b',
+            parse_ok: true,
+          },
+          origin: { session_id: 'andon-user', action: 'edit', ts: 2 },
+        },
+      ],
+    });
+    fixture.detectChanges();
+
+    fixture.componentInstance.toggleHistory('user_role.md');
+    // expectOne(string) matches req.url, which excludes query params — match on a
+    // predicate so the `file` param is actually asserted.
+    http
+      .expectOne(
+        (r) =>
+          r.url === 'http://127.0.0.1:8765/api/memory/D--Repos-andon/provenance' &&
+          r.params.get('file') === 'user_role.md',
+      )
+      .flush([
+        { session_id: 'andon-user', action: 'edit', ts: 2 },
+        { session_id: 'sess-1', action: 'create', ts: 1 },
+      ]);
+    fixture.detectChanges();
+
+    const el = fixture.nativeElement as HTMLElement;
+    expect(el.textContent).toContain('You, in Andon');
+    expect(el.querySelector('a[href="/sessions/andon-user"]')).toBeNull();
+    expect(el.querySelector('a[href="/sessions/sess-1"]')).toBeTruthy();
+  });
+
   afterEach(() => http.verify());
 });

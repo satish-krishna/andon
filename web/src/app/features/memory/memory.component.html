@@ -136,14 +136,43 @@
         </div>
       }
 
-      <div class="text-xs text-muted">
-        @if (e.origin) {
-          Last written by
-          <a class="text-accent underline" [routerLink]="['/sessions', e.origin.session_id]">
-            {{ e.origin.session_id }}
-          </a>
-        } @else {
-          Origin unknown — this memory predates provenance tracking.
+      <div class="space-y-1 text-xs text-muted">
+        <div class="flex items-center gap-2">
+          @if (e.origin) {
+            <span>
+              Last written by
+              @if (isAndonUser(e.origin)) {
+                <span class="text-text">You, in Andon</span>
+              } @else {
+                <a class="text-accent underline" [routerLink]="['/sessions', e.origin.session_id]">
+                  {{ e.origin.session_id }}
+                </a>
+              }
+            </span>
+          } @else {
+            <span>Origin unknown — this memory predates provenance tracking.</span>
+          }
+          <button class="underline" (click)="toggleHistory(e.doc.file)">
+            {{ openHistory() === e.doc.file ? 'Hide history' : 'History' }}
+          </button>
+        </div>
+
+        @if (openHistory() === e.doc.file) {
+          <ul class="space-y-0.5 border-l border-border pl-2">
+            @for (t of history()[e.doc.file] ?? []; track t.ts) {
+              <li>
+                <span class="text-muted">{{ t.action }}</span>
+                —
+                @if (isAndonUser(t)) {
+                  <span class="text-text">You, in Andon</span>
+                } @else {
+                  <a class="text-accent underline" [routerLink]="['/sessions', t.session_id]">
+                    {{ t.session_id }}
+                  </a>
+                }
+              </li>
+            }
+          </ul>
         }
       </div>
     </article>

@@ -2,7 +2,7 @@ import { ChangeDetectionStrategy, Component, OnInit, inject, signal } from '@ang
 import { RouterLink } from '@angular/router';
 import { LucideAngularModule } from 'lucide-angular';
 import { ApiService } from '../../core/api.service';
-import { MemoryEntry, MemoryProject } from '../../core/models';
+import { MemoryEntry, MemoryProject, MemoryTouch } from '../../core/models';
 
 @Component({
   selector: 'app-memory',
@@ -30,6 +30,8 @@ export class MemoryComponent implements OnInit {
   readonly editingSlug = signal<string | null>(null);
   /** Set when a save or delete fails. Must never be confused with a silent success. */
   readonly actionError = signal<string | null>(null);
+  readonly openHistory = signal<string | null>(null);
+  readonly history = signal<Record<string, MemoryTouch[]>>({});
 
   ngOnInit(): void {
     this.api.memoryProjects().subscribe({
@@ -63,9 +65,31 @@ export class MemoryComponent implements OnInit {
       this.editingSlug.set(null);
       this.draft.set('');
       this.actionError.set(null);
+      this.history.set({});
+      this.openHistory.set(null);
     }
     this.slug.set(slug);
     this.refresh();
+  }
+
+  /** Matches the sentinel written for UI edits and deletes (memory::provenance). */
+  isAndonUser(t: MemoryTouch): boolean {
+    return t.session_id === 'andon-user';
+  }
+
+  toggleHistory(file: string): void {
+    if (this.openHistory() === file) {
+      this.openHistory.set(null);
+      return;
+    }
+    this.openHistory.set(file);
+    const slug = this.slug();
+    if (!slug) return;
+    const requestSlug = slug;
+    this.api.memoryTouches(slug, file).subscribe((ts) => {
+      if (this.slug() !== requestSlug) return;
+      this.history.update((h) => ({ ...h, [file]: ts }));
+    });
   }
 
   toggleIndex(): void {
