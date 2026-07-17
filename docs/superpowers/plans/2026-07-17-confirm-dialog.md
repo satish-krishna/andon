@@ -90,6 +90,15 @@ describe('ConfirmDialogComponent', () => {
 
     expect(cancels).toBe(3);
   });
+
+  it('moves focus to the cancel button when the dialog opens', () => {
+    fixture.componentRef.setInput('request', { title: 't', message: 'm', confirmLabel: 'Delete', danger: true });
+    fixture.detectChanges();
+    // The focus effect runs once the @if renders the button; if activeElement is
+    // not yet the button, a second detectChanges() flushes the viewChild→effect tick.
+    fixture.detectChanges();
+    expect(document.activeElement).toBe(el().querySelector('[data-role="cancel"]'));
+  });
 });
 ```
 
@@ -102,7 +111,7 @@ Expected: FAIL — module `./confirm-dialog.component` does not exist.
 
 Create `web/src/app/shared/confirm-dialog.component.ts`:
 ```typescript
-import { ChangeDetectionStrategy, Component, HostListener, input, output } from '@angular/core';
+import { ChangeDetectionStrategy, Component, ElementRef, HostListener, effect, input, output, viewChild } from '@angular/core';
 
 export interface ConfirmRequest {
   title: string;
@@ -135,6 +144,7 @@ export interface ConfirmRequest {
           </div>
           <div class="flex justify-end gap-2 border-t border-border px-5 py-3">
             <button
+              #cancelBtn
               data-role="cancel"
               type="button"
               class="rounded border border-border px-3 py-1.5 text-sm text-text hover:bg-panel-2"
@@ -164,6 +174,19 @@ export class ConfirmDialogComponent {
   readonly request = input<ConfirmRequest | null>(null);
   readonly confirm = output<void>();
   readonly cancel = output<void>();
+
+  private readonly cancelBtn = viewChild<ElementRef<HTMLButtonElement>>('cancelBtn');
+
+  constructor() {
+    // Move focus to Cancel when the dialog opens: the safe default for a
+    // destructive action, so Enter does not fire the confirm. The viewChild
+    // signal updates when the @if renders the button, so this effect runs
+    // once the element exists.
+    effect(() => {
+      const btn = this.cancelBtn();
+      if (this.request() && btn) btn.nativeElement.focus();
+    });
+  }
 
   @HostListener('document:keydown.escape')
   onEscape(): void {
@@ -669,10 +692,10 @@ Only if Step 4 surfaced a fix.
 - Memory discard-draft restructure → Task 3. ✓
 - Settings unpatch/restore + new spec → Task 4. ✓
 - No window.confirm remains → Task 2 Step 6, Task 3 Step 4, Task 4 Step 5, Task 5 Step 2 grep guards. ✓
-- Default focus on Cancel → NOTE: the component does not implement programmatic focus-on-open; Esc/backdrop/buttons are covered and tested. If focus-on-open is required, add it in Task 1 via `afterNextRender` + a `viewChild` on the cancel button and verify in the live step (jsdom focus timing is unreliable to unit-test). Flagged for the reviewer to decide whether to require it.
+- Default focus on Cancel → Task 1: implemented via a `viewChild` on the cancel button + an `effect` that focuses it when the dialog opens, with a jsdom focus test. Also confirmed in the live step. ✓
 - Theme tokens only → Tailwind classes map to `--color-*`; no raw hex in the component. ✓
 - Existing test rework → Task 2 Step 4, Task 3 Step 1. ✓
 
-**Placeholder scan:** No TBD/TODO. Two items require an on-the-spot lookup, both flagged inline: the settings API endpoint URL in Task 4 Step 1 (confirm against `api.service.ts`), and the focus-on-open decision above.
+**Placeholder scan:** No TBD/TODO. One item requires an on-the-spot lookup, flagged inline: the settings API endpoint URL in Task 4 Step 1 (confirm against `api.service.ts`).
 
 **Type consistency:** `ConfirmRequest` and `ConfirmDialogComponent` from `shared/confirm-dialog.component`; `pendingConfirm`/`confirmRequest`/`onConfirm`/`onCancel` names consistent across Tasks 2–4; `PendingConfirm` union widened in Task 3 matches the `confirmRequest` branches.
