@@ -3,6 +3,7 @@ import { importProvidersFrom } from '@angular/core';
 import { provideHttpClient } from '@angular/common/http';
 import { provideHttpClientTesting, HttpTestingController } from '@angular/common/http/testing';
 import { provideRouter } from '@angular/router';
+import { provideMarkdown } from 'ngx-markdown';
 import { vi } from 'vitest';
 import { LucideAngularModule } from 'lucide-angular';
 import { APP_ICONS } from '../../core/icons';
@@ -19,6 +20,7 @@ describe('MemoryComponent', () => {
         provideHttpClient(),
         provideHttpClientTesting(),
         provideRouter([]),
+        provideMarkdown(),
         importProvidersFrom(LucideAngularModule.pick(APP_ICONS)),
       ],
     }).compileComponents();
@@ -1048,6 +1050,110 @@ describe('MemoryComponent', () => {
     // switcher or masquerade as a page-level load error.
     expect(fixture.componentInstance.projects().length).toBe(1);
     expect(fixture.componentInstance.loadError()).toBe(false);
+  });
+
+  it('renders a parsed memory body as markdown, not literal text', async () => {
+    flushProjects();
+    http.expectOne('http://127.0.0.1:8765/api/memory/D--Repos-andon').flush({
+      slug: 'D--Repos-andon',
+      index: null,
+      entries: [
+        {
+          doc: {
+            file: 'guide.md',
+            name: 'guide',
+            description: null,
+            kind: 'reference',
+            body: '# Big Heading\n\nSome **bold** text.\n\n```ts\nconst x = 1;\n```',
+            raw: '# Big Heading\n\nSome **bold** text.',
+            parse_ok: true,
+          },
+          origin: null,
+        },
+      ],
+    });
+    fixture.detectChanges();
+    await fixture.whenStable();
+
+    const el = fixture.nativeElement as HTMLElement;
+    // Markdown was parsed into real elements, not shown as literal "# Big Heading".
+    const h1 = el.querySelector('.md-render h1');
+    expect(h1?.textContent).toContain('Big Heading');
+    expect(el.querySelector('.md-render strong')?.textContent).toBe('bold');
+    expect(el.querySelector('.md-render pre code')).toBeTruthy();
+    // The raw hash must NOT appear as visible text.
+    expect(el.querySelector('.md-render')?.textContent).not.toContain('# Big Heading');
+  });
+
+  it('renders an unparsed memory as raw text, not markdown', async () => {
+    flushProjects();
+    http.expectOne('http://127.0.0.1:8765/api/memory/D--Repos-andon').flush({
+      slug: 'D--Repos-andon',
+      index: null,
+      entries: [
+        {
+          doc: {
+            file: 'broken.md',
+            name: null,
+            description: null,
+            kind: null,
+            body: '---\nname: broken\n---\n# Not really a heading',
+            raw: '---\nname: broken\n---\n# Not really a heading',
+            parse_ok: false,
+          },
+          origin: null,
+        },
+      ],
+    });
+    fixture.detectChanges();
+    await fixture.whenStable();
+
+    const el = fixture.nativeElement as HTMLElement;
+    // Unparsed files must NOT be markdown-rendered.
+    expect(el.querySelector('.md-render')).toBeNull();
+    // The raw text is shown verbatim in a <pre>, hashes and dashes intact.
+    const pre = el.querySelector('pre');
+    expect(pre?.textContent).toContain('# Not really a heading');
+    expect(pre?.textContent).toContain('---');
+  });
+
+  it('neutralizes a hostile memory body — no script, handlers, or javascript: survive', async () => {
+    flushProjects();
+    http.expectOne('http://127.0.0.1:8765/api/memory/D--Repos-andon').flush({
+      slug: 'D--Repos-andon',
+      index: null,
+      entries: [
+        {
+          doc: {
+            file: 'evil.md',
+            name: 'evil',
+            description: null,
+            kind: null,
+            body:
+              'Look here:\n\n' +
+              '<img src=x onerror="window.__xss=1">\n\n' +
+              '<script>window.__xss=1</script>\n\n' +
+              '<a href="javascript:window.__xss=1" onclick="window.__xss=1">click</a>',
+            raw: 'irrelevant',
+            parse_ok: true,
+          },
+          origin: null,
+        },
+      ],
+    });
+    fixture.detectChanges();
+    await fixture.whenStable();
+
+    const md = (fixture.nativeElement as HTMLElement).querySelector('.md-render')!;
+    expect(md.querySelector('script')).toBeNull();
+    const img = md.querySelector('img');
+    expect(img?.getAttribute('onerror')).toBeNull();
+    const anchor = md.querySelector('a');
+    expect(anchor?.getAttribute('onclick')).toBeNull();
+    // DomSanitizer prefixes dangerous URLs with 'unsafe:' to mark them inert and prevent execution.
+    // Either the attribute is removed entirely or it's safe (not executable).
+    const href = anchor?.getAttribute('href') ?? '';
+    expect(href === '' || href.startsWith('unsafe:')).toBe(true);
   });
 
   afterEach(() => http.verify());

@@ -179,3 +179,19 @@
   filter: invert(0.8);
   cursor: pointer;
 }
+
+.md-render { line-height: 1.55; }
+.md-render h1 { font-size: 1.35rem; font-weight: 600; margin: 0.6em 0 0.35em; }
+.md-render h2 { font-size: 1.15rem; font-weight: 600; margin: 0.6em 0 0.35em; }
+.md-render h3 { font-size: 1.02rem; font-weight: 600; margin: 0.6em 0 0.35em; }
+.md-render p { margin: 0.4em 0; }
+.md-render ul, .md-render ol { margin: 0.4em 0; padding-left: 1.4em; }
+.md-render li { margin: 0.15em 0; }
+.md-render a { color: var(--color-accent); text-decoration: underline; }
+.md-render code { font-family: ui-monospace, monospace; font-size: 0.9em; }
+.md-render :not(pre) > code { background: var(--color-panel-2); padding: 0.1em 0.35em; border-radius: 4px; }
+.md-render pre { background: var(--color-panel); border: 1px solid var(--color-border); border-radius: 8px; padding: 0.7em 0.9em; overflow-x: auto; margin: 0.5em 0; }
+.md-render blockquote { border-left: 3px solid var(--color-border); margin: 0.5em 0; padding-left: 0.8em; color: var(--color-muted); }
+.md-render table { border-collapse: collapse; margin: 0.5em 0; }
+.md-render th, .md-render td { border: 1px solid var(--color-border); padding: 0.25em 0.6em; }
+.md-render img { max-width: 100%; }

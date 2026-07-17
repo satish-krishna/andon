@@ -1,13 +1,14 @@
 import { ChangeDetectionStrategy, Component, OnInit, inject, signal } from '@angular/core';
 import { RouterLink } from '@angular/router';
 import { LucideAngularModule } from 'lucide-angular';
+import { MarkdownComponent } from 'ngx-markdown';
 import { ApiService } from '../../core/api.service';
 import { MemoryEntry, MemoryProject, MemoryTouch } from '../../core/models';
 
 @Component({
   selector: 'app-memory',
   standalone: true,
-  imports: [RouterLink, LucideAngularModule],
+  imports: [RouterLink, LucideAngularModule, MarkdownComponent],
   templateUrl: './memory.component.html',
   changeDetection: ChangeDetectionStrategy.OnPush,
 })
