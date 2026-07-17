@@ -121,6 +121,38 @@ mod tests {
         assert_eq!(last_touch(&c, "P", "m.md").expect("some touch").session_id, "sess-b");
     }
 
+    /// `idx_memory_prov_file(project_slug, memory_file, ts DESC)` already returns
+    /// rows in `ts DESC` order as an artifact of the index scan, so a test that
+    /// only varies `ts` cannot tell whether `ORDER BY ts DESC, id DESC` is doing
+    /// any work. Two rows sharing the same `ts` break that coincidence: the
+    /// index's internal tiebreak is rowid ASCENDING, while the query's tiebreak
+    /// is `id DESC`. Only a real `ORDER BY id DESC` produces last-inserted-first
+    /// here; the index's natural scan order alone would produce the opposite.
+    #[test]
+    fn touches_breaks_ts_ties_by_most_recent_insert_first() {
+        let c = db();
+        record(&c, "sess-first", "P", "m.md", Action::Create, 100).expect("record first");
+        record(&c, "sess-second", "P", "m.md", Action::Update, 100).expect("record second");
+
+        let got = touches(&c, "P", "m.md").expect("touches");
+        assert_eq!(got.len(), 2);
+        assert_eq!(got[0].session_id, "sess-second", "last-inserted row must come first on a ts tie");
+        assert_eq!(got[1].session_id, "sess-first");
+    }
+
+    #[test]
+    fn last_touch_breaks_ts_ties_by_most_recent_insert_first() {
+        let c = db();
+        record(&c, "sess-first", "P", "m.md", Action::Create, 100).expect("record first");
+        record(&c, "sess-second", "P", "m.md", Action::Update, 100).expect("record second");
+
+        assert_eq!(
+            last_touch(&c, "P", "m.md").expect("some touch").session_id,
+            "sess-second",
+            "last_touch must name the most recently inserted session on a ts tie"
+        );
+    }
+
     #[test]
     fn last_touch_is_none_for_a_pre_ledger_memory() {
         let c = db();
