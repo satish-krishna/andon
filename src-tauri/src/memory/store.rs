@@ -110,7 +110,14 @@ fn list_in(dir: &Path) -> Vec<MemoryDoc> {
             if file == INDEX_FILE {
                 return None;
             }
-            let raw = std::fs::read_to_string(&path).ok()?;
+            // Honor the same containment boundary as read/save/delete: resolve
+            // each entry through the guard, which canonicalizes (following any
+            // symlink) and rejects anything that lands outside `dir`. Without
+            // this a symlinked `.md` inside the folder would be read through to
+            // its out-of-tree target. Read the guarded canonical path, never the
+            // raw dirent path.
+            let safe = guard_under(dir, &file)?;
+            let raw = std::fs::read_to_string(&safe).ok()?;
             Some(parse_doc(&file, &raw))
         })
         .collect();
@@ -137,15 +144,19 @@ fn count_in(dir: &Path) -> usize {
     };
     entries
         .flatten()
-        .filter(|e| {
+        .filter_map(|e| {
             let path = e.path();
             if path.extension().and_then(|x| x.to_str()) != Some("md") {
-                return false;
+                return None;
             }
-            match path.file_name().and_then(|f| f.to_str()) {
-                Some(file) => file != INDEX_FILE,
-                None => false,
+            let file = path.file_name()?.to_str()?.to_string();
+            if file == INDEX_FILE {
+                return None;
             }
+            // Same containment guard as list_in, so the count agrees with the
+            // list even when an entry is a symlink escaping the folder or a
+            // directory named `*.md`.
+            guard_under(dir, &file)
         })
         .count()
 }
@@ -465,5 +476,71 @@ mod tests {
     fn count_in_is_zero_for_a_missing_directory() {
         let missing = std::env::temp_dir().join("andon-storetest-count-missing-does-not-exist");
         assert_eq!(count_in(&missing), 0);
+    }
+
+    #[test]
+    fn list_and_count_exclude_a_directory_named_like_a_memory_file() {
+        // A non-regular-file entry whose name ends in `.md` (here, a
+        // subdirectory) must be excluded from BOTH the list and the count, and
+        // the two must still agree. This is the privilege-free proof that the
+        // read/count paths honor the guard's `is_file()` containment: without
+        // the guard, count_in counts the directory (name + extension only)
+        // while list_in drops it (reading a directory errors), so the two
+        // disagree. It needs no symlink and therefore has teeth on every
+        // machine, unlike the symlink case below.
+        let base = unique_temp_dir("andon-storetest-dirmd");
+        fs::write(base.join("real.md"), "an in-tree memory").expect("write real.md");
+        fs::create_dir(base.join("subdir.md")).expect("create a directory named subdir.md");
+        let base = canon(&base);
+
+        let docs = list_in(&base);
+        let names: Vec<&str> = docs.iter().map(|d| d.file.as_str()).collect();
+
+        assert_eq!(names, vec!["real.md"], "only the real file lists; the directory is excluded");
+        assert_eq!(
+            count_in(&base),
+            docs.len(),
+            "count_in must agree with list_in even when a directory is named like a memory file"
+        );
+    }
+
+    #[test]
+    fn list_and_count_exclude_a_symlink_escaping_the_directory() {
+        // The reviewer's case: a `.md` entry that is a symlink to a file OUTSIDE
+        // the memory dir must not be read through and must not be counted -- the
+        // list/read path must honor the same containment boundary as
+        // read/save/delete. Creating a symlink needs privilege / Developer Mode
+        // on Windows; when it can't be made the assertions are skipped (the
+        // guard-application itself is proven privilege-free by the
+        // directory-named-like-a-memory-file test above).
+        let base = unique_temp_dir("andon-storetest-symlink");
+        let outside = unique_temp_dir("andon-storetest-symlink-outside");
+        fs::write(outside.join("secret.md"), "SECRET out-of-tree content").expect("write secret");
+        fs::write(base.join("real.md"), "an in-tree memory").expect("write real.md");
+
+        #[cfg(windows)]
+        let linked =
+            std::os::windows::fs::symlink_file(outside.join("secret.md"), base.join("evil.md")).is_ok();
+        #[cfg(unix)]
+        let linked = std::os::unix::fs::symlink(outside.join("secret.md"), base.join("evil.md")).is_ok();
+
+        let base = canon(&base);
+        let docs = list_in(&base);
+        let names: Vec<&str> = docs.iter().map(|d| d.file.as_str()).collect();
+        assert!(names.contains(&"real.md"), "the real in-tree memory must list");
+        assert_eq!(count_in(&base), docs.len(), "count_in must agree with list_in");
+
+        if linked {
+            assert!(
+                !names.contains(&"evil.md"),
+                "a symlink escaping the memory dir must be excluded from the list"
+            );
+            assert!(
+                !docs.iter().any(|d| d.body.contains("SECRET out-of-tree content")),
+                "out-of-tree content must never be surfaced through a symlink"
+            );
+        } else {
+            eprintln!("skipping symlink assertions: could not create a symlink (privilege?)");
+        }
     }
 }
