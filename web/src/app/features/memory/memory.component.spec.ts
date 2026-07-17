@@ -567,36 +567,48 @@ describe('MemoryComponent', () => {
     expect(text).toContain("Couldn't delete");
   });
 
-  it('confirms before discarding a dirty draft when switching edit targets', () => {
+  it('opens the discard dialog when switching edit targets with a dirty draft, and stays on cancel', () => {
     flushProjects();
     http.expectOne('http://127.0.0.1:8765/api/memory/D--Repos-andon').flush({
-      slug: 'D--Repos-andon',
-      index: null,
+      slug: 'D--Repos-andon', index: null,
       entries: [
-        {
-          doc: { file: 'a.md', name: null, description: null, kind: null, body: 'a', raw: 'a', parse_ok: true },
-          origin: null,
-        },
-        {
-          doc: { file: 'b.md', name: null, description: null, kind: null, body: 'b', raw: 'b', parse_ok: true },
-          origin: null,
-        },
+        { doc: { file: 'a.md', name: null, description: null, kind: null, body: 'a', raw: 'a', parse_ok: true }, origin: null },
+        { doc: { file: 'b.md', name: null, description: null, kind: null, body: 'b', raw: 'b', parse_ok: true }, origin: null },
       ],
     });
     fixture.detectChanges();
+    const [a, b] = fixture.componentInstance.entries();
+    fixture.componentInstance.startEdit(a);
+    fixture.componentInstance.draft.set('dirty');
 
-    const [entryA, entryB] = fixture.componentInstance.entries();
-    fixture.componentInstance.startEdit(entryA);
-    fixture.componentInstance.draft.set('dirty change');
-
-    const confirmSpy = vi.spyOn(window, 'confirm').mockReturnValue(false);
-    confirmSpy.mockClear();
-    fixture.componentInstance.startEdit(entryB);
-
-    expect(confirmSpy).toHaveBeenCalled();
-    // Confirm declined — original edit target is preserved.
+    fixture.componentInstance.startEdit(b);
+    // Dialog opened; edit target unchanged until resolved.
+    expect(fixture.componentInstance.pendingConfirm()).not.toBeNull();
     expect(fixture.componentInstance.editing()).toBe('a.md');
-    expect(fixture.componentInstance.draft()).toBe('dirty change');
+
+    fixture.componentInstance.onCancel();
+    expect(fixture.componentInstance.editing()).toBe('a.md');
+    expect(fixture.componentInstance.draft()).toBe('dirty');
+  });
+
+  it('switches edit target on confirm of the discard dialog', () => {
+    flushProjects();
+    http.expectOne('http://127.0.0.1:8765/api/memory/D--Repos-andon').flush({
+      slug: 'D--Repos-andon', index: null,
+      entries: [
+        { doc: { file: 'a.md', name: null, description: null, kind: null, body: 'a', raw: 'a', parse_ok: true }, origin: null },
+        { doc: { file: 'b.md', name: null, description: null, kind: null, body: 'b', raw: 'b', parse_ok: true }, origin: null },
+      ],
+    });
+    fixture.detectChanges();
+    const [a, b] = fixture.componentInstance.entries();
+    fixture.componentInstance.startEdit(a);
+    fixture.componentInstance.draft.set('dirty');
+
+    fixture.componentInstance.startEdit(b);
+    fixture.componentInstance.onConfirm();
+    expect(fixture.componentInstance.editing()).toBe('b.md');
+    expect(fixture.componentInstance.draft()).toBe('b');
   });
 
   it('does not confirm when switching edit targets with an untouched draft', () => {
@@ -621,11 +633,9 @@ describe('MemoryComponent', () => {
     fixture.componentInstance.startEdit(entryA);
     // No changes made to the draft.
 
-    const confirmSpy = vi.spyOn(window, 'confirm').mockReturnValue(true);
-    confirmSpy.mockClear();
     fixture.componentInstance.startEdit(entryB);
 
-    expect(confirmSpy).not.toHaveBeenCalled();
+    expect(fixture.componentInstance.pendingConfirm()).toBeNull();
     expect(fixture.componentInstance.editing()).toBe('b.md');
   });
 

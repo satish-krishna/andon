@@ -6,7 +6,9 @@ import { ConfirmDialogComponent, ConfirmRequest } from '../../shared/confirm-dia
 import { ApiService } from '../../core/api.service';
 import { MemoryEntry, MemoryProject, MemoryTouch } from '../../core/models';
 
-type PendingConfirm = { kind: 'delete'; slug: string; file: string };
+type PendingConfirm =
+  | { kind: 'delete'; slug: string; file: string }
+  | { kind: 'discard'; slug: string; target: MemoryEntry };
 
 @Component({
   selector: 'app-memory',
@@ -46,13 +48,15 @@ export class MemoryComponent implements OnInit {
   readonly confirmRequest = computed<ConfirmRequest | null>(() => {
     const p = this.pendingConfirm();
     if (!p) return null;
-    // kind === 'delete'
-    return {
-      title: 'Delete memory?',
-      message: `Delete ${p.file}? This is permanent — there is no undo.`,
-      confirmLabel: 'Delete',
-      danger: true,
-    };
+    if (p.kind === 'delete') {
+      return {
+        title: 'Delete memory?',
+        message: `Delete ${p.file}? This is permanent — there is no undo.`,
+        confirmLabel: 'Delete',
+        danger: true,
+      };
+    }
+    return { title: 'Discard changes?', message: `Discard unsaved changes to ${this.editing()}?`, confirmLabel: 'Discard', danger: true };
   });
 
   ngOnInit(): void {
@@ -213,8 +217,13 @@ export class MemoryComponent implements OnInit {
 
   startEdit(e: MemoryEntry): void {
     if (this.editing() && this.editing() !== e.doc.file && this.isCurrentDraftDirty()) {
-      if (!window.confirm(`Discard unsaved changes to ${this.editing()}?`)) return;
+      this.pendingConfirm.set({ kind: 'discard', slug: this.slug(), target: e });
+      return;
     }
+    this.applyEdit(e);
+  }
+
+  private applyEdit(e: MemoryEntry): void {
     this.editing.set(e.doc.file);
     this.editingSlug.set(this.slug());
     this.draft.set(e.doc.raw);
@@ -270,9 +279,11 @@ export class MemoryComponent implements OnInit {
     const p = this.pendingConfirm();
     if (!p) return;
     this.pendingConfirm.set(null);
-    // Defense in depth: operate on the captured slug, and refuse if the project
-    // changed under the open dialog. Mirrors the editingSlug guard in saveEdit.
     if (this.slug() !== p.slug) return;
+    if (p.kind === 'discard') {
+      this.applyEdit(p.target);
+      return;
+    }
     this.actionError.set(null);
     this.api.memoryDelete(p.slug, p.file).subscribe({
       next: () => {
