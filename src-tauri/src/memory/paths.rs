@@ -78,15 +78,14 @@ pub fn resolve_memory_path(slug: &str, rel: &str) -> Option<PathBuf> {
     guard_under(&memory_dir(slug)?, rel)
 }
 
-/// Given an absolute path a hook reported, decide whether it names a memory
-/// file and, if so, which project and relative file it belongs to.
-pub fn classify_memory_write(abs: &str) -> Option<(String, String)> {
-    let root = projects_root()?.canonicalize().ok()?;
+/// Core classification logic, testable against an arbitrary projects root.
+/// `root` must already be canonicalized by the caller.
+fn classify_memory_write_under(root: &Path, abs: &str) -> Option<(String, String)> {
     let path = PathBuf::from(abs).canonicalize().ok()?;
     if path.extension().and_then(|e| e.to_str()) != Some("md") {
         return None;
     }
-    let rest = path.strip_prefix(&root).ok()?;
+    let rest = path.strip_prefix(root).ok()?;
     let mut comps = rest.components();
     let slug = comps.next()?.as_os_str().to_str()?.to_string();
     if comps.next()?.as_os_str() != "memory" {
@@ -104,6 +103,13 @@ pub fn classify_memory_write(abs: &str) -> Option<(String, String)> {
         return None;
     }
     Some((slug, rel))
+}
+
+/// Given an absolute path a hook reported, decide whether it names a memory
+/// file and, if so, which project and relative file it belongs to.
+pub fn classify_memory_write(abs: &str) -> Option<(String, String)> {
+    let root = projects_root()?.canonicalize().ok()?;
+    classify_memory_write_under(&root, abs)
 }
 
 #[cfg(test)]
@@ -227,6 +233,103 @@ mod tests {
     fn guard_rejects_a_missing_file() {
         let base = temp_base();
         assert!(guard_under(&base, "nope.md").is_none());
+    }
+
+    /// A fresh temp directory standing in for `~/.claude/projects`, so
+    /// `classify_memory_write_under` can be exercised without touching the
+    /// real home directory.
+    fn temp_root() -> std::path::PathBuf {
+        let base = std::env::temp_dir().join(unique_temp_name("andon-classify-root"));
+        let _ = fs::remove_dir_all(&base);
+        fs::create_dir_all(&base).expect("create temp root");
+        fs::canonicalize(&base).expect("canonicalize temp root")
+    }
+
+    #[test]
+    fn classify_memory_write_under_accepts_a_memory_file() {
+        // The case nothing else on this branch tests: a legitimate memory
+        // write actually classifies to (slug, rel) instead of just being
+        // rejected.
+        let root = temp_root();
+        let slug = "my-slug";
+        let mem_dir = root.join(slug).join("memory");
+        fs::create_dir_all(&mem_dir).expect("create memory dir");
+        let file = mem_dir.join("user_role.md");
+        fs::write(&file, "hello").expect("write user_role.md");
+
+        let got = classify_memory_write_under(&root, &file.to_string_lossy())
+            .expect("memory file under root is classified");
+        assert_eq!(got, (slug.to_string(), "user_role.md".to_string()));
+    }
+
+    #[test]
+    fn classify_memory_write_under_normalizes_nested_separators() {
+        let root = temp_root();
+        let slug = "nested-slug";
+        let mem_dir = root.join(slug).join("memory").join("sub");
+        fs::create_dir_all(&mem_dir).expect("create nested memory dir");
+        let file = mem_dir.join("note.md");
+        fs::write(&file, "hello").expect("write note.md");
+
+        let got = classify_memory_write_under(&root, &file.to_string_lossy())
+            .expect("nested memory file under root is classified");
+        assert_eq!(got, (slug.to_string(), "sub/note.md".to_string()));
+    }
+
+    #[test]
+    fn classify_memory_write_under_rejects_a_file_outside_the_memory_subfolder() {
+        // A `.md` file sitting directly under the slug directory, not inside
+        // `memory/`, must not classify -- only files under the `memory`
+        // subfolder are provenance-tracked.
+        let root = temp_root();
+        let slug_dir = root.join("flat-slug");
+        fs::create_dir_all(&slug_dir).expect("create slug dir");
+        let file = slug_dir.join("note.md");
+        fs::write(&file, "hello").expect("write note.md");
+
+        assert!(classify_memory_write_under(&root, &file.to_string_lossy()).is_none());
+    }
+
+    #[test]
+    fn classify_memory_write_under_rejects_a_file_outside_the_root() {
+        // Containment via `strip_prefix`: a real, existing `.md` file that
+        // lives entirely outside `root` must be rejected even though it
+        // canonicalizes fine and has the right extension.
+        let root = temp_root();
+        let outside = std::env::temp_dir().join(unique_temp_name("andon-classify-outside"));
+        let _ = fs::remove_dir_all(&outside);
+        fs::create_dir_all(&outside).expect("create outside dir");
+        let file = outside.join("note.md");
+        fs::write(&file, "hello").expect("write note.md");
+
+        assert!(classify_memory_write_under(&root, &file.to_string_lossy()).is_none());
+    }
+
+    #[test]
+    fn classify_memory_write_under_rejects_a_non_markdown_file_in_memory() {
+        let root = temp_root();
+        let mem_dir = root.join("json-slug").join("memory");
+        fs::create_dir_all(&mem_dir).expect("create memory dir");
+        let file = mem_dir.join("data.json");
+        fs::write(&file, "{}").expect("write data.json");
+
+        assert!(classify_memory_write_under(&root, &file.to_string_lossy()).is_none());
+    }
+
+    #[test]
+    fn classify_memory_write_under_rejects_ntfs_alternate_data_stream_suffix() {
+        // Same ADS concern as `guard_rejects_ntfs_alternate_data_stream_suffix`
+        // above: a real alternate data stream on an existing non-Markdown
+        // file reports extension "md" from the raw string, so the explicit
+        // `:` rejection on `rel` is what actually stops it.
+        let root = temp_root();
+        let mem_dir = root.join("ads-slug").join("memory");
+        fs::create_dir_all(&mem_dir).expect("create memory dir");
+        fs::write(mem_dir.join("secrets.json"), "{}").expect("write secrets.json");
+        let ads_path = mem_dir.join("secrets.json:evil.md");
+        fs::write(&ads_path, "leaked").expect("write ADS stream");
+
+        assert!(classify_memory_write_under(&root, &ads_path.to_string_lossy()).is_none());
     }
 
     #[test]

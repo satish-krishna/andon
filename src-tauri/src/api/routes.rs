@@ -2248,6 +2248,32 @@ async fn autostart_disable(State(_state): State<ApiState>) -> Json<serde_json::V
 
 // ---------- claude code hook receiver ----------
 
+/// Cheap raw-string pre-filter run before the expensive, authoritative
+/// `classify_memory_write` (two `canonicalize()` syscalls). This hook rides
+/// the machine-wide PostToolUse Write|Edit|MultiEdit matcher Andon already
+/// installs, so it runs on *every* file save on the machine, not just memory
+/// writes -- without a cheap gate, every ordinary source-file save (`.rs`,
+/// `.ts`, `.json`, ...) machine-wide would pay for two syscalls just to be
+/// rejected.
+///
+/// `classify_memory_write` -- which canonicalizes the path before checking
+/// `Path::extension()` -- is the sole authority on what counts as a memory
+/// file. This predicate runs on the *un-canonicalized* input and must stay
+/// strictly LOOSER than that authority, never stricter: it may only reject
+/// inputs that are *definitely* not Markdown. On Windows, `canonicalize()`
+/// can turn `NOTE.MD`, `note.md `, or `note.md.` into the real on-disk
+/// `note.md` (NTFS is case-insensitive/case-preserving; trailing spaces and
+/// dots are stripped when resolving), so a case-sensitive, untrimmed
+/// `ends_with(".md")` would reject inputs the real check accepts. Because
+/// hook handlers always return `Ok` and log nothing on this path, a
+/// too-strict pre-filter fails silently: no error, no trace, just a missing
+/// provenance row. When in doubt, let it through -- a false pass costs two
+/// syscalls, a false reject costs a lost provenance row.
+fn might_be_markdown(raw: &str) -> bool {
+    let trimmed = raw.trim_end_matches([' ', '.']);
+    trimmed.len() != raw.len() || trimmed.to_ascii_lowercase().ends_with(".md")
+}
+
 /// Records a memory-file write into the provenance ledger. Called from
 /// `hook_tool_use`: the PostToolUse hook Andon already installs fires on every
 /// Write/Edit/MultiEdit, so no new hook is needed. Failures log and are
@@ -2270,19 +2296,9 @@ fn record_memory_touch(conn: &rusqlite::Connection, payload: &serde_json::Value,
     else {
         return;
     };
-    // Cheap raw-string gate before the expensive path. This hook rides the
-    // machine-wide PostToolUse Write|Edit|MultiEdit matcher, so it runs on
-    // every ordinary source-file save, not just memory writes. Without this
-    // check every non-Markdown save (.rs, .ts, .json, ...) would still pay
-    // for `classify_memory_write`'s two `canonicalize()` syscalls just to be
-    // rejected. `classify_memory_write` itself rejects any path whose
-    // `Path::extension()` isn't exactly "md" (case-sensitive), so this raw,
-    // case-sensitive `.ends_with(".md")` pre-check is exactly as strict as
-    // that later check -- it changes no outcome, it only skips the syscalls
-    // for the common case. Do not loosen it (e.g. case-insensitive) or it
-    // would admit paths the real check rejects; do not tighten it further,
-    // or it could reject paths the real check would have accepted.
-    if !raw_path.ends_with(".md") {
+    // See `might_be_markdown`'s doc comment: this gate is deliberately
+    // looser than `classify_memory_write` and must stay that way.
+    if !might_be_markdown(raw_path) {
         return;
     }
     let Some((slug, file)) = crate::memory::paths::classify_memory_write(raw_path) else {
@@ -2957,9 +2973,16 @@ mod tests {
         // A real, existing Markdown file that is definitely outside
         // `~/.claude/projects`, reached via CARGO_MANIFEST_DIR rather than a
         // hardcoded path so the test is not tied to one machine's checkout
-        // location. This exercises `classify_memory_write`'s containment
-        // (`strip_prefix`) rejection, not a `canonicalize()` failure on a
-        // path that never existed.
+        // location. This reaches `classify_memory_write` (it passes the
+        // `might_be_markdown` pre-check and canonicalizes fine) and is
+        // rejected somewhere inside it, but this test alone cannot isolate
+        // *which* internal check does the rejecting -- e.g. removing the
+        // `strip_prefix` containment check would still fail this exact path
+        // on the unrelated "second component != memory" check, since
+        // `CLAUDE.md`'s parent is the repo root, not a `<slug>/memory`
+        // layout. `classify_memory_write_under`'s dedicated containment
+        // tests in `memory::paths` are what actually isolate and prove the
+        // `strip_prefix` property.
         let repo_claude_md = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
             .join("..")
             .join("CLAUDE.md");
@@ -2983,13 +3006,14 @@ mod tests {
         let mut conn = rusqlite::Connection::open_in_memory().expect("open in-memory db");
         crate::db::migrations::apply(&mut conn).expect("migrations apply");
 
-        // A raw path ending in `.rs`, not `.md`. This must be rejected by the
-        // cheap string pre-check before `classify_memory_write` ever runs
-        // `canonicalize()` -- i.e. it never has to touch the filesystem.
-        // Using a path that does not exist on disk proves exactly that: if
-        // the fs were touched, `canonicalize()` would fail too and the test
-        // would still pass for the wrong reason, but the point of this test
-        // is that the rejection happens before any syscall is attempted.
+        // A raw path ending in `.rs`, not `.md`. This is rejected by the
+        // cheap `might_be_markdown` pre-check before `classify_memory_write`
+        // ever runs `canonicalize()` -- i.e. it never has to touch the
+        // filesystem. Note this fixture path (`main.rs`) exists on disk in
+        // this repo, so this test cannot by itself distinguish "rejected
+        // before any syscall" from "rejected because canonicalize failed";
+        // `might_be_markdown`'s own truth-table test below is what actually
+        // proves the pre-check's behavior directly.
         let payload = serde_json::json!({
             "session_id": "sess-1",
             "tool_name": "Write",
@@ -3001,6 +3025,26 @@ mod tests {
             .query_row("SELECT COUNT(*) FROM memory_provenance", [], |r| r.get(0))
             .expect("count");
         assert_eq!(n, 0, "non-markdown paths must not reach the ledger");
+    }
+
+    #[test]
+    fn might_be_markdown_truth_table() {
+        // `record_memory_touch`'s tests can only ever observe "no ledger
+        // row", which is indistinguishable from an empty function body (see
+        // the honesty note in the task report). This test exercises the
+        // pre-check predicate directly, proving both the deliberate
+        // looseness (case-insensitivity, trailing space/dot tolerance) and
+        // that it still rejects the obvious non-Markdown cases.
+        assert!(might_be_markdown("a.md"));
+        assert!(might_be_markdown("a.MD"), "must be case-insensitive");
+        assert!(might_be_markdown("a.Md"), "must be case-insensitive");
+        assert!(might_be_markdown("a.md "), "trailing space is stripped by Windows");
+        assert!(might_be_markdown("a.md."), "trailing dot is stripped by Windows");
+        assert!(might_be_markdown(".md"));
+        assert!(!might_be_markdown("a.rs"));
+        assert!(!might_be_markdown("a.mdx"));
+        assert!(!might_be_markdown("a.json"));
+        assert!(!might_be_markdown(""));
     }
 
     #[test]
