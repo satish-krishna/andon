@@ -119,7 +119,13 @@
           </button>
         </div>
       } @else {
-        <pre class="whitespace-pre-wrap text-sm text-text">{{ e.doc.body }}</pre>
+        @if (e.doc.parse_ok) {
+          <div class="md-render text-sm text-text">
+            <markdown [data]="e.doc.body"></markdown>
+          </div>
+        } @else {
+          <pre class="whitespace-pre-wrap text-sm text-text">{{ e.doc.body }}</pre>
+        }
         <div class="flex gap-2">
           <button
             class="rounded border border-border px-2 py-1 text-sm text-text hover:bg-panel-2"

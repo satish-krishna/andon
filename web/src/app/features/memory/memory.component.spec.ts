@@ -3,6 +3,7 @@ import { importProvidersFrom } from '@angular/core';
 import { provideHttpClient } from '@angular/common/http';
 import { provideHttpClientTesting, HttpTestingController } from '@angular/common/http/testing';
 import { provideRouter } from '@angular/router';
+import { provideMarkdown } from 'ngx-markdown';
 import { vi } from 'vitest';
 import { LucideAngularModule } from 'lucide-angular';
 import { APP_ICONS } from '../../core/icons';
@@ -19,6 +20,7 @@ describe('MemoryComponent', () => {
         provideHttpClient(),
         provideHttpClientTesting(),
         provideRouter([]),
+        provideMarkdown(),
         importProvidersFrom(LucideAngularModule.pick(APP_ICONS)),
       ],
     }).compileComponents();
@@ -1048,6 +1050,39 @@ describe('MemoryComponent', () => {
     // switcher or masquerade as a page-level load error.
     expect(fixture.componentInstance.projects().length).toBe(1);
     expect(fixture.componentInstance.loadError()).toBe(false);
+  });
+
+  it('renders a parsed memory body as markdown, not literal text', async () => {
+    flushProjects();
+    http.expectOne('http://127.0.0.1:8765/api/memory/D--Repos-andon').flush({
+      slug: 'D--Repos-andon',
+      index: null,
+      entries: [
+        {
+          doc: {
+            file: 'guide.md',
+            name: 'guide',
+            description: null,
+            kind: 'reference',
+            body: '# Big Heading\n\nSome **bold** text.\n\n```ts\nconst x = 1;\n```',
+            raw: '# Big Heading\n\nSome **bold** text.',
+            parse_ok: true,
+          },
+          origin: null,
+        },
+      ],
+    });
+    fixture.detectChanges();
+    await fixture.whenStable();
+
+    const el = fixture.nativeElement as HTMLElement;
+    // Markdown was parsed into real elements, not shown as literal "# Big Heading".
+    const h1 = el.querySelector('.md-render h1');
+    expect(h1?.textContent).toContain('Big Heading');
+    expect(el.querySelector('.md-render strong')?.textContent).toBe('bold');
+    expect(el.querySelector('.md-render pre code')).toBeTruthy();
+    // The raw hash must NOT appear as visible text.
+    expect(el.querySelector('.md-render')?.textContent).not.toContain('# Big Heading');
   });
 
   afterEach(() => http.verify());
