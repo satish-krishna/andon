@@ -3,6 +3,7 @@ import { importProvidersFrom } from '@angular/core';
 import { provideHttpClient } from '@angular/common/http';
 import { provideHttpClientTesting, HttpTestingController } from '@angular/common/http/testing';
 import { provideRouter } from '@angular/router';
+import { vi } from 'vitest';
 import { LucideAngularModule } from 'lucide-angular';
 import { APP_ICONS } from '../../core/icons';
 import { MemoryComponent } from './memory.component';
@@ -164,6 +165,55 @@ describe('MemoryComponent', () => {
     const text = (fixture.nativeElement as HTMLElement).textContent ?? '';
     expect(text).toContain('No project on this machine has any memories yet');
     expect(text).not.toContain('No memories for this project yet');
+  });
+
+  it('does not delete when the confirm is declined', () => {
+    const confirmSpy = vi.spyOn(window, 'confirm').mockReturnValue(false);
+    flushProjects();
+    http.expectOne('http://127.0.0.1:8765/api/memory/D--Repos-andon').flush({
+      slug: 'D--Repos-andon',
+      index: null,
+      entries: [
+        {
+          doc: {
+            file: 'user_role.md',
+            name: 'user-role',
+            description: null,
+            kind: 'user',
+            body: 'b',
+            raw: 'b',
+            parse_ok: true,
+          },
+          origin: null,
+        },
+      ],
+    });
+    fixture.detectChanges();
+
+    fixture.componentInstance.remove('user_role.md');
+    expect(confirmSpy).toHaveBeenCalled();
+    http.expectNone('http://127.0.0.1:8765/api/memory/D--Repos-andon/delete');
+  });
+
+  it('posts a delete when the confirm is accepted', () => {
+    vi.spyOn(window, 'confirm').mockReturnValue(true);
+    flushProjects();
+    http.expectOne('http://127.0.0.1:8765/api/memory/D--Repos-andon').flush({
+      slug: 'D--Repos-andon',
+      index: null,
+      entries: [],
+    });
+    fixture.detectChanges();
+
+    fixture.componentInstance.remove('user_role.md');
+    const req = http.expectOne('http://127.0.0.1:8765/api/memory/D--Repos-andon/delete');
+    expect(req.request.body).toEqual({ file: 'user_role.md' });
+    req.flush(null);
+    http.expectOne('http://127.0.0.1:8765/api/memory/D--Repos-andon').flush({
+      slug: 'D--Repos-andon',
+      index: null,
+      entries: [],
+    });
   });
 
   afterEach(() => http.verify());

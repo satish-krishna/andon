@@ -24,6 +24,8 @@ export class MemoryComponent implements OnInit {
   readonly loading = signal(true);
   /** True when the last fetch failed. Must never be confused with a genuinely empty result. */
   readonly loadError = signal(false);
+  readonly editing = signal<string | null>(null);
+  readonly draft = signal('');
 
   ngOnInit(): void {
     this.api.memoryProjects().subscribe({
@@ -76,5 +78,38 @@ export class MemoryComponent implements OnInit {
         this.loading.set(false);
       },
     });
+  }
+
+  startEdit(e: MemoryEntry): void {
+    this.editing.set(e.doc.file);
+    this.draft.set(e.doc.raw);
+  }
+
+  cancelEdit(): void {
+    this.editing.set(null);
+    this.draft.set('');
+  }
+
+  onDraftInput(event: Event): void {
+    this.draft.set((event.target as HTMLTextAreaElement).value);
+  }
+
+  saveEdit(file: string): void {
+    const slug = this.slug();
+    if (!slug) return;
+    this.api.memorySave(slug, file, this.draft()).subscribe({
+      next: () => {
+        this.cancelEdit();
+        this.refresh();
+      },
+    });
+  }
+
+  /** Permanent. No undo and no trash: memories are small and self-regenerating. */
+  remove(file: string): void {
+    const slug = this.slug();
+    if (!slug) return;
+    if (!window.confirm(`Delete ${file}? This cannot be undone.`)) return;
+    this.api.memoryDelete(slug, file).subscribe({ next: () => this.refresh() });
   }
 }
