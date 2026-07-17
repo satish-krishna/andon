@@ -1,14 +1,17 @@
-import { ChangeDetectionStrategy, Component, OnInit, inject, signal } from '@angular/core';
+import { ChangeDetectionStrategy, Component, OnInit, computed, inject, signal } from '@angular/core';
 import { RouterLink } from '@angular/router';
 import { LucideAngularModule } from 'lucide-angular';
 import { MarkdownComponent } from 'ngx-markdown';
+import { ConfirmDialogComponent, ConfirmRequest } from '../../shared/confirm-dialog.component';
 import { ApiService } from '../../core/api.service';
 import { MemoryEntry, MemoryProject, MemoryTouch } from '../../core/models';
+
+type PendingConfirm = { kind: 'delete'; slug: string; file: string };
 
 @Component({
   selector: 'app-memory',
   standalone: true,
-  imports: [RouterLink, LucideAngularModule, MarkdownComponent],
+  imports: [RouterLink, LucideAngularModule, MarkdownComponent, ConfirmDialogComponent],
   templateUrl: './memory.component.html',
   changeDetection: ChangeDetectionStrategy.OnPush,
 })
@@ -38,6 +41,19 @@ export class MemoryComponent implements OnInit {
    * fallback in the template on this lookup is real, not dead code.
    */
   readonly history = signal<Record<string, MemoryTouch[] | undefined>>({});
+
+  readonly pendingConfirm = signal<PendingConfirm | null>(null);
+  readonly confirmRequest = computed<ConfirmRequest | null>(() => {
+    const p = this.pendingConfirm();
+    if (!p) return null;
+    // kind === 'delete'
+    return {
+      title: 'Delete memory?',
+      message: `Delete ${p.file}? This is permanent — there is no undo.`,
+      confirmLabel: 'Delete',
+      danger: true,
+    };
+  });
 
   ngOnInit(): void {
     this.api.memoryProjects().subscribe({
@@ -73,6 +89,7 @@ export class MemoryComponent implements OnInit {
       this.actionError.set(null);
       this.history.set({});
       this.openHistory.set(null);
+      this.pendingConfirm.set(null);
     }
     this.slug.set(slug);
     this.refresh();
@@ -242,16 +259,29 @@ export class MemoryComponent implements OnInit {
   remove(file: string): void {
     const slug = this.slug();
     if (!slug) return;
-    if (!window.confirm(`Delete ${file}? This cannot be undone.`)) return;
+    this.pendingConfirm.set({ kind: 'delete', slug, file });
+  }
+
+  onCancel(): void {
+    this.pendingConfirm.set(null);
+  }
+
+  onConfirm(): void {
+    const p = this.pendingConfirm();
+    if (!p) return;
+    this.pendingConfirm.set(null);
+    // Defense in depth: operate on the captured slug, and refuse if the project
+    // changed under the open dialog. Mirrors the editingSlug guard in saveEdit.
+    if (this.slug() !== p.slug) return;
     this.actionError.set(null);
-    this.api.memoryDelete(slug, file).subscribe({
+    this.api.memoryDelete(p.slug, p.file).subscribe({
       next: () => {
-        this.invalidateHistory(file);
+        this.invalidateHistory(p.file);
         this.refresh();
         this.refreshProjects();
       },
       error: () => {
-        this.actionError.set(`Couldn't delete ${file}. It has not been removed.`);
+        this.actionError.set(`Couldn't delete ${p.file}. It has not been removed.`);
       },
     });
   }

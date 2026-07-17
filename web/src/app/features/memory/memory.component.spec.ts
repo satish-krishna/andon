@@ -169,8 +169,56 @@ describe('MemoryComponent', () => {
     expect(text).not.toContain('No memories for this project yet');
   });
 
+  it('does not delete against the new project if the user switches projects with the delete dialog open', () => {
+    fixture.detectChanges();
+    http.expectOne('http://127.0.0.1:8765/api/memory/projects').flush([
+      { slug: 'proj-a', label: 'A', count: 1 },
+      { slug: 'proj-b', label: 'B', count: 1 },
+    ]);
+    fixture.detectChanges();
+    http.expectOne('http://127.0.0.1:8765/api/memory/proj-a').flush({
+      slug: 'proj-a', index: null,
+      entries: [{ doc: { file: 'a.md', name: null, description: null, kind: null, body: 'b', raw: 'b', parse_ok: true }, origin: null }],
+    });
+    fixture.detectChanges();
+
+    // Open the delete dialog for proj-a's file.
+    fixture.componentInstance.remove('a.md');
+    expect(fixture.componentInstance.pendingConfirm()).not.toBeNull();
+
+    // Switch to proj-b before confirming.
+    fixture.componentInstance.select('proj-b');
+    fixture.detectChanges();
+    http.expectOne('http://127.0.0.1:8765/api/memory/proj-b').flush({ slug: 'proj-b', index: null, entries: [] });
+
+    // The project switch must have closed the dialog...
+    expect(fixture.componentInstance.pendingConfirm()).toBeNull();
+    // ...and even a stale confirm must not delete anything from proj-b.
+    fixture.componentInstance.onConfirm();
+    http.expectNone('http://127.0.0.1:8765/api/memory/proj-b/delete');
+    http.expectNone('http://127.0.0.1:8765/api/memory/proj-a/delete');
+  });
+
+  it('deletes through the dialog against the captured project on confirm', () => {
+    flushProjects();
+    http.expectOne('http://127.0.0.1:8765/api/memory/D--Repos-andon').flush({
+      slug: 'D--Repos-andon', index: null,
+      entries: [{ doc: { file: 'a.md', name: null, description: null, kind: null, body: 'b', raw: 'b', parse_ok: true }, origin: null }],
+    });
+    fixture.detectChanges();
+
+    fixture.componentInstance.remove('a.md');
+    fixture.componentInstance.onConfirm();
+
+    const req = http.expectOne('http://127.0.0.1:8765/api/memory/D--Repos-andon/delete');
+    expect(req.request.body).toEqual({ file: 'a.md' });
+    req.flush(null);
+    expect(fixture.componentInstance.pendingConfirm()).toBeNull();
+    http.expectOne('http://127.0.0.1:8765/api/memory/D--Repos-andon').flush({ slug: 'D--Repos-andon', index: null, entries: [] });
+    http.expectOne('http://127.0.0.1:8765/api/memory/projects').flush([{ slug: 'D--Repos-andon', label: 'x', count: 0 }]);
+  });
+
   it('does not delete when the confirm is declined', () => {
-    const confirmSpy = vi.spyOn(window, 'confirm').mockReturnValue(false);
     flushProjects();
     http.expectOne('http://127.0.0.1:8765/api/memory/D--Repos-andon').flush({
       slug: 'D--Repos-andon',
@@ -193,21 +241,35 @@ describe('MemoryComponent', () => {
     fixture.detectChanges();
 
     fixture.componentInstance.remove('user_role.md');
-    expect(confirmSpy).toHaveBeenCalled();
+    expect(fixture.componentInstance.pendingConfirm()).not.toBeNull();
+    fixture.componentInstance.onCancel();
     http.expectNone('http://127.0.0.1:8765/api/memory/D--Repos-andon/delete');
   });
 
   it('posts a delete when the confirm is accepted', () => {
-    vi.spyOn(window, 'confirm').mockReturnValue(true);
     flushProjects();
     http.expectOne('http://127.0.0.1:8765/api/memory/D--Repos-andon').flush({
       slug: 'D--Repos-andon',
       index: null,
-      entries: [],
+      entries: [
+        {
+          doc: {
+            file: 'user_role.md',
+            name: 'user-role',
+            description: null,
+            kind: 'user',
+            body: 'b',
+            raw: 'b',
+            parse_ok: true,
+          },
+          origin: null,
+        },
+      ],
     });
     fixture.detectChanges();
 
     fixture.componentInstance.remove('user_role.md');
+    fixture.componentInstance.onConfirm();
     const req = http.expectOne('http://127.0.0.1:8765/api/memory/D--Repos-andon/delete');
     expect(req.request.body).toEqual({ file: 'user_role.md' });
     req.flush(null);
@@ -462,7 +524,6 @@ describe('MemoryComponent', () => {
   });
 
   it('renders an error when delete fails', () => {
-    vi.spyOn(window, 'confirm').mockReturnValue(true);
     flushProjects();
     http.expectOne('http://127.0.0.1:8765/api/memory/D--Repos-andon').flush({
       slug: 'D--Repos-andon',
@@ -477,6 +538,7 @@ describe('MemoryComponent', () => {
     fixture.detectChanges();
 
     fixture.componentInstance.remove('user_role.md');
+    fixture.componentInstance.onConfirm();
     http
       .expectOne('http://127.0.0.1:8765/api/memory/D--Repos-andon/delete')
       .flush({ error: 'delete rejected' }, { status: 400, statusText: 'Bad Request' });
@@ -854,7 +916,6 @@ describe('MemoryComponent', () => {
     // reinstating the memory) must not render the pre-delete history from a stale
     // cache — the delete + re-create IS the churn signal this feature exists to
     // surface, and a stale cache would hide it.
-    vi.spyOn(window, 'confirm').mockReturnValue(true);
     flushProjects();
     http.expectOne('http://127.0.0.1:8765/api/memory/D--Repos-andon').flush({
       slug: 'D--Repos-andon',
@@ -881,6 +942,7 @@ describe('MemoryComponent', () => {
     expect(fixture.componentInstance.openHistory()).toBe('user_role.md');
 
     fixture.componentInstance.remove('user_role.md');
+    fixture.componentInstance.onConfirm();
     http.expectOne('http://127.0.0.1:8765/api/memory/D--Repos-andon/delete').flush(null);
     http
       .expectOne('http://127.0.0.1:8765/api/memory/D--Repos-andon')
@@ -937,7 +999,6 @@ describe('MemoryComponent', () => {
   });
 
   it('re-fetches the project list after a successful delete so the switcher count is not stale', () => {
-    vi.spyOn(window, 'confirm').mockReturnValue(true);
     flushProjects(2);
     http.expectOne('http://127.0.0.1:8765/api/memory/D--Repos-andon').flush({
       slug: 'D--Repos-andon',
@@ -957,6 +1018,7 @@ describe('MemoryComponent', () => {
     expect(fixture.componentInstance.projects()[0].count).toBe(2);
 
     fixture.componentInstance.remove('a.md');
+    fixture.componentInstance.onConfirm();
     http.expectOne('http://127.0.0.1:8765/api/memory/D--Repos-andon/delete').flush(null);
     // refresh() re-reads the current project's entries...
     http.expectOne('http://127.0.0.1:8765/api/memory/D--Repos-andon').flush({
@@ -979,7 +1041,6 @@ describe('MemoryComponent', () => {
   });
 
   it('preserves the selected project and its entries when the post-delete projects re-fetch lands', () => {
-    vi.spyOn(window, 'confirm').mockReturnValue(true);
     flushProjects(2);
     http.expectOne('http://127.0.0.1:8765/api/memory/D--Repos-andon').flush({
       slug: 'D--Repos-andon',
@@ -998,6 +1059,7 @@ describe('MemoryComponent', () => {
     fixture.detectChanges();
 
     fixture.componentInstance.remove('a.md');
+    fixture.componentInstance.onConfirm();
     http.expectOne('http://127.0.0.1:8765/api/memory/D--Repos-andon/delete').flush(null);
     http.expectOne('http://127.0.0.1:8765/api/memory/D--Repos-andon').flush({
       slug: 'D--Repos-andon',
@@ -1022,7 +1084,6 @@ describe('MemoryComponent', () => {
   });
 
   it('leaves the switcher intact and raises no load error when the post-delete projects re-fetch fails', () => {
-    vi.spyOn(window, 'confirm').mockReturnValue(true);
     flushProjects(2);
     http.expectOne('http://127.0.0.1:8765/api/memory/D--Repos-andon').flush({
       slug: 'D--Repos-andon',
@@ -1037,6 +1098,7 @@ describe('MemoryComponent', () => {
     fixture.detectChanges();
 
     fixture.componentInstance.remove('a.md');
+    fixture.componentInstance.onConfirm();
     http.expectOne('http://127.0.0.1:8765/api/memory/D--Repos-andon/delete').flush(null);
     http
       .expectOne('http://127.0.0.1:8765/api/memory/D--Repos-andon')
