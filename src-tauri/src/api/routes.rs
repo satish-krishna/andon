@@ -74,6 +74,7 @@ pub fn router(state: ApiState) -> Router {
         .route("/api/behaviour/model-mix", get(behaviour_model_mix))
         .route("/api/behaviour/slash-commands", get(behaviour_slash_commands))
         .route("/api/behaviour/subagents", get(behaviour_subagents))
+        .merge(crate::api::memory_routes::router())
         .with_state(state)
 }
 
@@ -848,7 +849,7 @@ pub struct ApiError {
 }
 
 impl ApiError {
-    fn pool(e: r2d2::Error) -> Self {
+    pub(crate) fn pool(e: r2d2::Error) -> Self {
         Self {
             status: StatusCode::SERVICE_UNAVAILABLE,
             message: format!("db pool: {e}"),
@@ -857,6 +858,12 @@ impl ApiError {
     fn not_found(msg: &str) -> Self {
         Self {
             status: StatusCode::NOT_FOUND,
+            message: msg.to_string(),
+        }
+    }
+    pub(crate) fn bad_request(msg: &str) -> Self {
+        Self {
+            status: StatusCode::BAD_REQUEST,
             message: msg.to_string(),
         }
     }
