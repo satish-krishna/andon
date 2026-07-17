@@ -2270,6 +2270,21 @@ fn record_memory_touch(conn: &rusqlite::Connection, payload: &serde_json::Value,
     else {
         return;
     };
+    // Cheap raw-string gate before the expensive path. This hook rides the
+    // machine-wide PostToolUse Write|Edit|MultiEdit matcher, so it runs on
+    // every ordinary source-file save, not just memory writes. Without this
+    // check every non-Markdown save (.rs, .ts, .json, ...) would still pay
+    // for `classify_memory_write`'s two `canonicalize()` syscalls just to be
+    // rejected. `classify_memory_write` itself rejects any path whose
+    // `Path::extension()` isn't exactly "md" (case-sensitive), so this raw,
+    // case-sensitive `.ends_with(".md")` pre-check is exactly as strict as
+    // that later check -- it changes no outcome, it only skips the syscalls
+    // for the common case. Do not loosen it (e.g. case-insensitive) or it
+    // would admit paths the real check rejects; do not tighten it further,
+    // or it could reject paths the real check would have accepted.
+    if !raw_path.ends_with(".md") {
+        return;
+    }
     let Some((slug, file)) = crate::memory::paths::classify_memory_write(raw_path) else {
         return;
     };
@@ -2935,21 +2950,57 @@ mod tests {
     }
 
     #[test]
-    fn record_memory_touch_ignores_an_ordinary_project_file() {
+    fn record_memory_touch_ignores_a_markdown_file_outside_the_projects_root() {
         let mut conn = rusqlite::Connection::open_in_memory().expect("open in-memory db");
         crate::db::migrations::apply(&mut conn).expect("migrations apply");
+
+        // A real, existing Markdown file that is definitely outside
+        // `~/.claude/projects`, reached via CARGO_MANIFEST_DIR rather than a
+        // hardcoded path so the test is not tied to one machine's checkout
+        // location. This exercises `classify_memory_write`'s containment
+        // (`strip_prefix`) rejection, not a `canonicalize()` failure on a
+        // path that never existed.
+        let repo_claude_md = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("..")
+            .join("CLAUDE.md");
+        assert!(repo_claude_md.is_file(), "fixture file must exist: {repo_claude_md:?}");
 
         let payload = serde_json::json!({
             "session_id": "sess-1",
             "tool_name": "Write",
-            "tool_input": { "file_path": "D:\\Repos\\andon\\src\\main.rs" }
+            "tool_input": { "file_path": repo_claude_md.to_string_lossy() }
         });
         record_memory_touch(&conn, &payload, 42);
 
         let n: i64 = conn
             .query_row("SELECT COUNT(*) FROM memory_provenance", [], |r| r.get(0))
             .expect("count");
-        assert_eq!(n, 0, "non-memory writes must not reach the ledger");
+        assert_eq!(n, 0, "markdown files outside the projects root must not reach the ledger");
+    }
+
+    #[test]
+    fn record_memory_touch_ignores_a_non_markdown_path() {
+        let mut conn = rusqlite::Connection::open_in_memory().expect("open in-memory db");
+        crate::db::migrations::apply(&mut conn).expect("migrations apply");
+
+        // A raw path ending in `.rs`, not `.md`. This must be rejected by the
+        // cheap string pre-check before `classify_memory_write` ever runs
+        // `canonicalize()` -- i.e. it never has to touch the filesystem.
+        // Using a path that does not exist on disk proves exactly that: if
+        // the fs were touched, `canonicalize()` would fail too and the test
+        // would still pass for the wrong reason, but the point of this test
+        // is that the rejection happens before any syscall is attempted.
+        let payload = serde_json::json!({
+            "session_id": "sess-1",
+            "tool_name": "Write",
+            "tool_input": { "file_path": "D:\\Repos\\andon\\src-tauri\\src\\main.rs" }
+        });
+        record_memory_touch(&conn, &payload, 42);
+
+        let n: i64 = conn
+            .query_row("SELECT COUNT(*) FROM memory_provenance", [], |r| r.get(0))
+            .expect("count");
+        assert_eq!(n, 0, "non-markdown paths must not reach the ledger");
     }
 
     #[test]
