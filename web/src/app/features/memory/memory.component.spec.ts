@@ -1117,5 +1117,44 @@ describe('MemoryComponent', () => {
     expect(pre?.textContent).toContain('---');
   });
 
+  it('neutralizes a hostile memory body — no script, handlers, or javascript: survive', async () => {
+    flushProjects();
+    http.expectOne('http://127.0.0.1:8765/api/memory/D--Repos-andon').flush({
+      slug: 'D--Repos-andon',
+      index: null,
+      entries: [
+        {
+          doc: {
+            file: 'evil.md',
+            name: 'evil',
+            description: null,
+            kind: null,
+            body:
+              'Look here:\n\n' +
+              '<img src=x onerror="window.__xss=1">\n\n' +
+              '<script>window.__xss=1</script>\n\n' +
+              '<a href="javascript:window.__xss=1" onclick="window.__xss=1">click</a>',
+            raw: 'irrelevant',
+            parse_ok: true,
+          },
+          origin: null,
+        },
+      ],
+    });
+    fixture.detectChanges();
+    await fixture.whenStable();
+
+    const md = (fixture.nativeElement as HTMLElement).querySelector('.md-render')!;
+    expect(md.querySelector('script')).toBeNull();
+    const img = md.querySelector('img');
+    expect(img?.getAttribute('onerror')).toBeNull();
+    const anchor = md.querySelector('a');
+    expect(anchor?.getAttribute('onclick')).toBeNull();
+    // DomSanitizer prefixes dangerous URLs with 'unsafe:' to mark them inert and prevent execution.
+    // Either the attribute is removed entirely or it's safe (not executable).
+    const href = anchor?.getAttribute('href') ?? '';
+    expect(href === '' || href.startsWith('unsafe:')).toBe(true);
+  });
+
   afterEach(() => http.verify());
 });
