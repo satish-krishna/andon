@@ -279,6 +279,9 @@ export class MemoryComponent implements OnInit {
     const p = this.pendingConfirm();
     if (!p) return;
     this.pendingConfirm.set(null);
+    // Intentionally shared across both kinds: the captured-slug re-verify, mirroring
+    // saveEdit's editingSlug guard, so a project switch between confirm-open and
+    // confirm-click can't land a delete or a discard-triggered edit on the wrong project.
     if (this.slug() !== p.slug) return;
     if (p.kind === 'discard') {
       this.applyEdit(p.target);

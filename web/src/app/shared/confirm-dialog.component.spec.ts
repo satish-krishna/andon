@@ -27,6 +27,16 @@ describe('ConfirmDialogComponent', () => {
     expect(text).toContain('Delete');
   });
 
+  it('describes the dialog with the message via aria-describedby', () => {
+    fixture.componentRef.setInput('request', { title: 'Delete memory?', message: 'Gone for good.', confirmLabel: 'Delete', danger: true });
+    fixture.detectChanges();
+    const dialog = el().querySelector('[role="dialog"]')!;
+    const describedById = dialog.getAttribute('aria-describedby');
+    expect(describedById).toBeTruthy();
+    const describedBy = document.getElementById(describedById!);
+    expect(describedBy?.textContent).toContain('Gone for good.');
+  });
+
   it('emits confirm when the confirm button is clicked', () => {
     fixture.componentRef.setInput('request', { title: 't', message: 'm', confirmLabel: 'Delete' });
     fixture.detectChanges();

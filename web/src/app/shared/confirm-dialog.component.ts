@@ -22,12 +22,13 @@ export interface ConfirmRequest {
           class="w-full max-w-sm rounded-lg border border-border bg-panel shadow-xl"
           role="dialog"
           aria-modal="true"
-          [attr.aria-label]="r.title"
+          aria-labelledby="confirm-dialog-title"
+          aria-describedby="confirm-dialog-message"
           (click)="$event.stopPropagation()"
         >
           <div class="px-5 py-4">
-            <h2 class="text-sm font-semibold text-text">{{ r.title }}</h2>
-            <p class="mt-2 text-sm text-muted">{{ r.message }}</p>
+            <h2 id="confirm-dialog-title" class="text-sm font-semibold text-text">{{ r.title }}</h2>
+            <p id="confirm-dialog-message" class="mt-2 text-sm text-muted">{{ r.message }}</p>
           </div>
           <div class="flex justify-end gap-2 border-t border-border px-5 py-3">
             <button

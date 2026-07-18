@@ -52,4 +52,15 @@ describe('SettingsComponent confirm dialogs', () => {
     expect(fixture.componentInstance.pendingConfirm()).toBeNull();
     http.expectNone('http://127.0.0.1:8765/api/integration/unpatch');
   });
+
+  it('opens the dialog for restoreBackup and posts only on confirm', () => {
+    fixture.componentInstance.restoreBackup();
+    expect(fixture.componentInstance.pendingConfirm()).not.toBeNull();
+    http.expectNone('http://127.0.0.1:8765/api/integration/restore-backup');
+
+    fixture.componentInstance.onConfirm();
+    const req = http.expectOne('http://127.0.0.1:8765/api/integration/restore-backup');
+    req.flush({ ok: true, message: 'restored' });
+    http.match(() => true).forEach((r) => r.flush({}));
+  });
 });
