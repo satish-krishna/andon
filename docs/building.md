@@ -38,7 +38,16 @@ From the repo root:
 cargo tauri dev
 ```
 
-This launches the Rust backend with hot-reload of the embedded SPA. The tray icon appears; the main window opens automatically in dev mode.
+This launches the Rust backend and opens the main window automatically in dev mode; the tray icon also appears. The Rust side recompiles and relaunches on change.
+
+> **`cargo tauri dev` does not rebuild the Angular SPA.** `tauri.conf.json` sets no `beforeDevCommand` and no `devUrl`, so the webview loads the prebuilt bundle from `web/dist/web/browser/` exactly as it is on disk — there is no frontend hot-reload. A change to the SPA will not appear in the running app until you rebuild the bundle and restart:
+>
+> ```powershell
+> cd web; npm run build   # rebuild web/dist/web/browser/
+> # then restart `cargo tauri dev` so the webview loads the fresh bundle
+> ```
+>
+> Symptom of a stale bundle: you edited a component, the app still behaves the old way, and the built `.js` under `web/dist/web/browser/` is older than your source edit.
 
 ## Production build
 
