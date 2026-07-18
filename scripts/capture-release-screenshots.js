@@ -34,6 +34,7 @@ const PAGES = [
   ['/diagnostics', 'diagnostics', '05-diagnostics'],
   ['/settings', 'settings', '06-settings'],
   ['/efficiency', 'efficiency', '07-efficiency'],
+  ['/memory', 'memory', '08-memory'],
 ];
 
 const BROWSER_CANDIDATES = [
