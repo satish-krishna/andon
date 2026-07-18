@@ -4,8 +4,11 @@ import { provideHttpClient } from '@angular/common/http';
 import { provideHttpClientTesting, HttpTestingController } from '@angular/common/http/testing';
 import { provideRouter } from '@angular/router';
 import { LucideAngularModule } from 'lucide-angular';
+import { MockComponent } from 'ng-mocks';
 import { APP_ICONS } from '../../core/icons';
 import { SettingsComponent } from './settings.component';
+import { ForwarderCardComponent } from './forwarder-card.component';
+import { BudgetCardComponent } from './budget-card.component';
 
 describe('SettingsComponent confirm dialogs', () => {
   let fixture: ComponentFixture<SettingsComponent>;
@@ -15,7 +18,16 @@ describe('SettingsComponent confirm dialogs', () => {
     await TestBed.configureTestingModule({
       imports: [SettingsComponent],
       providers: [provideHttpClient(), provideHttpClientTesting(), provideRouter([]), importProvidersFrom(LucideAngularModule.pick(APP_ICONS))],
-    }).compileComponents();
+    })
+      // ForwarderCardComponent and BudgetCardComponent each call ApiService.getSettings()
+      // in ngOnInit and dereference `.forwarder` / `.budget` on the response. The generic
+      // `{}` flush below doesn't satisfy that shape, which threw unhandled errors. Mock
+      // both children out so only SettingsComponent's own logic runs in this spec.
+      .overrideComponent(SettingsComponent, {
+        remove: { imports: [ForwarderCardComponent, BudgetCardComponent] },
+        add: { imports: [MockComponent(ForwarderCardComponent), MockComponent(BudgetCardComponent)] },
+      })
+      .compileComponents();
     fixture = TestBed.createComponent(SettingsComponent);
     http = TestBed.inject(HttpTestingController);
     fixture.detectChanges();
