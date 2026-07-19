@@ -55,21 +55,17 @@ mod imp {
         Ok(())
     }
 
-    /// Make sure autostart is enabled AND points at the current exe.
-    /// If user moved/reinstalled the app, this updates the registered path.
+    /// Keep autostart pointing at the current exe *only if the user already
+    /// enabled it*. A fresh install (no Run-key value) is left untouched —
+    /// autostart is opt-in via the Settings toggle. If the user opted in and
+    /// later moved or reinstalled the app, self-heal the registered path.
     pub fn ensure_current() -> Result<EnsureOutcome> {
         let want = current_exe()?;
-        match registered_command() {
-            Some(existing) if existing == want => Ok(EnsureOutcome::AlreadyCorrect),
-            Some(_) => {
-                enable()?;
-                Ok(EnsureOutcome::Updated)
-            }
-            None => {
-                enable()?;
-                Ok(EnsureOutcome::Enabled)
-            }
+        let outcome = decide(registered_command().as_deref(), &want);
+        if matches!(outcome, EnsureOutcome::Updated) {
+            enable()?;
         }
+        Ok(outcome)
     }
 }
 
@@ -83,12 +79,25 @@ mod imp {
     pub fn ensure_current() -> Result<EnsureOutcome> { Ok(EnsureOutcome::Unsupported) }
 }
 
+/// Pure autostart policy — no registry access, so it is unit-testable on
+/// every platform. `registered` is the current Run-key value (already
+/// quoted) or `None` when the key is absent; `want` is the quoted command
+/// we would register for the current exe. Absent means the user never opted
+/// in, so we leave it alone; a stale value is self-healed.
+pub fn decide(registered: Option<&str>, want: &str) -> EnsureOutcome {
+    match registered {
+        None => EnsureOutcome::NotEnabled,
+        Some(existing) if existing == want => EnsureOutcome::AlreadyCorrect,
+        Some(_) => EnsureOutcome::Updated,
+    }
+}
+
 #[derive(Debug, Clone, serde::Serialize)]
 #[serde(tag = "outcome", rename_all = "snake_case")]
 pub enum EnsureOutcome {
-    Enabled,
     Updated,
     AlreadyCorrect,
+    NotEnabled,
     Unsupported,
 }
 
@@ -118,15 +127,39 @@ mod tests {
     #[test]
     fn ensure_outcome_serializes_to_snake_case_tag() {
         let cases: &[(EnsureOutcome, &str)] = &[
-            (EnsureOutcome::Enabled, r#"{"outcome":"enabled"}"#),
             (EnsureOutcome::Updated, r#"{"outcome":"updated"}"#),
             (EnsureOutcome::AlreadyCorrect, r#"{"outcome":"already_correct"}"#),
+            (EnsureOutcome::NotEnabled, r#"{"outcome":"not_enabled"}"#),
             (EnsureOutcome::Unsupported, r#"{"outcome":"unsupported"}"#),
         ];
         for (outcome, expected) in cases {
             let got = serde_json::to_string(outcome).expect("serialize EnsureOutcome");
             assert_eq!(&got, expected, "EnsureOutcome serialization mismatch");
         }
+    }
+
+    // Pure policy: an absent Run-key value means the user has NOT opted in,
+    // so ensure_current must do nothing.
+    #[test]
+    fn decide_absent_key_is_not_enabled() {
+        let want = r#""C:\Apps\andon.exe""#;
+        assert!(matches!(decide(None, want), EnsureOutcome::NotEnabled));
+    }
+
+    // Value already points at the current exe: nothing to do.
+    #[test]
+    fn decide_matching_key_is_already_correct() {
+        let want = r#""C:\Apps\andon.exe""#;
+        assert!(matches!(decide(Some(want), want), EnsureOutcome::AlreadyCorrect));
+    }
+
+    // Value present but stale (app moved/reinstalled): self-heal the path.
+    // This is the grandfather path for existing opted-in users.
+    #[test]
+    fn decide_stale_key_is_updated() {
+        let want = r#""C:\Apps\andon.exe""#;
+        let stale = r#""C:\Old\andon.exe""#;
+        assert!(matches!(decide(Some(stale), want), EnsureOutcome::Updated));
     }
 
     // On non-Windows the no-op stubs must return the Unsupported outcome and
