@@ -12,6 +12,7 @@ Andon is a single-binary Tauri 2 desktop app that ingests Claude Code OpenTeleme
 | System design, ports, schema, ingestion path | [`docs/architecture.md`](docs/architecture.md) |
 | Prerequisites and build instructions | [`docs/building.md`](docs/building.md) |
 | What each dashboard page does | [`docs/features.md`](docs/features.md) |
+| Adding a dashboard page (the vertical slice, end to end) | [`docs/adding-a-page.md`](docs/adding-a-page.md) |
 | Contributing rules (Rust + Angular) | [`CONTRIBUTING.md`](CONTRIBUTING.md) |
 | Cutting a release | [`docs/releasing.md`](docs/releasing.md) |
 
