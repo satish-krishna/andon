@@ -200,10 +200,16 @@ export interface ForwarderSettings {
   headers: Record<string, string>;
 }
 
+export interface SweepSettings {
+  interval_minutes: number;
+  enabled: boolean;
+}
+
 export interface AppSettings {
   version: number;
   forwarder: ForwarderSettings;
   budget: BudgetSettings;
+  sweep: SweepSettings;
 }
 
 function toParams(args?: FilterArgs): HttpParams {
@@ -301,6 +307,9 @@ export class ApiService {
   }
   saveBudget(b: BudgetSettings): Observable<BudgetSettings> {
     return this.http.put<BudgetSettings>(`${BASE}/api/settings/budget`, b);
+  }
+  saveSweep(s: SweepSettings): Observable<SweepSettings> {
+    return this.http.put<SweepSettings>(`${BASE}/api/settings/sweep`, s);
   }
   testForwarder(f: ForwarderSettings): Observable<{ ok: boolean; status?: number; error?: string }> {
     return this.http.post<any>(`${BASE}/api/settings/forwarder/test`, f);
