@@ -7,13 +7,14 @@ import { ApiService, IntegrationStatus } from '../../core/api.service';
 import { DbStats, JsonlIngestRun } from '../../core/models';
 import { ForwarderCardComponent } from './forwarder-card.component';
 import { BudgetCardComponent } from './budget-card.component';
+import { SweepCardComponent } from './sweep-card.component';
 import { AndonMarkComponent } from '../../shared/andon-mark.component';
 import { ConfirmDialogComponent, ConfirmRequest } from '../../shared/confirm-dialog.component';
 
 @Component({
   selector: 'app-settings',
   standalone: true,
-  imports: [CommonModule, DecimalPipe, RouterLink, LucideAngularModule, ForwarderCardComponent, BudgetCardComponent, AndonMarkComponent, ConfirmDialogComponent],
+  imports: [CommonModule, DecimalPipe, RouterLink, LucideAngularModule, ForwarderCardComponent, BudgetCardComponent, SweepCardComponent, AndonMarkComponent, ConfirmDialogComponent],
   templateUrl: './settings.component.html',
 })
 export class SettingsComponent implements OnInit {
