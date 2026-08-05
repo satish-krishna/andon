@@ -62,6 +62,7 @@ pub fn router(state: ApiState) -> Router {
         .route("/api/settings/forwarder", axum::routing::put(put_forwarder))
         .route("/api/settings/forwarder/test", post(test_forwarder))
         .route("/api/settings/budget", axum::routing::put(put_budget))
+        .route("/api/settings/sweep", axum::routing::put(put_sweep))
         .route("/api/repo/backfill", post(repo_backfill))
         .route("/api/repos", get(list_repos))
         .route("/api/overview/top-repos", get(overview_top_repos))
@@ -838,6 +839,34 @@ async fn put_budget(
     // Wake the budget monitor so the tray and notifications reflect the new
     // budget immediately, rather than at the next 30-minute tick.
     state.budget_changed.notify_one();
+    Ok(Json(serde_json::to_value(saved).unwrap_or_else(|_| json!({}))))
+}
+
+#[derive(Deserialize)]
+struct SweepPayload {
+    interval_minutes: u32,
+    enabled: bool,
+}
+
+impl SweepPayload {
+    fn sanitized(&self) -> crate::settings::SweepSettings {
+        crate::settings::SweepSettings {
+            // A 0 would busy-loop the sweeper; floor to 1 minute.
+            interval_minutes: self.interval_minutes.max(1),
+            enabled: self.enabled,
+        }
+    }
+}
+
+#[tracing::instrument(skip(state, p))]
+async fn put_sweep(
+    State(state): State<ApiState>,
+    Json(p): Json<SweepPayload>,
+) -> Result<Json<serde_json::Value>, ApiError> {
+    let saved = state.settings.save_sweep(p.sanitized()).map_err(|e| ApiError {
+        status: StatusCode::INTERNAL_SERVER_ERROR,
+        message: format!("{e:#}"),
+    })?;
     Ok(Json(serde_json::to_value(saved).unwrap_or_else(|_| json!({}))))
 }
 
@@ -2903,6 +2932,15 @@ async fn behaviour_subagents(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    // A payload of 0 would busy-loop the sweeper; the handler must floor to 1.
+    #[test]
+    fn sweep_payload_clamps_zero_interval() {
+        let p = SweepPayload { interval_minutes: 0, enabled: true };
+        let s = p.sanitized();
+        assert_eq!(s.interval_minutes, 1);
+        assert_eq!(s.enabled, true);
+    }
 
     fn ms(y: i32, mo: u32, d: u32, h: u32, mi: u32) -> i64 {
         Local
