@@ -19,9 +19,14 @@ impl Sweeper {
     }
 
     /// Return the paths whose mtime is new or newer than last recorded, updating
-    /// the record for every path passed in.
+    /// the record for every path passed in. Paths that were tracked previously
+    /// but are absent from `entries` (deleted, moved, or otherwise no longer
+    /// enumerated) are evicted — otherwise a path that reappears later with a
+    /// coincidentally identical mtime would be skipped as "unchanged", and the
+    /// map would grow without bound as transcripts come and go.
     pub fn select_changed(&mut self, entries: Vec<(PathBuf, SystemTime)>) -> Vec<PathBuf> {
         let mut changed = Vec::new();
+        let mut seen_this_call: HashMap<PathBuf, SystemTime> = HashMap::with_capacity(entries.len());
         for (path, mtime) in entries {
             let is_new = match self.last_seen.get(&path) {
                 Some(prev) => mtime > *prev,
@@ -30,8 +35,9 @@ impl Sweeper {
             if is_new {
                 changed.push(path.clone());
             }
-            self.last_seen.insert(path, mtime);
+            seen_this_call.insert(path, mtime);
         }
+        self.last_seen = seen_this_call;
         changed
     }
 }
@@ -77,6 +83,13 @@ pub async fn run_once(
     Ok(ingested)
 }
 
+/// Whether a sweep tick should do work this pass: the feature must be enabled
+/// in settings and ingestion must not be paused. Extracted as a pure function
+/// so the loop's gating logic is unit-testable without spinning up the loop.
+fn should_sweep(cfg: &SweepSettings, control: &IngestionControl) -> bool {
+    cfg.enabled && !control.is_paused()
+}
+
 /// Delay before the next tick. `enabled=false` polls every 60s so a settings
 /// toggle-on takes effect within a minute; `interval_minutes` is clamped to >=1
 /// to prevent a busy loop.
@@ -108,7 +121,7 @@ pub async fn run_sweep(
     let mut sweeper = Sweeper::new();
     loop {
         let cfg = settings.sweep();
-        if cfg.enabled && !control.is_paused() {
+        if should_sweep(&cfg, &control) {
             match run_once(&pool, &ingestor, &claude_home, &mut sweeper).await {
                 Ok(n) if n > 0 => tracing::info!(files = n, "transcript sweep ingested changed files"),
                 Ok(_) => tracing::debug!("transcript sweep: nothing changed"),
@@ -123,7 +136,7 @@ pub async fn run_sweep(
 mod tests {
     use super::*;
     use std::path::PathBuf;
-    use std::time::{Duration, UNIX_EPOCH};
+    use std::time::UNIX_EPOCH;
 
     fn t(secs: u64) -> std::time::SystemTime { UNIX_EPOCH + Duration::from_secs(secs) }
 
@@ -144,12 +157,29 @@ mod tests {
         let mut s = Sweeper::new();
         let a = PathBuf::from("a.jsonl");
         s.select_changed(vec![(a.clone(), t(100))]);
-        // a's mtime advanced; c is brand new; a unchanged-b is gone.
+        // a's mtime advanced; c is brand new.
         let c = PathBuf::from("c.jsonl");
         let out = s.select_changed(vec![(a.clone(), t(200)), (c.clone(), t(50))]);
         assert!(out.contains(&a));
         assert!(out.contains(&c));
         assert_eq!(out.len(), 2);
+    }
+
+    #[test]
+    fn vanished_path_is_evicted_and_treated_as_new_on_reappearance() {
+        let mut s = Sweeper::new();
+        let a = PathBuf::from("a.jsonl");
+        let b = PathBuf::from("b.jsonl");
+        // Call 1: both present.
+        s.select_changed(vec![(a.clone(), t(100)), (b.clone(), t(100))]);
+        // Call 2: b is gone (deleted); a unchanged.
+        let out2 = s.select_changed(vec![(a.clone(), t(100))]);
+        assert!(out2.is_empty());
+        // Call 3: b reappears with the SAME mtime it had in call 1. If it were
+        // still tracked, this would look "unchanged" and be skipped; since it
+        // was evicted in call 2, it must be treated as new.
+        let out3 = s.select_changed(vec![(a.clone(), t(100)), (b.clone(), t(100))]);
+        assert_eq!(out3, vec![b]);
     }
 
     #[test]
@@ -162,6 +192,24 @@ mod tests {
         // interval 0 must not busy-loop: clamp to 1 minute.
         let zero = SweepSettings { interval_minutes: 0, enabled: true };
         assert_eq!(next_delay(&zero), std::time::Duration::from_secs(60));
+    }
+
+    #[test]
+    fn should_sweep_covers_enabled_and_paused_combinations() {
+        use crate::otlp::IngestionControl;
+
+        let enabled_cfg = SweepSettings { interval_minutes: 5, enabled: true };
+        let disabled_cfg = SweepSettings { interval_minutes: 5, enabled: false };
+
+        let running = IngestionControl::new();
+        assert!(!running.is_paused());
+        let paused = IngestionControl::new();
+        paused.set_paused(true);
+
+        assert!(should_sweep(&enabled_cfg, &running));
+        assert!(!should_sweep(&enabled_cfg, &paused));
+        assert!(!should_sweep(&disabled_cfg, &running));
+        assert!(!should_sweep(&disabled_cfg, &paused));
     }
 
     #[tokio::test]
