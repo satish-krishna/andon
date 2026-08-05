@@ -806,7 +806,10 @@ describe('MemoryComponent', () => {
 
     // Cache should be populated with proj-a's history.
     expect(fixture.componentInstance.history()['user_role.md']).toBeDefined();
-    expect(fixture.componentInstance.history()['user_role.md'][0].session_id).toBe('sess-a');
+    // Non-null assertion is safe: the previous expectation just proved this
+    // entry is defined; `history` is typed as `MemoryTouch[] | undefined`
+    // because most keys are unpopulated until fetched.
+    expect(fixture.componentInstance.history()['user_role.md']![0].session_id).toBe('sess-a');
 
     // Switch to proj-b, which also has user_role.md.
     fixture.componentInstance.select('proj-b');
