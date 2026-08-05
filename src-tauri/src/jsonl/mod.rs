@@ -6,6 +6,7 @@ pub mod reducer;
 pub mod parser;
 pub mod walker;
 pub mod reconciler;
+pub mod sweep;
 
 use std::path::Path;
 use std::sync::Arc;
