@@ -40,6 +40,85 @@ impl Default for Sweeper {
     fn default() -> Self { Self::new() }
 }
 
+use std::sync::Arc;
+use std::time::Duration;
+
+use crate::db::DbPool;
+use crate::diagnostics::Diagnostics;
+use crate::otlp::ingestor::Ingestor;
+use crate::otlp::IngestionControl;
+use crate::settings::{SettingsStore, SweepSettings};
+
+/// One sweep pass: enumerate, gate by mtime, ingest changed files. Per-file
+/// failures are logged and skipped, never fatal.
+#[tracing::instrument(skip(pool, ingestor, sweeper))]
+pub async fn run_once(
+    pool: &Arc<DbPool>,
+    ingestor: &Ingestor,
+    claude_home: &std::path::Path,
+    sweeper: &mut Sweeper,
+) -> anyhow::Result<usize> {
+    let paths = crate::jsonl::walker::enumerate(claude_home);
+    let entries: Vec<(PathBuf, SystemTime)> = paths
+        .into_iter()
+        .filter_map(|p| {
+            let mtime = std::fs::metadata(&p).ok()?.modified().ok()?;
+            Some((p, mtime))
+        })
+        .collect();
+    let changed = sweeper.select_changed(entries);
+    let mut ingested = 0usize;
+    for path in &changed {
+        match crate::jsonl::ingest_one(pool, ingestor, path).await {
+            Ok(_) => ingested += 1,
+            Err(e) => tracing::warn!(error = ?e, path = %path.display(), "sweep ingest_one failed"),
+        }
+    }
+    Ok(ingested)
+}
+
+/// Delay before the next tick. `enabled=false` polls every 60s so a settings
+/// toggle-on takes effect within a minute; `interval_minutes` is clamped to >=1
+/// to prevent a busy loop.
+pub fn next_delay(cfg: &SweepSettings) -> Duration {
+    if !cfg.enabled {
+        Duration::from_secs(60)
+    } else {
+        Duration::from_secs(cfg.interval_minutes.max(1) as u64 * 60)
+    }
+}
+
+/// Background loop. Reads settings fresh each tick so interval/toggle changes
+/// take effect without a restart; skips work while ingestion is paused. The
+/// first tick fires immediately (startup catch-up).
+pub async fn run_sweep(
+    pool: Arc<DbPool>,
+    settings: Arc<SettingsStore>,
+    control: IngestionControl,
+    diagnostics: Diagnostics,
+) {
+    let claude_home = match dirs::home_dir() {
+        Some(h) => h.join(".claude"),
+        None => {
+            tracing::warn!("no home directory; transcript sweep disabled");
+            return;
+        }
+    };
+    let ingestor = Ingestor::new(pool.clone(), control.clone(), diagnostics);
+    let mut sweeper = Sweeper::new();
+    loop {
+        let cfg = settings.sweep();
+        if cfg.enabled && !control.is_paused() {
+            match run_once(&pool, &ingestor, &claude_home, &mut sweeper).await {
+                Ok(n) if n > 0 => tracing::info!(files = n, "transcript sweep ingested changed files"),
+                Ok(_) => tracing::debug!("transcript sweep: nothing changed"),
+                Err(e) => tracing::warn!(error = ?e, "transcript sweep tick failed; will retry"),
+            }
+        }
+        tokio::time::sleep(next_delay(&cfg)).await;
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -71,5 +150,31 @@ mod tests {
         assert!(out.contains(&a));
         assert!(out.contains(&c));
         assert_eq!(out.len(), 2);
+    }
+
+    #[test]
+    fn next_delay_honours_enabled_and_interval() {
+        use crate::settings::SweepSettings;
+        let off = SweepSettings { interval_minutes: 5, enabled: false };
+        assert_eq!(next_delay(&off), std::time::Duration::from_secs(60));
+        let on = SweepSettings { interval_minutes: 5, enabled: true };
+        assert_eq!(next_delay(&on), std::time::Duration::from_secs(300));
+        // interval 0 must not busy-loop: clamp to 1 minute.
+        let zero = SweepSettings { interval_minutes: 0, enabled: true };
+        assert_eq!(next_delay(&zero), std::time::Duration::from_secs(60));
+    }
+
+    #[tokio::test]
+    async fn run_once_on_empty_home_ingests_nothing() {
+        use std::sync::Arc;
+        let tmp = tempfile::tempdir().unwrap();
+        // No projects/ dir at all -> enumerate returns empty.
+        let pool = Arc::new(crate::db::init(&tmp.path().join("t.db")).unwrap());
+        let control = crate::otlp::IngestionControl::new();
+        let diag = crate::diagnostics::Diagnostics::new();
+        let ing = crate::otlp::ingestor::Ingestor::new(pool.clone(), control, diag);
+        let mut sweeper = Sweeper::new();
+        let n = run_once(&pool, &ing, tmp.path(), &mut sweeper).await.unwrap();
+        assert_eq!(n, 0);
     }
 }
