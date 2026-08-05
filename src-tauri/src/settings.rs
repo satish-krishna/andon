@@ -13,6 +13,8 @@ pub struct AppSettings {
     /// corrupt and overwritten. See the regression test in settings_roundtrip.rs.
     #[serde(default)]
     pub budget: BudgetSettings,
+    #[serde(default)]
+    pub sweep: SweepSettings,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -36,6 +38,31 @@ impl Default for BudgetSettings {
     }
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct SweepSettings {
+    #[serde(default = "default_sweep_interval")]
+    pub interval_minutes: u32,
+    #[serde(default = "default_sweep_enabled")]
+    pub enabled: bool,
+}
+
+fn default_sweep_interval() -> u32 {
+    5
+}
+
+fn default_sweep_enabled() -> bool {
+    true
+}
+
+impl Default for SweepSettings {
+    fn default() -> Self {
+        Self {
+            interval_minutes: default_sweep_interval(),
+            enabled: default_sweep_enabled(),
+        }
+    }
+}
+
 impl Default for AppSettings {
     fn default() -> Self {
         Self {
@@ -47,6 +74,7 @@ impl Default for AppSettings {
                 headers: Default::default(),
             },
             budget: BudgetSettings::default(),
+            sweep: SweepSettings::default(),
         }
     }
 }
@@ -121,6 +149,18 @@ impl SettingsStore {
         write_atomic(&self.path, &serialized)?;
         Ok(new)
     }
+
+    pub fn sweep(&self) -> SweepSettings {
+        self.inner.read().expect("settings lock").sweep.clone()
+    }
+
+    pub fn save_sweep(&self, new: SweepSettings) -> Result<SweepSettings> {
+        let mut w = self.inner.write().expect("settings lock");
+        w.sweep = new.clone();
+        let serialized = serde_json::to_string_pretty(&*w)?;
+        write_atomic(&self.path, &serialized)?;
+        Ok(new)
+    }
 }
 
 fn write_atomic(path: &Path, contents: &str) -> Result<()> {
@@ -182,5 +222,30 @@ mod tests {
             .filter(|e| e.file_name().to_string_lossy().contains("corrupt-"))
             .collect();
         assert_eq!(backups.len(), 1);
+    }
+
+    #[test]
+    fn sweep_defaults_on_when_field_absent() {
+        // AppSettings JSON that predates the sweep field must default to on/5.
+        let json = r#"{"version":1,"forwarder":{"enabled":false,"endpoint":"","timeout_ms":2000}}"#;
+        let parsed: AppSettings = serde_json::from_str(json).unwrap();
+        assert_eq!(parsed.sweep.enabled, true);
+        assert_eq!(parsed.sweep.interval_minutes, 5);
+    }
+
+    #[test]
+    fn save_sweep_round_trips() {
+        let tmp = tempfile::tempdir().unwrap();
+        let path = tmp.path().join("settings.json");
+        let store = SettingsStore::load(path.clone()).unwrap();
+        let saved = store
+            .save_sweep(SweepSettings { interval_minutes: 10, enabled: false })
+            .unwrap();
+        assert_eq!(saved.interval_minutes, 10);
+        assert_eq!(saved.enabled, false);
+        // Reload from disk proves persistence.
+        let reloaded = SettingsStore::load(path).unwrap();
+        assert_eq!(reloaded.sweep().interval_minutes, 10);
+        assert_eq!(reloaded.sweep().enabled, false);
     }
 }
