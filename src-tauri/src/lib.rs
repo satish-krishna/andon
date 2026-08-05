@@ -149,6 +149,11 @@ pub fn run() {
     let monitor_data_dir = paths.data_dir.clone();
     let monitor_budget_changed = budget_changed.clone();
 
+    let sweep_pool = pool.clone();
+    let sweep_settings = settings_store.clone();
+    let sweep_control = control.clone();
+    let sweep_diag = diagnostics.clone();
+
     tauri::Builder::default()
         .plugin(tauri_plugin_single_instance::init(|app, _argv, _cwd| {
             if let Some(window) = app.get_webview_window(MAIN_WINDOW) {
@@ -217,6 +222,11 @@ pub fn run() {
                     monitor_budget_changed,
                 )
                 .await;
+            });
+
+            // Transcript sweep — auto-ingest JSONL when live OTLP is absent.
+            tauri::async_runtime::spawn(async move {
+                jsonl::sweep::run_sweep(sweep_pool, sweep_settings, sweep_control, sweep_diag).await;
             });
 
             // Start hidden — user opens via tray.
