@@ -1,5 +1,7 @@
+import { importProvidersFrom } from '@angular/core';
 import { TestBed } from '@angular/core/testing';
 import { of } from 'rxjs';
+import { RefreshCw, LucideAngularModule } from 'lucide-angular';
 import { SweepCardComponent } from './sweep-card.component';
 import { ApiService } from '../../core/api.service';
 
@@ -11,7 +13,10 @@ describe('SweepCardComponent', () => {
     };
     TestBed.configureTestingModule({
       imports: [SweepCardComponent],
-      providers: [{ provide: ApiService, useValue: api }],
+      providers: [
+        { provide: ApiService, useValue: api },
+        importProvidersFrom(LucideAngularModule.pick({ RefreshCw })),
+      ],
     });
     const fixture = TestBed.createComponent(SweepCardComponent);
     const cmp = fixture.componentInstance;
