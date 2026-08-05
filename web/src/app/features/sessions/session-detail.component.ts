@@ -44,6 +44,11 @@ import { EmptyComponent } from '../../shared/empty.component';
       </div>
 
       @if (detail(); as d) {
+        @if (d.session.cost_source === 'jsonl') {
+          <div class="rounded border border-amber-700/40 bg-amber-950/30 px-3 py-2 text-xs">
+            This session's data was reconstructed from local transcripts — no live telemetry was received.
+          </div>
+        }
         <div class="grid grid-cols-4 gap-4">
           <app-panel title="Started">
             <div class="text-sm">{{ d.session.started_at | date : 'medium' }}</div>
