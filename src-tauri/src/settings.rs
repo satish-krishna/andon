@@ -13,6 +13,9 @@ pub struct AppSettings {
     /// corrupt and overwritten. See the regression test in settings_roundtrip.rs.
     #[serde(default)]
     pub budget: BudgetSettings,
+    /// `#[serde(default)]` lets settings.json files written before this field
+    /// existed still parse as `SweepSettings::default()` (on, 5-minute interval)
+    /// instead of being treated as corrupt. See `sweep_defaults_on_when_field_absent`.
     #[serde(default)]
     pub sweep: SweepSettings,
 }
@@ -123,15 +126,19 @@ impl SettingsStore {
     }
 
     pub fn snapshot(&self) -> AppSettings {
-        self.inner.read().expect("settings lock").clone()
+        self.inner.read().unwrap_or_else(|e| e.into_inner()).clone()
     }
 
     pub fn forwarder(&self) -> ForwarderSettings {
-        self.inner.read().expect("settings lock").forwarder.clone()
+        self.inner
+            .read()
+            .unwrap_or_else(|e| e.into_inner())
+            .forwarder
+            .clone()
     }
 
     pub fn save_forwarder(&self, new: ForwarderSettings) -> Result<ForwarderSettings> {
-        let mut w = self.inner.write().expect("settings lock");
+        let mut w = self.inner.write().unwrap_or_else(|e| e.into_inner());
         w.forwarder = new.clone();
         let serialized = serde_json::to_string_pretty(&*w)?;
         write_atomic(&self.path, &serialized)?;
@@ -139,11 +146,15 @@ impl SettingsStore {
     }
 
     pub fn budget(&self) -> BudgetSettings {
-        self.inner.read().expect("settings lock").budget.clone()
+        self.inner
+            .read()
+            .unwrap_or_else(|e| e.into_inner())
+            .budget
+            .clone()
     }
 
     pub fn save_budget(&self, new: BudgetSettings) -> Result<BudgetSettings> {
-        let mut w = self.inner.write().expect("settings lock");
+        let mut w = self.inner.write().unwrap_or_else(|e| e.into_inner());
         w.budget = new.clone();
         let serialized = serde_json::to_string_pretty(&*w)?;
         write_atomic(&self.path, &serialized)?;
@@ -151,11 +162,15 @@ impl SettingsStore {
     }
 
     pub fn sweep(&self) -> SweepSettings {
-        self.inner.read().expect("settings lock").sweep.clone()
+        self.inner
+            .read()
+            .unwrap_or_else(|e| e.into_inner())
+            .sweep
+            .clone()
     }
 
     pub fn save_sweep(&self, new: SweepSettings) -> Result<SweepSettings> {
-        let mut w = self.inner.write().expect("settings lock");
+        let mut w = self.inner.write().unwrap_or_else(|e| e.into_inner());
         w.sweep = new.clone();
         let serialized = serde_json::to_string_pretty(&*w)?;
         write_atomic(&self.path, &serialized)?;
@@ -230,6 +245,17 @@ mod tests {
         let json = r#"{"version":1,"forwarder":{"enabled":false,"endpoint":"","timeout_ms":2000}}"#;
         let parsed: AppSettings = serde_json::from_str(json).unwrap();
         assert_eq!(parsed.sweep.enabled, true);
+        assert_eq!(parsed.sweep.interval_minutes, 5);
+    }
+
+    #[test]
+    fn sweep_partial_object_defaults_missing_field() {
+        // Only `enabled` is present; `interval_minutes` must fall back to its
+        // field-level default (5) via `default_sweep_interval`, distinct from
+        // the whole-`sweep`-object-absent case covered above.
+        let json = r#"{"version":1,"forwarder":{"enabled":false,"endpoint":"","timeout_ms":2000},"sweep":{"enabled":false}}"#;
+        let parsed: AppSettings = serde_json::from_str(json).unwrap();
+        assert_eq!(parsed.sweep.enabled, false);
         assert_eq!(parsed.sweep.interval_minutes, 5);
     }
 
