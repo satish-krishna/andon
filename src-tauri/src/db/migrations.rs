@@ -205,6 +205,18 @@ CREATE INDEX IF NOT EXISTS idx_memory_prov_file
     ON memory_provenance(project_slug, memory_file, ts DESC);
 "#;
 
+const MIGRATION_V8: &str = r#"
+-- Last-ingested stamp per JSONL transcript, kept by the background scanner so
+-- it re-reads only files that changed (or were priced under an older table).
+CREATE TABLE IF NOT EXISTS jsonl_file_state (
+    path            TEXT    PRIMARY KEY,
+    mtime_ms        INTEGER NOT NULL,
+    size_bytes      INTEGER NOT NULL,
+    pricing_version INTEGER NOT NULL,
+    ingested_at     INTEGER NOT NULL
+);
+"#;
+
 const MIGRATIONS: &[(i32, &str)] = &[
     (1, MIGRATION_V1),
     (2, MIGRATION_V2),
@@ -213,6 +225,7 @@ const MIGRATIONS: &[(i32, &str)] = &[
     (5, MIGRATION_V5),
     (6, MIGRATION_V6),
     (7, MIGRATION_V7),
+    (8, MIGRATION_V8),
 ];
 
 pub fn apply(conn: &mut Connection) -> Result<()> {
@@ -269,12 +282,13 @@ pub fn apply(conn: &mut Connection) -> Result<()> {
 ///
 /// Every statement re-asserted here MUST be idempotent (`CREATE ... IF NOT
 /// EXISTS`), so this is a no-op on a normally-migrated database and a heal on a
-/// divergent one. `MIGRATION_V7` is reused verbatim so there is a single source
-/// of the DDL — no second copy to drift. Migrations that are NOT idempotent
+/// divergent one. `MIGRATION_V7` and `MIGRATION_V8` are reused verbatim so
+/// there is a single source of the DDL — no second copy to drift. Migrations that are NOT idempotent
 /// (e.g. `ALTER TABLE ADD COLUMN` in V4/V6, which errors on a duplicate column)
 /// must never be added here.
 fn ensure_required_objects(conn: &Connection) -> Result<()> {
     conn.execute_batch(MIGRATION_V7)?;
+    conn.execute_batch(MIGRATION_V8)?;
     Ok(())
 }
 
@@ -362,7 +376,20 @@ mod tests {
         let v: i32 = conn.query_row(
             "SELECT MAX(version) FROM schema_version", [], |r| r.get(0)
         ).unwrap();
-        assert_eq!(v, 7);
+        assert_eq!(v, 8);
+    }
+
+    #[test]
+    fn v8_creates_jsonl_file_state() {
+        let mut conn = Connection::open_in_memory().unwrap();
+        apply(&mut conn).unwrap();
+        let cols: Vec<String> = conn
+            .prepare("SELECT name FROM pragma_table_info('jsonl_file_state')").unwrap()
+            .query_map([], |r| r.get::<_, String>(0)).unwrap()
+            .map(|r| r.unwrap()).collect();
+        for expected in ["path", "mtime_ms", "size_bytes", "pricing_version", "ingested_at"] {
+            assert!(cols.contains(&expected.to_string()), "missing column {expected}");
+        }
     }
 
     #[test]
@@ -373,7 +400,7 @@ mod tests {
         let v: i32 = conn.query_row(
             "SELECT MAX(version) FROM schema_version", [], |r| r.get(0)
         ).unwrap();
-        assert_eq!(v, 7);
+        assert_eq!(v, 8);
     }
 
     #[test]
@@ -404,7 +431,7 @@ mod tests {
         let v: i32 = conn.query_row(
             "SELECT MAX(version) FROM schema_version", [], |r| r.get(0),
         ).unwrap();
-        assert_eq!(v, 7);
+        assert_eq!(v, 8);
     }
 
     #[test]
@@ -437,7 +464,7 @@ mod tests {
         let v: i32 = conn.query_row(
             "SELECT MAX(version) FROM schema_version", [], |r| r.get(0),
         ).unwrap();
-        assert_eq!(v, 7);
+        assert_eq!(v, 8);
     }
 
     #[test]
@@ -456,7 +483,7 @@ mod tests {
         let v: i32 = conn.query_row(
             "SELECT MAX(version) FROM schema_version", [], |r| r.get(0),
         ).unwrap();
-        assert_eq!(v, 7);
+        assert_eq!(v, 8);
     }
 
     #[test]

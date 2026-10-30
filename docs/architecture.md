@@ -70,7 +70,15 @@ The reducer (`reducer.rs`) collapses usage to one event per `requestId`: it trac
 
 ### Structural uniqueness backstop
 
-Every `token_usage` and `cost_entries` row written by the JSONL path carries the `requestId` in the `request_id` column. Partial unique indexes enforce that no two JSONL rows share the same `(request_id, token_type)` (for `token_usage`) or `request_id` (for `cost_entries`). The `INSERT … ON CONFLICT(request_id) WHERE request_id IS NOT NULL DO NOTHING` clause makes repeated backfill runs idempotent without any time-based heuristics.
+Every `token_usage` and `cost_entries` row written by the JSONL path carries the `requestId` in the `request_id` column. Partial unique indexes enforce that no two JSONL rows share the same `(request_id, token_type)` (for `token_usage`) or `request_id` (for `cost_entries`). The `INSERT … ON CONFLICT(request_id) WHERE request_id IS NOT NULL` clause makes repeated backfill runs idempotent without any time-based heuristics. For `cost_entries` the conflict branch also rewrites `cost_usd` when it differs, so re-ingesting after a pricing-table fix reprices existing rows in place instead of keeping the stale value.
+
+### Retroactive pricing
+
+JSONL carries token counts, not cost. `jsonl/pricing.rs` holds Anthropic list prices per model family; cache writes use the 5-minute rate (1.25× input). Lookup accepts date-suffixed, Vertex `@`, Bedrock-prefixed, and `[1m]`-suffixed ids, but deliberately does not match an unknown point release to its base family — an unpriced model is logged once per transcript to `jsonl_errors` as `unpriced_model` (visible on the Diagnostics page) and its tokens are still recorded. Bump `PRICING_VERSION` whenever the table changes: the scanner re-ingests every transcript priced under an older version.
+
+### Background scanner
+
+OTLP is not guaranteed to reach Andon: an organization's managed settings can point `OTEL_EXPORTER_OTLP_ENDPOINT` at their own collector, and `allowManagedHooksOnly` disables the `SessionEnd` hook that triggers per-session ingest. Transcripts are still written locally, so `jsonl/scanner.rs` scans `~/.claude/projects` every 2 minutes and ingests any transcript that changed since it was last ingested (per-file mtime + size in `jsonl_file_state`). A file is only ingested once it has been quiet for 5 minutes, which gives OTLP's ~60 s metric export time to mark a session as OTLP-covered before JSONL could claim it and double-count. The scanner does nothing while ingestion is paused, and its first pass on launch doubles as the history backfill.
 
 ### Partial-OTLP detection
 
@@ -78,7 +86,7 @@ Binary routing means a session that lost OTel mid-flight reports only its pre-lo
 
 ```mermaid
 flowchart TD
-    A["backfill / SessionEnd hook"] --> B["parser → reducer"]
+    A["backfill / SessionEnd hook / scanner"] --> B["parser → reducer"]
     B --> C{"requestId seen<br/>in this file?"}
     C -- "yes" --> D["emit ToolCall / SubAgentCall only"]
     C -- "no" --> E["emit TokenUsage + CostEntry<br/>(once per requestId) + tool events"]
@@ -124,7 +132,8 @@ WAL mode, applied incrementally via numbered migrations on first run. Indexes on
 | `subagent_calls`       | Per-session log of `Task` tool delegations grouped by `subagent_type`. Populated from JSONL transcripts; powers the Behaviour page's sub-agent usage view. |
 | `session_jsonl_calls`  | Per-session count of distinct `requestId`s observed in the JSONL transcript. Powers partial-OTLP detection via `GET /api/jsonl/coverage-gaps`. |
 | `jsonl_errors`         | Per-line JSONL parse errors with file path + line number; surfaced on the Diagnostics page. |
-| `jsonl_ingest_runs`    | One row per JSONL ingest run (backfill or session-end), with start/end timestamps, files processed, records processed, and error counts. |
+| `jsonl_ingest_runs`    | One row per JSONL ingest run (backfill, session-end, or a scanner pass that ingested something), with start/end timestamps, files processed, records processed, and error counts. |
+| `jsonl_file_state`     | Per-transcript mtime, size, and pricing version at last scanner ingest. Lets the background scanner skip unchanged files and re-ingest everything after a pricing-table bump. |
 
 ## OTel resource attributes captured
 

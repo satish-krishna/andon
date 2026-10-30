@@ -28,6 +28,8 @@ pub enum ErrKind {
     Io,
     /// The reducer panicked while processing a record.
     ReducerPanic,
+    /// A model has no entry in the pricing table, so its cost is not recorded.
+    UnpricedModel,
 }
 
 impl ErrKind {
@@ -36,6 +38,7 @@ impl ErrKind {
             ErrKind::JsonParse => "json_parse",
             ErrKind::Io => "io_error",
             ErrKind::ReducerPanic => "reducer_panic",
+            ErrKind::UnpricedModel => "unpriced_model",
         }
     }
 }

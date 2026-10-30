@@ -371,3 +371,35 @@ fn lifecycle_still_inserts_new_session() {
     assert_eq!(cwd.as_deref(), Some("/some/path"));
     assert_eq!(branch.as_deref(), Some("main"));
 }
+
+#[test]
+fn jsonl_reingest_reprices_cost_written_at_an_older_rate() {
+    // A pricing-table fix must correct rows a previous ingest already wrote:
+    // re-ingesting the same requestId with a new cost updates it in place.
+    let (pool, _g) = fixture_pool();
+    let ing = test_ingestor(&pool);
+    let cost_event = |cost_usd: f64| DerivedEvent::CostEntry {
+        session_id: "sR".into(),
+        request_id: "req_r".into(),
+        ts: 100,
+        model: "claude-opus-4-7".into(),
+        cost_usd,
+        is_subagent: false,
+    };
+    ing.ingest_derived(&[cost_event(15.0)], Coverage::JsonlOnly).unwrap();
+    let (_, repriced, _) = ing.ingest_derived(&[cost_event(5.0)], Coverage::JsonlOnly).unwrap();
+    assert_eq!(repriced, 1, "a changed cost counts as one write");
+    let (_, unchanged, _) = ing.ingest_derived(&[cost_event(5.0)], Coverage::JsonlOnly).unwrap();
+    assert_eq!(unchanged, 0, "an identical cost is not rewritten");
+
+    let conn = pool.get().unwrap();
+    let (rows, cost): (i64, f64) = conn
+        .query_row(
+            "SELECT COUNT(*), SUM(cost_usd) FROM cost_entries WHERE session_id='sR'",
+            [],
+            |r| Ok((r.get(0)?, r.get(1)?)),
+        )
+        .unwrap();
+    assert_eq!(rows, 1);
+    assert!((cost - 5.0).abs() < 1e-9, "expected repriced $5.00, got {cost}");
+}
