@@ -144,6 +144,7 @@ pub fn run() {
         control: control.clone(),
     };
 
+    let scanner_pool = pool.clone();
     let monitor_pool = pool.clone();
     let monitor_settings = settings_store.clone();
     let monitor_data_dir = paths.data_dir.clone();
@@ -205,6 +206,19 @@ pub fn run() {
                 .on_menu_event(handle_menu_event)
                 .on_tray_icon_event(handle_tray_event)
                 .build(app)?;
+
+            // JSONL scanner — keeps cost flowing when OTLP is routed elsewhere
+            if let Some(home) = dirs::home_dir() {
+                let scanner_ingestor = otlp::ingestor::Ingestor::new(
+                    scanner_pool.clone(),
+                    control.clone(),
+                    diagnostics.clone(),
+                );
+                tauri::async_runtime::spawn(async move {
+                    jsonl::scanner::run_scanner(scanner_pool, scanner_ingestor, home.join(".claude"))
+                        .await;
+                });
+            }
 
             // Budget-alert monitor
             let monitor_app = app.handle().clone();

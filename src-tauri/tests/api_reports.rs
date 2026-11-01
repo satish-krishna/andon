@@ -408,9 +408,9 @@ async fn v2_cache_efficiency_returns_expected_shape() {
     let hr = body["hit_ratio"].as_f64().unwrap();
     assert!((hr - 0.3333).abs() < 0.01, "hit_ratio was {hr}");
 
-    // opus: net = gross 13.50 - creation overhead 3.75 = 9.75
+    // opus-4-7: net = gross 4.50 - creation overhead 1.25 = 3.25
     let net = body["savings"]["net"].as_f64().unwrap();
-    assert!((net - 9.75).abs() < 1e-6, "net was {net}");
+    assert!((net - 3.25).abs() < 1e-6, "net was {net}");
 
     assert_eq!(body["tokens"]["cache_read"].as_i64().unwrap(), 1_000_000);
     assert_eq!(body["unpriced_cache_tokens"].as_i64().unwrap(), 0);
@@ -549,9 +549,9 @@ async fn v2_cache_efficiency_respects_model_filter() {
     // Only the opus session's cache tokens should be counted (haiku excluded).
     assert_eq!(body["tokens"]["cache_read"].as_i64().unwrap(), 1_000_000);
     assert_eq!(body["tokens"]["cache_create"].as_i64().unwrap(), 1_000_000);
-    // net savings = opus only: gross 13.50 - creation overhead 3.75 = 9.75
+    // net savings = opus only: gross 4.50 - creation overhead 1.25 = 3.25
     let net = body["savings"]["net"].as_f64().unwrap();
-    assert!((net - 9.75).abs() < 1e-6, "net was {net}");
+    assert!((net - 3.25).abs() < 1e-6, "net was {net}");
 }
 
 // ---------------------------------------------------------------------------

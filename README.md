@@ -15,6 +15,7 @@ Claude Code already emits a rich stream of OpenTelemetry metrics and logs — co
 - A bundled OTLP receiver (gRPC `:4317` + HTTP/protobuf `:4318`) accepts the telemetry directly from the Claude Code CLI.
 - An embedded SQLite database persists every metric and log event, denormalised by session.
 - **Retroactive backfill:** Andon also reads `~/.claude/projects/**/*.jsonl`, so a fresh install populates months of historical sessions in one pass. Per-API-call dedup via `requestId` keeps costs honest.
+- **Works under managed OTel:** if your organization's managed settings send Claude Code telemetry to its own collector, a background scanner keeps reading the local transcripts, so cost and token numbers keep flowing without OTLP or hooks.
 - An Angular dashboard, served by a localhost API on `:8765`, renders the data across **Overview**, **Efficiency**, **Sessions**, **Files**, **Behaviour**, **Memory**, **Diagnostics**, and **Settings** pages.
 - An **Efficiency** page surfaces prompt-cache savings (gross / premium / net) and per-model-family cost-efficiency, split into *main* vs *subagent* rows so a Haiku subagent's spend stops being folded into its Opus parent.
 - A **Behaviour** page (JSONL-derived) shows model mix, slash-command frequency, and sub-agent usage — things OTel can't see.
@@ -80,7 +81,7 @@ The tools are complementary more than competing. A reasonable workflow:
 
 Then restart any open Claude Code sessions. Within ~10 seconds of finishing a session you'll see today's numbers populate on the Overview page.
 
-> **Note — first-run JSONL backfill.** Live OTLP fills the dashboard for new sessions immediately, but three things come only from Claude Code's on-disk JSONL transcripts: the **Behaviour** page, historical sessions from before Andon was installed, and the **main vs subagent split** on the Efficiency page. Open **Settings → Data → Ingest JSONL history** once after install to backfill them all in one pass. It's idempotent — re-run it any time.
+> **Note — first-run JSONL backfill.** Live OTLP fills the dashboard for new sessions immediately, but three things come only from Claude Code's on-disk JSONL transcripts: the **Behaviour** page, historical sessions from before Andon was installed, and the **main vs subagent split** on the Efficiency page. The background scanner backfills them automatically on launch and keeps them current (transcripts are picked up once they've been idle for 5 minutes); **Settings → Data → Ingest JSONL history** runs the same pass on demand. It's idempotent — re-run it any time.
 
 ### Manual setup (if you'd prefer)
 

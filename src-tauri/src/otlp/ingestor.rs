@@ -365,17 +365,19 @@ impl Ingestor {
                              VALUES (?1, ?2, ?3, ?4, ?5, ?6)
                              ON CONFLICT(request_id)
                                WHERE request_id IS NOT NULL DO UPDATE
-                               SET is_subagent = 1
-                               WHERE excluded.is_subagent = 1 AND cost_entries.is_subagent = 0",
+                               SET is_subagent = MAX(cost_entries.is_subagent, excluded.is_subagent),
+                                   cost_usd    = excluded.cost_usd
+                               WHERE (excluded.is_subagent = 1 AND cost_entries.is_subagent = 0)
+                                  OR ABS(cost_entries.cost_usd - excluded.cost_usd) > 1e-12",
                             params![session_id, request_id, ts, model, cost_usd, *is_subagent as i64],
                         ) {
                             Ok(rows) => rows,
                             Err(e) => {
                                 // ON CONFLICT DO UPDATE returns Ok(1) only when this insert
-                                // actually flipped a row from 0 to 1 (the guarded WHERE
-                                // eliminates both re-flips and non-sidechain conflicts).
-                                // `cost_written` therefore counts new rows + true 0->1 flips,
-                                // never redundant updates.
+                                // flipped is_subagent 0 -> 1 or repriced the row (a pricing
+                                // table fix re-ingested over older rows); the guarded WHERE
+                                // eliminates redundant updates. `cost_written` therefore
+                                // counts new rows + true flips + reprices.
                                 // Any Err is a genuine insert failure — log, never surface.
                                 tracing::warn!(error = ?e, session_id, "JSONL cost_entries insert failed");
                                 0

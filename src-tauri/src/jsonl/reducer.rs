@@ -265,8 +265,8 @@ mod tests {
         });
         assert!(has_tok);
         assert!(
-            (cost.unwrap() - 15.0).abs() < 1e-9,
-            "1M input tokens × $15/Mtok = $15"
+            (cost.unwrap() - 5.0).abs() < 1e-9,
+            "1M input tokens × $5/Mtok = $5"
         );
     }
 

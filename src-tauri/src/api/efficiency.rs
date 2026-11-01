@@ -235,19 +235,19 @@ mod tests {
 
     #[test]
     fn cache_savings_opus_nets_gross_minus_overhead() {
-        // opus: input 15, cache_read 1.50, cache_create 18.75 ($/Mtok).
-        // 1M read  -> gross    = 1M * (15 - 1.50)  / 1e6 = 13.50
-        // 1M create-> overhead = 1M * (18.75 - 15) / 1e6 = 3.75
+        // opus-4-7: input 5, cache_read 0.50, cache_create 6.25 ($/Mtok).
+        // 1M read  -> gross    = 1M * (5 - 0.50)  / 1e6 = 4.50
+        // 1M create-> overhead = 1M * (6.25 - 5) / 1e6 = 1.25
         let s = cache_savings(
             [("claude-opus-4-7", 1_000_000i64, 1_000_000i64)].into_iter(),
         );
-        assert!((s.gross - 13.50).abs() < 1e-9, "gross {}", s.gross);
+        assert!((s.gross - 4.50).abs() < 1e-9, "gross {}", s.gross);
         assert!(
-            (s.creation_overhead - 3.75).abs() < 1e-9,
+            (s.creation_overhead - 1.25).abs() < 1e-9,
             "overhead {}",
             s.creation_overhead
         );
-        assert!((s.net - 9.75).abs() < 1e-9, "net {}", s.net);
+        assert!((s.net - 3.25).abs() < 1e-9, "net {}", s.net);
         assert_eq!(s.unpriced_cache_tokens, 0);
     }
 

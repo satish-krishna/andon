@@ -131,12 +131,12 @@ async fn backfill_counts_multi_record_request_once() {
     jsonl::backfill(&pool_arc, &ing, home.path()).await.unwrap();
 
     let conn = pool.get().unwrap();
-    // 1M input tokens of opus-4-7 = $15.00, counted exactly once despite 3 records
+    // 1M input tokens of opus-4-7 = $5.00, counted exactly once despite 3 records
     // and 2 backfill runs.
     let cost: f64 = conn
         .query_row("SELECT COALESCE(SUM(cost_usd), 0) FROM cost_entries WHERE session_id='sM'", [], |r| r.get(0))
         .unwrap();
-    assert!((cost - 15.0).abs() < 1e-6, "expected $15.00, got {cost}");
+    assert!((cost - 5.0).abs() < 1e-6, "expected $5.00, got {cost}");
     let cost_rows: i64 = conn
         .query_row("SELECT COUNT(*) FROM cost_entries WHERE session_id='sM'", [], |r| r.get(0))
         .unwrap();
@@ -198,4 +198,34 @@ async fn backfill_records_api_call_count() {
         .query_row("SELECT api_calls FROM session_jsonl_calls WHERE session_id='sC'", [], |r| r.get(0))
         .unwrap();
     assert_eq!(api_calls, 2, "two distinct requestIds across three records");
+}
+
+#[tokio::test]
+async fn unpriced_model_is_flagged_once_per_transcript() {
+    let (pool, _g) = fixture_pool();
+    let ing = test_ingestor(&pool);
+    let home = tempfile::tempdir().unwrap();
+    write_transcript(home.path(), "u", &[
+        r#"{"type":"assistant","sessionId":"sU","requestId":"req_u1","timestamp":"2026-05-19T10:00:01.000Z","message":{"role":"assistant","model":"claude-opus-9-9","usage":{"input_tokens":10,"output_tokens":20}}}"#,
+        r#"{"type":"assistant","sessionId":"sU","requestId":"req_u2","timestamp":"2026-05-19T10:00:02.000Z","message":{"role":"assistant","model":"claude-opus-9-9","usage":{"input_tokens":10,"output_tokens":20}}}"#,
+    ]);
+
+    let pool_arc = Arc::clone(&pool);
+    jsonl::backfill(&pool_arc, &ing, home.path()).await.unwrap();
+    jsonl::backfill(&pool_arc, &ing, home.path()).await.unwrap();
+
+    let conn = pool.get().unwrap();
+    let (flags, msg): (i64, String) = conn
+        .query_row(
+            "SELECT COUNT(*), MAX(error_msg) FROM jsonl_errors WHERE error_kind = 'unpriced_model'",
+            [],
+            |r| Ok((r.get(0)?, r.get(1)?)),
+        )
+        .unwrap();
+    assert_eq!(flags, 1, "one flag per (transcript, model), not per record or run");
+    assert!(msg.contains("claude-opus-9-9"), "message names the model: {msg}");
+    let tokens: i64 = conn
+        .query_row("SELECT COUNT(*) FROM token_usage WHERE session_id='sU'", [], |r| r.get(0))
+        .unwrap();
+    assert!(tokens > 0, "tokens are still recorded for an unpriced model");
 }

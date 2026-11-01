@@ -6,6 +6,7 @@ pub mod reducer;
 pub mod parser;
 pub mod walker;
 pub mod reconciler;
+pub mod scanner;
 
 use std::path::Path;
 use std::sync::Arc;
@@ -151,6 +152,10 @@ async fn ingest_one_inner(
             stats.records_errored += 1;
         }
 
+        for model in unpriced_models(events_by_session.values().flatten()) {
+            log_unpriced_model(&pool_clone, &path_owned, &model);
+        }
+
         for (sid, events) in events_by_session {
             let cov = reconciler::coverage_for(&pool_clone, &sid)
                 .unwrap_or(reconciler::Coverage::JsonlOnly);
@@ -182,6 +187,41 @@ async fn ingest_one_inner(
     Ok(result)
 }
 
+/// Distinct models that carried token usage but have no pricing entry.
+fn unpriced_models<'a>(
+    events: impl Iterator<Item = &'a reducer::DerivedEvent>,
+) -> std::collections::BTreeSet<String> {
+    events
+        .filter_map(|e| match e {
+            reducer::DerivedEvent::TokenUsage { model, .. }
+                if pricing::lookup(model).is_none() =>
+            {
+                Some(model.clone())
+            }
+            _ => None,
+        })
+        .collect()
+}
+
+/// Record an unpriced model once per transcript, so repeated scans of a
+/// growing file do not flood the Diagnostics page.
+fn log_unpriced_model(pool: &Arc<DbPool>, path: &Path, model: &str) {
+    tracing::warn!(model, ?path, "no pricing for model; JSONL cost not recorded");
+    let Ok(conn) = pool.get() else { return };
+    let path = path.display().to_string();
+    let kind = parser::ErrKind::UnpricedModel.as_str();
+    let msg = format!("no pricing for model '{model}'; cost not recorded");
+    let _ = conn.execute(
+        "INSERT INTO jsonl_errors (jsonl_path, line_no, error_kind, error_msg, cc_version, ingested_at)
+         SELECT ?1, 0, ?2, ?3, NULL, ?4
+         WHERE NOT EXISTS (
+             SELECT 1 FROM jsonl_errors
+             WHERE jsonl_path = ?1 AND error_kind = ?2 AND error_msg = ?3
+         )",
+        params![path, kind, msg, now_ms()],
+    );
+}
+
 fn event_session_id(ev: &reducer::DerivedEvent) -> Option<String> {
     use reducer::DerivedEvent::*;
     match ev {
@@ -194,7 +234,7 @@ fn event_session_id(ev: &reducer::DerivedEvent) -> Option<String> {
     }
 }
 
-fn now_ms() -> i64 {
+pub fn now_ms() -> i64 {
     std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .map(|d| d.as_millis() as i64)
